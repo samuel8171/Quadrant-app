@@ -1,0 +1,15 @@
+appId: com.quadrant.app
+productName: 象限
+directories:
+  output: dist
+files:
+  - out/**
+  - package.json
+win:
+  signAndEditExecutable: false
+  target:
+    - target: portable
+      arch:
+        - x64
+portable:
+  artifactName: 象限-${version}.exe

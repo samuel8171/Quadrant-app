@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from 'electron'
+import { app, BrowserWindow, ipcMain, Menu } from 'electron'
 import path from 'node:path'
 import type { AppData } from '../shared/types'
 import { loadData, saveData } from './dataStore'
@@ -26,6 +26,7 @@ function createWindow(): void {
 }
 
 app.whenReady().then(() => {
+  Menu.setApplicationMenu(null)
   ipcMain.handle('data:load', () => loadData())
   ipcMain.handle('data:save', (_event, data: AppData) => saveData(data))
   createWindow()
