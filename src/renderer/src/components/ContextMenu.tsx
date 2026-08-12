@@ -1,0 +1,46 @@
+import { ClipboardPaste, Copy, Eraser, Info, Save, Scissors, Trash2 } from 'lucide-react'
+
+export interface ContextMenuState {
+  x: number
+  y: number
+  eventId: string
+}
+
+type MenuAction = 'cut' | 'copy' | 'paste' | 'delete' | 'save' | 'detail'
+
+interface Props {
+  menu: ContextMenuState
+  canPaste: boolean
+  onAction: (action: MenuAction) => void
+  onClose: () => void
+}
+
+const ITEMS: { action: MenuAction; label: string; icon: typeof Copy }[] = [
+  { action: 'cut', label: '剪切', icon: Scissors },
+  { action: 'copy', label: '复制', icon: Copy },
+  { action: 'paste', label: '粘贴', icon: ClipboardPaste },
+  { action: 'delete', label: '删除', icon: Trash2 },
+  { action: 'save', label: '保存', icon: Save },
+  { action: 'detail', label: '详细信息', icon: Info }
+]
+
+export default function ContextMenu({ menu, canPaste, onAction, onClose }: Props): JSX.Element {
+  return (
+    <div className="context-menu" style={{ left: menu.x, top: menu.y }}>
+      {ITEMS.map(({ action, label, icon: Icon }) => (
+        <button
+          key={action}
+          className="context-item"
+          disabled={action === 'paste' && !canPaste}
+          onClick={() => {
+            onAction(action)
+            onClose()
+          }}
+        >
+          <Icon size={15} />
+          {label}
+        </button>
+      ))}
+    </div>
+  )
+}
