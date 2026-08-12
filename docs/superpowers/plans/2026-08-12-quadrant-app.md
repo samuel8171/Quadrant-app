@@ -72,6 +72,10 @@ quadrant-app（即 D:\Samuel\Vibe Coding 根目录）
 - Create: `tsconfig.web.json`
 - Create: `vitest.config.ts`
 - Create: `.gitignore`
+- Create: `src/main/index.ts`（最小桩，Task 3 替换为完整实现）
+- Create: `src/preload/index.ts`（最小桩，Task 3 替换为完整实现）
+- Create: `src/renderer/index.html`（最小桩，Task 3 替换为完整实现）
+- Create: `src/renderer/src/main.tsx`（最小桩，Task 7 替换为完整实现）
 
 - [ ] **Step 1: 写 package.json**
 
@@ -219,22 +223,69 @@ dist/
 *.log
 ```
 
-- [ ] **Step 6: 安装依赖**
+- [ ] **Step 6: 写最小入口桩（保证空构建可验证）**
+
+`src/main/index.ts`：
+
+```ts
+import { app, BrowserWindow } from 'electron'
+
+app.whenReady().then(() => {
+  new BrowserWindow({ width: 800, height: 600 })
+})
+```
+
+`src/preload/index.ts`：
+
+```ts
+export {}
+```
+
+`src/renderer/index.html`：
+
+```html
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>象限</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+```
+
+`src/renderer/src/main.tsx`：
+
+```tsx
+import React from 'react'
+import ReactDOM from 'react-dom/client'
+
+ReactDOM.createRoot(document.getElementById('root')!).render(
+  <React.StrictMode>
+    <div>象限</div>
+  </React.StrictMode>
+)
+```
+
+- [ ] **Step 7: 安装依赖**
 
 Run: `npm install`
 
 Expected: `added N packages`，无报错。若沙箱提示 npm 缓存目录无权限，用提权重跑。
 
-- [ ] **Step 7: 空构建验证**
+- [ ] **Step 8: 空构建验证**
 
 Run: `npm run build`
 
 Expected: 生成 `out/main/index.js`、`out/preload/index.js`、`out/renderer/`，命令退出码 0。
 
-- [ ] **Step 8: 提交**
+- [ ] **Step 9: 提交**
 
 ```bash
-git add package.json package-lock.json electron.vite.config.ts tsconfig.json tsconfig.node.json tsconfig.web.json vitest.config.ts .gitignore
+git add package.json package-lock.json electron.vite.config.ts tsconfig.json tsconfig.node.json tsconfig.web.json vitest.config.ts .gitignore src/main/index.ts src/preload/index.ts src/renderer/index.html src/renderer/src/main.tsx
 git commit -m "chore: scaffold electron-vite react project"
 ```
 
