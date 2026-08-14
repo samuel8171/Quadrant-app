@@ -118,7 +118,7 @@ export function eventHeightPx(startMin: number, endMin: number, hourPx: number):
 }
 
 export function minuteFromOffsetY(y: number, hourPx: number): number {
-  return (y / hourPx) * 60
+  return DAY_START_MIN + (y / hourPx) * 60
 }
 
 function colorOf(value: string): string {

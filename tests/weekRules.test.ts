@@ -10,6 +10,7 @@ import {
   eventsOnDate,
   formatDateRange,
   formatDuration,
+  minuteFromOffsetY,
   minutesToLabel,
   mondayOf,
   moveWeekEventInList,
@@ -77,6 +78,12 @@ describe('weekRules', () => {
     expect(snapToHour(449)).toBe(420)
     expect(snapToHour(450)).toBe(480)
     expect(snapToHour(1410)).toBe(1440)
+  })
+
+  it('converts timeline offsets to minutes from midnight', () => {
+    expect(minuteFromOffsetY(0, 48)).toBe(420)
+    expect(minuteFromOffsetY(48, 48)).toBe(480)
+    expect(clampEventStart(minuteFromOffsetY(48, 48), 90)).toBe(480)
   })
 
   it('clamps event start inside day and keeps whole-hour end fit', () => {
