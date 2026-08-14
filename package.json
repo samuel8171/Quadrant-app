@@ -1,7 +1,7 @@
 {
   "name": "quadrant",
   "productName": "象限",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "大学生时间管理计划软件",
   "main": "out/main/index.js",
   "author": "quadrant",
