@@ -5,6 +5,8 @@ import { UNIT } from '../lib/quadrantMath'
 interface Props {
   event: QuadrantEvent
   overdue: boolean
+  selected: boolean
+  onSelect: () => void
   onDragStart: (e: React.PointerEvent, event: QuadrantEvent) => void
   onContextMenu: (e: React.MouseEvent, event: QuadrantEvent) => void
   onEdit: (event: QuadrantEvent) => void
@@ -19,6 +21,8 @@ function formatDeadline(iso: string): string {
 export default function EventCard({
   event,
   overdue,
+  selected,
+  onSelect,
   onDragStart,
   onContextMenu,
   onEdit
@@ -27,8 +31,11 @@ export default function EventCard({
 
   return (
     <div
-      className={`event-card q${event.quadrant}${overdue ? ' overdue' : ''}`}
-      style={{ left: event.x * UNIT, top: event.y * UNIT, width: event.width * UNIT }}
+      className={`event-card q${event.quadrant}${overdue ? ' overdue' : ''}${
+        selected ? ' selected' : ''
+      }`}
+      style={{ left: event.x * UNIT, top: -event.y * UNIT, width: event.width * UNIT }}
+      onPointerDown={() => onSelect()}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       onDoubleClick={(e) => {
@@ -46,6 +53,7 @@ export default function EventCard({
           className="event-handle"
           onPointerDown={(e) => {
             e.stopPropagation()
+            onSelect()
             onDragStart(e, event)
           }}
         />

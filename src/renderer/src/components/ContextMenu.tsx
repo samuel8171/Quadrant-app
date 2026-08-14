@@ -3,7 +3,9 @@ import { ClipboardPaste, Copy, Eraser, Info, Save, Scissors, Trash2 } from 'luci
 export interface ContextMenuState {
   x: number
   y: number
-  eventId: string
+  eventId?: string
+  worldX?: number
+  worldY?: number
 }
 
 type MenuAction = 'cut' | 'copy' | 'paste' | 'delete' | 'save' | 'detail'
@@ -25,9 +27,13 @@ const ITEMS: { action: MenuAction; label: string; icon: typeof Copy }[] = [
 ]
 
 export default function ContextMenu({ menu, canPaste, onAction, onClose }: Props): JSX.Element {
+  const items = menu.eventId
+    ? ITEMS
+    : ITEMS.filter((item) => item.action === 'paste')
+
   return (
     <div className="context-menu" style={{ left: menu.x, top: menu.y }}>
-      {ITEMS.map(({ action, label, icon: Icon }) => (
+      {items.map(({ action, label, icon: Icon }) => (
         <button
           key={action}
           className="context-item"

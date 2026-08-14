@@ -34,7 +34,7 @@ export function worldToScreenX(wx: number, view: ViewState): number {
 }
 
 export function worldToScreenY(wy: number, view: ViewState): number {
-  return view.panY + wy * UNIT * view.zoom
+  return view.panY - wy * UNIT * view.zoom
 }
 
 export function screenToWorldX(sx: number, view: ViewState): number {
@@ -42,7 +42,7 @@ export function screenToWorldX(sx: number, view: ViewState): number {
 }
 
 export function screenToWorldY(sy: number, view: ViewState): number {
-  return (sy - view.panY) / (UNIT * view.zoom)
+  return (view.panY - sy) / (UNIT * view.zoom)
 }
 
 export function quadrantOfWorldPoint(wx: number, wy: number): Quadrant {
@@ -77,8 +77,8 @@ export function zoomAt(
 }
 
 export function autoEventWidth(text: string): number {
-  const estimated = Math.max(MIN_EVENT_WIDTH_UNITS, Math.ceil(text.length * 0.7))
-  return Math.min(MAX_EVENT_WIDTH_UNITS, estimated)
+  const estimated = Math.ceil(text.length * 0.9) + 2
+  return Math.min(MAX_EVENT_WIDTH_UNITS, Math.max(MIN_EVENT_WIDTH_UNITS, estimated))
 }
 
 export function eventScreenRect(
@@ -103,9 +103,9 @@ export function clampEventToQuadrant(e: QuadrantEvent, view: ViewState): Quadran
     left = Math.min(left, view.panX - AXIS_GAP_PX - rect.width)
   }
   if (e.quadrant === 1 || e.quadrant === 2) {
-    top = Math.max(top, view.panY + AXIS_GAP_PX)
-  } else {
     top = Math.min(top, view.panY - AXIS_GAP_PX - rect.height)
+  } else {
+    top = Math.max(top, view.panY + AXIS_GAP_PX)
   }
   return { ...e, x: screenToWorldX(left, view), y: screenToWorldY(top, view) }
 }

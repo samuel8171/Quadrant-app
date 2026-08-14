@@ -50,7 +50,12 @@ export default function EventDetailDialog({ event, onSave, onClose }: Props): JS
         </label>
         <label className="modal-field">
           备注
-          <textarea value={remark} onChange={(e) => setRemark(e.target.value)} rows={3} />
+          <textarea
+            value={remark}
+            onChange={(e) => setRemark(e.target.value)}
+            rows={3}
+            autoFocus
+          />
         </label>
         <label className="modal-field">
           截止时间

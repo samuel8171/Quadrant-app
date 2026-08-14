@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import Sidebar from './components/Sidebar'
 import GoalsPage from './pages/GoalsPage'
 import QuadrantPage from './pages/QuadrantPage'
+import WeeklyPage from './pages/WeeklyPage'
 import PlaceholderPage from './pages/PlaceholderPage'
 import { useAppStore } from './state/appStore'
 
@@ -22,7 +23,7 @@ export default function App(): JSX.Element {
       <main className="content">
         {page === 'goals' && <GoalsPage />}
         {page === 'quadrant' && <QuadrantPage />}
-        {page === 'weekly' && <PlaceholderPage title="周计划" />}
+        {page === 'weekly' && <WeeklyPage />}
         {page === 'review' && <PlaceholderPage title="周日复盘" />}
       </main>
     </div>

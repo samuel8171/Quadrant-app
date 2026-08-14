@@ -69,14 +69,20 @@ export function deleteEventFromList(events: QuadrantEvent[], id: string): Quadra
 export function pasteEvent(
   events: QuadrantEvent[],
   source: QuadrantEvent,
-  view: ViewState
+  view: ViewState,
+  targetX?: number,
+  targetY?: number
 ): QuadrantEvent[] {
   const copy: QuadrantEvent = {
     ...source,
     id: crypto.randomUUID(),
-    x: source.x + 0.8,
-    y: source.y + 0.8,
-    width: autoEventWidth(source.text)
+    x: targetX !== undefined ? targetX : source.x + 0.8,
+    y: targetY !== undefined ? targetY : source.y + 0.8,
+    width: autoEventWidth(source.text),
+    quadrant:
+      targetX !== undefined && targetY !== undefined
+        ? quadrantOfWorldPoint(targetX, targetY)
+        : source.quadrant
   }
   return [...events, clampEventToQuadrant(copy, view)]
 }
