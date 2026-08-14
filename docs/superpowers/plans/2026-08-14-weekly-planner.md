@@ -637,7 +637,7 @@ export function updateWeekEventInList(
     const next = { ...e, ...patch }
     next.color = colorOf(next.color)
     if (patch.startMin !== undefined && patch.endMin === undefined) {
-      const duration = next.endMin - next.startMin
+      const duration = e.endMin - e.startMin
       const start = Math.round(
         Math.min(Math.max(patch.startMin, DAY_START_MIN), DAY_END_MIN - duration) / 5
       ) * 5
