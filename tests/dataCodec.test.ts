@@ -44,12 +44,36 @@ describe('dataCodec', () => {
         startMin: 1500,
         endMin: 400,
         remark: '',
+        showInQuadrant: true,
+        quadrantEventId: 'qe-1',
         createdAt: 'x'
       }
     ]
     const parsed = parseData(serializeData(data))
     expect(parsed.weekEvents[0].startMin).toBe(420)
     expect(parsed.weekEvents[0].endMin).toBe(480)
+    expect(parsed.weekEvents[0].showInQuadrant).toBe(true)
+    expect(parsed.weekEvents[0].quadrantEventId).toBe('qe-1')
+  })
+
+  it('defaults weekly event quadrant sync fields when absent', () => {
+    const data = defaultData()
+    data.weekEvents = [
+      {
+        id: 'e1',
+        date: '2026-08-14',
+        title: '考核',
+        color: '#8AB4F8',
+        quadrant: 1,
+        startMin: 480,
+        endMin: 570,
+        remark: '',
+        createdAt: 'x'
+      } as never
+    ]
+    const parsed = parseData(serializeData(data))
+    expect(parsed.weekEvents[0].showInQuadrant).toBe(false)
+    expect(parsed.weekEvents[0].quadrantEventId).toBeUndefined()
   })
 
   it('rejects invalid payload', () => {

@@ -101,7 +101,7 @@ export default function WeekOverview({ monday, onOpenDay, onShift }: Props): JSX
             <div className="week-hour-labels">
               {hours.map((h) => (
                 <div key={h} className="week-hour-label" style={{ height: hourPx }}>
-                  {minutesToLabel(h)}
+                  {h === 420 ? '' : minutesToLabel(h)}
                 </div>
               ))}
             </div>
@@ -129,6 +129,7 @@ export default function WeekOverview({ monday, onOpenDay, onShift }: Props): JSX
                       key={e.id}
                       event={e}
                       interactive={false}
+                      overview
                       top={eventTopPx(e.startMin, hourPx)}
                       height={eventHeightPx(e.startMin, e.endMin, hourPx)}
                     />

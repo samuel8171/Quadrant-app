@@ -8,6 +8,7 @@ import PresetPanel from './PresetPanel'
 import { useAppStore } from '../../state/appStore'
 import {
   DAY_HOUR_PX,
+  DAY_PAD_PX,
   clampEventStart,
   dateKey,
   eventsOnDate,
@@ -43,8 +44,9 @@ interface DeleteTarget {
   title: string
 }
 
-const CONTENT_H = 17 * DAY_HOUR_PX
-const HOURS = Array.from({ length: 17 }, (_, i) => 420 + i * 60)
+const GRID_H = 17 * DAY_HOUR_PX
+const CONTENT_H = DAY_PAD_PX * 2 + GRID_H
+const HOURS = Array.from({ length: 18 }, (_, i) => 420 + i * 60)
 
 export default function DayView({ date, onBack, onShiftDay }: Props): JSX.Element {
   const weekEvents = useAppStore((s) => s.data.weekEvents)
@@ -102,7 +104,7 @@ export default function DayView({ date, onBack, onShiftDay }: Props): JSX.Elemen
     canvas.setPointerCapture(e.pointerId)
     const rect = canvas.getBoundingClientRect()
     const pointerY = e.clientY - rect.top + scroller.scrollTop
-    const top = eventTopPx(event.startMin, DAY_HOUR_PX)
+    const top = DAY_PAD_PX + eventTopPx(event.startMin, DAY_HOUR_PX)
     setDrag({ id: event.id, top, grabOffset: pointerY - top })
   }
 
@@ -116,13 +118,16 @@ export default function DayView({ date, onBack, onShiftDay }: Props): JSX.Elemen
     const rect = canvas.getBoundingClientRect()
     const pointerY = e.clientY - rect.top + scroller.scrollTop
     const height = eventHeightPx(event.startMin, event.endMin, DAY_HOUR_PX)
-    const top = Math.min(CONTENT_H - height, Math.max(0, pointerY - drag.grabOffset))
+    const top = Math.min(
+      DAY_PAD_PX + GRID_H - height,
+      Math.max(DAY_PAD_PX, pointerY - drag.grabOffset)
+    )
     setDrag({ ...drag, top })
   }
 
   const onCanvasPointerUp = (): void => {
     if (!drag) return
-    moveWeekEvent(drag.id, minuteFromOffsetY(drag.top, DAY_HOUR_PX))
+    moveWeekEvent(drag.id, minuteFromOffsetY(drag.top - DAY_PAD_PX, DAY_HOUR_PX))
     setDrag(null)
   }
 
@@ -139,7 +144,7 @@ export default function DayView({ date, onBack, onShiftDay }: Props): JSX.Elemen
     if (!canvas || !scroller) return
     const rect = canvas.getBoundingClientRect()
     const y = e.clientY - rect.top + scroller.scrollTop
-    openCreate(clampEventStart(minuteFromOffsetY(y, DAY_HOUR_PX), 60))
+    openCreate(clampEventStart(minuteFromOffsetY(y - DAY_PAD_PX, DAY_HOUR_PX), 60))
   }
 
   const onDropPreset = (e: React.DragEvent): void => {
@@ -151,7 +156,10 @@ export default function DayView({ date, onBack, onShiftDay }: Props): JSX.Elemen
     if (!preset || !canvas || !scroller) return
     const rect = canvas.getBoundingClientRect()
     const y = e.clientY - rect.top + scroller.scrollTop
-    const start = clampEventStart(minuteFromOffsetY(y, DAY_HOUR_PX), preset.durationMin)
+    const start = clampEventStart(
+      minuteFromOffsetY(y - DAY_PAD_PX, DAY_HOUR_PX),
+      preset.durationMin
+    )
     addWeekEvent({
       date: dayKey,
       title: preset.title,
@@ -188,8 +196,12 @@ export default function DayView({ date, onBack, onShiftDay }: Props): JSX.Elemen
       <div className="day-body">
         <div className="day-scroll" ref={scrollRef}>
           <div className="day-gutter">
-            {HOURS.map((h) => (
-              <div key={h} className="day-hour-label">
+            {HOURS.map((h, i) => (
+              <div
+                key={h}
+                className="day-hour-label"
+                style={{ height: i === HOURS.length - 1 ? DAY_PAD_PX : DAY_HOUR_PX }}
+              >
                 {minutesToLabel(h)}
               </div>
             ))}
@@ -210,11 +222,16 @@ export default function DayView({ date, onBack, onShiftDay }: Props): JSX.Elemen
             <div
               className="day-grid-bg"
               style={{
+                top: DAY_PAD_PX,
+                height: GRID_H,
                 backgroundImage: `repeating-linear-gradient(to bottom, rgba(255,255,255,0.06) 0px, rgba(255,255,255,0.06) 1px, transparent 1px, transparent ${DAY_HOUR_PX}px)`
               }}
             />
             {showNow && (
-              <div className="now-line" style={{ top: eventTopPx(nowMin, DAY_HOUR_PX) }}>
+              <div
+                className="now-line"
+                style={{ top: DAY_PAD_PX + eventTopPx(nowMin, DAY_HOUR_PX) }}
+              >
                 <span className="now-label">{minutesToLabel(nowMin)}</span>
               </div>
             )}
@@ -224,7 +241,11 @@ export default function DayView({ date, onBack, onShiftDay }: Props): JSX.Elemen
                 event={event}
                 interactive
                 dragging={drag?.id === event.id}
-                top={drag?.id === event.id ? drag.top : eventTopPx(event.startMin, DAY_HOUR_PX)}
+                top={
+                  drag?.id === event.id
+                    ? drag.top
+                    : DAY_PAD_PX + eventTopPx(event.startMin, DAY_HOUR_PX)
+                }
                 height={eventHeightPx(event.startMin, event.endMin, DAY_HOUR_PX)}
                 onPointerDown={onEventDragStart}
                 onContextMenu={onEventContextMenu}

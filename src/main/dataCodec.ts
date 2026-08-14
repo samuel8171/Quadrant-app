@@ -98,6 +98,9 @@ function normalizeWeekEvent(raw: Record<string, unknown>): WeekEvent {
     endMin: end,
     remark: typeof raw.remark === 'string' ? raw.remark : '',
     presetId: typeof raw.presetId === 'string' ? raw.presetId : undefined,
+    showInQuadrant: Boolean(raw.showInQuadrant),
+    quadrantEventId:
+      typeof raw.quadrantEventId === 'string' ? raw.quadrantEventId : undefined,
     createdAt: typeof raw.createdAt === 'string' ? raw.createdAt : new Date().toISOString()
   }
 }

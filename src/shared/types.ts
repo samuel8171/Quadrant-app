@@ -67,6 +67,8 @@ export interface WeekEvent {
   endMin: number
   remark: string
   presetId?: string
+  showInQuadrant: boolean
+  quadrantEventId?: string
   createdAt: string
 }
 

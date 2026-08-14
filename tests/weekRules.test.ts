@@ -45,6 +45,7 @@ function event(over: Partial<WeekEvent> = {}): WeekEvent {
     startMin: 480,
     endMin: 570,
     remark: '',
+    showInQuadrant: false,
     createdAt: '2026-08-14T00:00:00.000Z',
     ...over
   }

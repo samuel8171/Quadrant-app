@@ -9,6 +9,7 @@ import type {
 import { defaultData } from '../../../shared/defaults'
 import * as eventRules from '../lib/eventRules'
 import * as goalRules from '../lib/goalRules'
+import * as quadrantSync from '../lib/quadrantSync'
 import * as weekRules from '../lib/weekRules'
 import type { ViewState } from '../lib/quadrantMath'
 import { scheduleSave } from '../lib/scheduleSave'
@@ -63,8 +64,9 @@ interface AppState {
     endMin: number
     remark: string
     presetId?: string
-  }) => void
-  updateWeekEvent: (id: string, patch: Partial<WeekEvent>) => void
+    showInQuadrant?: boolean
+  }) => WeekSyncResult
+  updateWeekEvent: (id: string, patch: Partial<WeekEvent>) => WeekSyncResult
   deleteWeekEvent: (id: string) => void
   moveWeekEvent: (id: string, startMin: number) => void
   setWeekCounterOffset: (offset: number) => void
@@ -76,6 +78,8 @@ let clipboard: QuadrantEvent | null = null
 export function hasClipboardEvent(): boolean {
   return clipboard !== null
 }
+
+export type WeekSyncResult = { ok: true } | { ok: false; reason: 'quadrant-full' }
 
 function saveSoon(data: AppData): void {
   scheduleSave(() => {
@@ -307,7 +311,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   addWeekEvent: (fields) => {
-    if (!fields.title.trim()) return
+    if (!fields.title.trim()) return { ok: true }
     const times = weekRules.clampEventTimes(fields.startMin, fields.endMin)
     const event: WeekEvent = {
       id: crypto.randomUUID(),
@@ -319,25 +323,86 @@ export const useAppStore = create<AppState>((set, get) => ({
       endMin: times.endMin,
       remark: fields.remark,
       presetId: fields.presetId,
+      showInQuadrant: fields.showInQuadrant ?? false,
       createdAt: new Date().toISOString()
     }
-    const data = { ...get().data, weekEvents: [...get().data.weekEvents, event] }
+    let events = get().data.events
+    if (event.showInQuadrant) {
+      const pos = quadrantSync.findFreePosition(
+        events,
+        event.quadrant,
+        quadrantSync.widthForTitle(event.title)
+      )
+      if (!pos) return { ok: false, reason: 'quadrant-full' }
+      const synced = quadrantSync.buildQuadrantEvent(event, pos.x, pos.y)
+      event.quadrantEventId = synced.id
+      events = [...events, synced]
+    }
+    const data = { ...get().data, events, weekEvents: [...get().data.weekEvents, event] }
     saveSoon(data)
     set({ data })
+    return { ok: true }
   },
 
   updateWeekEvent: (id, patch) => {
+    const current = get().data.weekEvents.find((e) => e.id === id)
+    if (!current) return { ok: true }
+    const nextWeekEvents = weekRules.updateWeekEventInList(get().data.weekEvents, id, patch)
+    const nextEvent = nextWeekEvents.find((e) => e.id === id)
+    if (!nextEvent) return { ok: true }
+    let events = get().data.events
+    const show =
+      patch.showInQuadrant !== undefined ? patch.showInQuadrant : current.showInQuadrant
+
+    if (show && !nextEvent.quadrantEventId) {
+      const pos = quadrantSync.findFreePosition(
+        events,
+        nextEvent.quadrant,
+        quadrantSync.widthForTitle(nextEvent.title)
+      )
+      if (!pos) return { ok: false, reason: 'quadrant-full' }
+      const synced = quadrantSync.buildQuadrantEvent(nextEvent, pos.x, pos.y)
+      nextEvent.quadrantEventId = synced.id
+      events = [...events, synced]
+    } else if (!show && current.quadrantEventId) {
+      events = events.filter((e) => e.id !== current.quadrantEventId)
+      nextEvent.quadrantEventId = undefined
+    } else if (show && current.quadrantEventId) {
+      const existing = events.find((e) => e.id === current.quadrantEventId)
+      const width = quadrantSync.widthForTitle(nextEvent.title)
+      if (existing && existing.quadrant === nextEvent.quadrant) {
+        events = events.map((e) =>
+          e.id === existing.id
+            ? { ...e, text: nextEvent.title, remark: nextEvent.remark, width }
+            : e
+        )
+      } else {
+        const withoutOld = events.filter((e) => e.id !== current.quadrantEventId)
+        const pos = quadrantSync.findFreePosition(withoutOld, nextEvent.quadrant, width)
+        if (!pos) return { ok: false, reason: 'quadrant-full' }
+        const synced = quadrantSync.buildQuadrantEvent(nextEvent, pos.x, pos.y)
+        nextEvent.quadrantEventId = synced.id
+        events = [...withoutOld, synced]
+      }
+    }
     const data = {
       ...get().data,
-      weekEvents: weekRules.updateWeekEventInList(get().data.weekEvents, id, patch)
+      events,
+      weekEvents: nextWeekEvents
     }
     saveSoon(data)
     set({ data })
+    return { ok: true }
   },
 
   deleteWeekEvent: (id) => {
+    const current = get().data.weekEvents.find((e) => e.id === id)
+    const events = current?.quadrantEventId
+      ? get().data.events.filter((e) => e.id !== current.quadrantEventId)
+      : get().data.events
     const data = {
       ...get().data,
+      events,
       weekEvents: weekRules.deleteWeekEventFromList(get().data.weekEvents, id)
     }
     saveSoon(data)

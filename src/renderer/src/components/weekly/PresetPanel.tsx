@@ -31,6 +31,7 @@ export default function PresetPanel({
         {sorted.length === 0 && <div className="preset-empty">暂无预设，点击 ＋ 新建</div>}
         {sorted.map((preset) => {
           const quadrant = QUADRANT_META[preset.quadrant]
+          const showMeta = preset.durationMin >= 45
           return (
             <div
               key={preset.id}
@@ -50,10 +51,12 @@ export default function PresetPanel({
               onDoubleClick={() => onEdit(preset)}
             >
               <div className="preset-title">{preset.title}</div>
-              <div className="preset-meta">
-                <span className="quad-dot" style={{ background: quadrant.color }} />
-                <span>{quadrant.label}</span>
-              </div>
+              {showMeta && (
+                <div className="preset-meta">
+                  <span className="quad-dot" style={{ background: quadrant.color }} />
+                  <span>{quadrant.label}</span>
+                </div>
+              )}
               <div className="preset-duration">{formatDuration(preset.durationMin)}</div>
               <div className="preset-actions">
                 <button className="icon-btn" title="编辑预设" onClick={() => onEdit(preset)}>

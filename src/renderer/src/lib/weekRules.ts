@@ -10,6 +10,7 @@ export const DAY_END_MIN = 24 * 60
 export const MIN_DURATION_MIN = 5
 export const MAX_DURATION_MIN = 10 * 60
 export const DAY_HOUR_PX = 48
+export const DAY_PAD_PX = 10
 
 export const WEEKDAY_NAMES = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'] as const
 
@@ -175,6 +176,7 @@ export function createWeekEvent(date: string, preset: WeekPreset, startMin: numb
     endMin: start + preset.durationMin,
     remark: preset.remark,
     presetId: preset.id,
+    showInQuadrant: false,
     createdAt: new Date().toISOString()
   }
 }

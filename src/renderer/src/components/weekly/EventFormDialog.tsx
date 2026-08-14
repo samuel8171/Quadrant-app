@@ -40,6 +40,7 @@ interface FieldState {
   customDuration: boolean
   startMin: number
   endMin: number
+  showInQuadrant: boolean
 }
 
 function initState(form: WeeklyFormState): FieldState {
@@ -53,7 +54,8 @@ function initState(form: WeeklyFormState): FieldState {
       durationMin: form.preset.durationMin,
       customDuration: false,
       startMin: 420,
-      endMin: 480
+      endMin: 480,
+      showInQuadrant: false
     }
   }
   if (form.kind === 'event-edit') {
@@ -66,7 +68,8 @@ function initState(form: WeeklyFormState): FieldState {
       durationMin: 60,
       customDuration: false,
       startMin: form.event.startMin,
-      endMin: form.event.endMin
+      endMin: form.event.endMin,
+      showInQuadrant: form.event.showInQuadrant
     }
   }
   if (form.kind === 'event-create') {
@@ -80,7 +83,8 @@ function initState(form: WeeklyFormState): FieldState {
       durationMin: 60,
       customDuration: false,
       startMin: times.startMin,
-      endMin: times.endMin
+      endMin: times.endMin,
+      showInQuadrant: false
     }
   }
   return {
@@ -92,7 +96,8 @@ function initState(form: WeeklyFormState): FieldState {
     durationMin: 60,
     customDuration: false,
     startMin: 420,
-    endMin: 480
+    endMin: 480,
+    showInQuadrant: false
   }
 }
 
@@ -157,24 +162,34 @@ export default function EventFormDialog({ form, onClose }: Props): JSX.Element {
       return
     }
     if (form.kind === 'event-create') {
-      addWeekEvent({
+      const result = addWeekEvent({
         date: form.date,
         title,
         color: fields.color,
         quadrant: fields.quadrant,
         startMin: times.startMin,
         endMin: times.endMin,
-        remark: fields.remark
+        remark: fields.remark,
+        showInQuadrant: fields.showInQuadrant
       })
+      if (!result.ok) {
+        setFields((f) => ({ ...f, error: '该象限事件已达30个，无法继续添加' }))
+        return
+      }
     } else {
-      updateWeekEvent(form.event.id, {
+      const result = updateWeekEvent(form.event.id, {
         title,
         color: fields.color,
         quadrant: fields.quadrant,
         startMin: times.startMin,
         endMin: times.endMin,
-        remark: fields.remark
+        remark: fields.remark,
+        showInQuadrant: fields.showInQuadrant
       })
+      if (!result.ok) {
+        setFields((f) => ({ ...f, error: '该象限事件已达30个，无法继续添加' }))
+        return
+      }
     }
     onClose()
   }
@@ -246,6 +261,20 @@ export default function EventFormDialog({ form, onClose }: Props): JSX.Element {
             ))}
           </div>
         </div>
+        {!isPreset && (
+          <label className="modal-field">
+            <span className="toggle-row">
+              <input
+                type="checkbox"
+                checked={fields.showInQuadrant}
+                onChange={(e) =>
+                  setFields((f) => ({ ...f, showInQuadrant: e.target.checked, error: '' }))
+                }
+              />
+              在四象限中呈现
+            </span>
+          </label>
+        )}
         {isPreset ? (
           <div className="modal-field">
             事件时间长度
