@@ -27,6 +27,7 @@ export default function EventBlock({
 
   return (
     <div
+      data-event-id={event.id}
       className={`day-event${compact ? ' compact' : ''}${dragging ? ' dragging' : ''}${
         interactive ? '' : ' read-only'
       }`}

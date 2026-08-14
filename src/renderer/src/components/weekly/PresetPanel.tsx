@@ -34,6 +34,7 @@ export default function PresetPanel({
           return (
             <div
               key={preset.id}
+              data-preset-id={preset.id}
               className="preset-card"
               draggable
               title="拖到左侧时间轴创建事件"
