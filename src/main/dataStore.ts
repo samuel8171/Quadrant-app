@@ -2,6 +2,7 @@ import { app } from 'electron'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import type { AppData } from '../shared/types'
+import { defaultData } from '../shared/defaults'
 import { parseData, serializeData } from './dataCodec'
 
 const FILE_NAME = 'plan.json'
@@ -20,12 +21,12 @@ export async function loadData(): Promise<AppData> {
     return parseData(await fs.readFile(file, 'utf-8'))
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-      return { version: 1, goals: [], events: [] }
+      return defaultData()
     }
     try {
       return parseData(await fs.readFile(backup, 'utf-8'))
     } catch {
-      return { version: 1, goals: [], events: [] }
+      return defaultData()
     }
   }
 }
