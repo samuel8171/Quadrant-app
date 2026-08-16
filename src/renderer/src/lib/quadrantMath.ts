@@ -72,7 +72,7 @@ export function zoomAt(
   return {
     zoom,
     panX: viewportX - wx * UNIT * zoom,
-    panY: viewportY - wy * UNIT * zoom
+    panY: viewportY + wy * UNIT * zoom
   }
 }
 

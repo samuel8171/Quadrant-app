@@ -24,9 +24,12 @@ import { useAppStore } from '../state/appStore'
 
 export default function GoalsPage(): JSX.Element {
   const activeGoalId = useAppStore((s) => s.activeGoalId)
-  if (activeGoalId) return <LongTermDetailPage goalId={activeGoalId} />
+  const [returning, setReturning] = useState(false)
+  if (activeGoalId) {
+    return <LongTermDetailPage goalId={activeGoalId} onBeforeClose={() => setReturning(true)} />
+  }
   return (
-    <div className="page goals-page">
+    <div className={`page goals-page ${returning ? 'page-enter-left' : ''}`}>
       <header className="page-header">
         <h1>目标</h1>
         <span className="title-underline" />
@@ -183,7 +186,13 @@ function GoalColumn({
   )
 }
 
-function LongTermDetailPage({ goalId }: { goalId: string }): JSX.Element {
+function LongTermDetailPage({
+  goalId,
+  onBeforeClose
+}: {
+  goalId: string
+  onBeforeClose: () => void
+}): JSX.Element {
   const goal = useAppStore((s) => s.data.goals.find((g) => g.id === goalId))
   const closeGoal = useAppStore((s) => s.closeGoal)
   const addGroup = useAppStore((s) => s.addGroup)
@@ -217,8 +226,14 @@ function LongTermDetailPage({ goalId }: { goalId: string }): JSX.Element {
 
   if (!goal) {
     return (
-      <div className="page">
-        <button className="back-btn" onClick={closeGoal}>
+      <div className="page page-enter-right">
+        <button
+          className="back-btn"
+          onClick={() => {
+            onBeforeClose()
+            closeGoal()
+          }}
+        >
           <ArrowLeft size={16} />
           返回
         </button>
@@ -255,9 +270,15 @@ function LongTermDetailPage({ goalId }: { goalId: string }): JSX.Element {
     : undefined
 
   return (
-    <div className="page subtask-page">
+    <div className="page subtask-page page-enter-right">
       <div className="subtask-topbar">
-        <button className="back-btn" onClick={closeGoal}>
+        <button
+          className="back-btn"
+          onClick={() => {
+            onBeforeClose()
+            closeGoal()
+          }}
+        >
           <ArrowLeft size={16} />
           返回
         </button>

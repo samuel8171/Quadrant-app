@@ -81,7 +81,31 @@ export interface AppData {
   weekCounterOffset: number
 }
 
+export interface ReviewDraft {
+  completion: number
+  quality: number
+  stress: number
+  text: string
+}
+
+export interface ReviewExport {
+  completion: number
+  quality: number
+  stress: number
+  text: string
+}
+
+export interface ReviewRecord {
+  fileName: string
+  filePath: string
+  size: number
+  modifiedAt: string
+}
+
 export interface QuadrantApi {
   loadData(): Promise<AppData>
   saveData(data: AppData): Promise<void>
+  saveReview(payload: ReviewExport): Promise<ReviewRecord>
+  listReviews(): Promise<ReviewRecord[]>
+  openReview(filePath: string): Promise<{ ok: boolean; error?: string }>
 }

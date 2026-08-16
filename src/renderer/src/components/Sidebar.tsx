@@ -11,7 +11,8 @@ const NAV: { page: Page; label: string; icon: typeof Target }[] = [
 
 export default function Sidebar(): JSX.Element {
   const page = useAppStore((s) => s.page)
-  const setPage = useAppStore((s) => s.setPage)
+  const requestPage = useAppStore((s) => s.requestPage)
+  const activeIndex = NAV.findIndex((n) => n.page === page)
 
   return (
     <aside className="sidebar">
@@ -25,11 +26,15 @@ export default function Sidebar(): JSX.Element {
         <span className="brand-name">象限</span>
       </div>
       <nav className="nav">
+        <span
+          className="nav-indicator"
+          style={{ transform: `translateY(${activeIndex * 46}px)` }}
+        />
         {NAV.map(({ page: p, label, icon: Icon }) => (
           <button
             key={p}
             className={`nav-item${page === p ? ' active' : ''}`}
-            onClick={() => setPage(p)}
+            onClick={() => requestPage(p)}
           >
             <Icon size={18} />
             <span>{label}</span>

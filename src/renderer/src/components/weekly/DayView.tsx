@@ -24,6 +24,8 @@ interface Props {
   date: Date
   onBack: () => void
   onShiftDay: (n: number) => void
+  className?: string
+  onAnimationEnd?: React.AnimationEventHandler<HTMLDivElement>
 }
 
 interface MenuState {
@@ -48,7 +50,13 @@ const GRID_H = 17 * DAY_HOUR_PX
 const CONTENT_H = DAY_PAD_PX * 2 + GRID_H
 const HOURS = Array.from({ length: 18 }, (_, i) => 420 + i * 60)
 
-export default function DayView({ date, onBack, onShiftDay }: Props): JSX.Element {
+export default function DayView({
+  date,
+  onBack,
+  onShiftDay,
+  className,
+  onAnimationEnd
+}: Props): JSX.Element {
   const weekEvents = useAppStore((s) => s.data.weekEvents)
   const weekPresets = useAppStore((s) => s.data.weekPresets)
   const addWeekEvent = useAppStore((s) => s.addWeekEvent)
@@ -175,7 +183,7 @@ export default function DayView({ date, onBack, onShiftDay }: Props): JSX.Elemen
   const menuEvent = menu ? weekEvents.find((ev) => ev.id === menu.eventId) : undefined
 
   return (
-    <div className="day-page">
+    <div className={`day-page ${className ?? ''}`} onAnimationEnd={onAnimationEnd}>
       <div className="day-topbar">
         <button className="back-btn" onClick={onBack}>
           <ArrowLeft size={16} />

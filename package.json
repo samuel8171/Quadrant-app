@@ -1,7 +1,7 @@
 {
   "name": "quadrant",
   "productName": "象限",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "大学生时间管理计划软件",
   "main": "out/main/index.js",
   "author": "quadrant",
@@ -15,6 +15,7 @@
     "package": "electron-vite build && electron-builder --win portable"
   },
   "dependencies": {
+    "docx": "^9.7.1",
     "lucide-react": "^0.424.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",

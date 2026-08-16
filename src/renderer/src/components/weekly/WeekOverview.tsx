@@ -21,9 +21,15 @@ interface Props {
   monday: Date
   onOpenDay: (key: string) => void
   onShift: (weeks: number) => void
+  className?: string
 }
 
-export default function WeekOverview({ monday, onOpenDay, onShift }: Props): JSX.Element {
+export default function WeekOverview({
+  monday,
+  onOpenDay,
+  onShift,
+  className
+}: Props): JSX.Element {
   const weekEvents = useAppStore((s) => s.data.weekEvents)
   const offset = useAppStore((s) => s.data.weekCounterOffset)
   const setOffset = useAppStore((s) => s.setWeekCounterOffset)
@@ -55,7 +61,7 @@ export default function WeekOverview({ monday, onOpenDay, onShift }: Props): JSX
   }
 
   return (
-    <div className="weekly-page">
+    <div className={`weekly-page ${className ?? ''}`}>
       <header className="page-header weekly-header">
         <h1>周计划</h1>
         <span className="title-underline" />

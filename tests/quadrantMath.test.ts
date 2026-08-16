@@ -9,6 +9,7 @@ import {
   clampOrigin,
   clampZoom,
   escalateEvent,
+  eventScreenRect,
   quadrantOfWorldPoint,
   screenToWorldX,
   screenToWorldY,
@@ -63,9 +64,23 @@ describe('quadrantMath', () => {
 
   it('zoomAt keeps the cursor world point fixed', () => {
     const next = zoomAt(400, 300, 2, view)
-    const wxBefore = screenToWorldX(400, view)
-    const wxAfter = screenToWorldX(400, next)
-    expect(wxAfter).toBeCloseTo(wxBefore)
+    expect(screenToWorldX(400, next)).toBeCloseTo(screenToWorldX(400, view))
+    expect(screenToWorldY(300, next)).toBeCloseTo(screenToWorldY(300, view))
+  })
+
+  it('keeps the cursor world point fixed across repeated anchored zoom steps', () => {
+    let current: ViewState = view
+    const anchorX = 400
+    const anchorY = 300
+    const wx0 = screenToWorldX(anchorX, current)
+    const wy0 = screenToWorldY(anchorY, current)
+
+    for (let i = 0; i < 12; i += 1) {
+      const nextZoom = clampZoom(current.zoom * 1.12)
+      current = zoomAt(anchorX, anchorY, nextZoom, current)
+      expect(screenToWorldX(anchorX, current)).toBeCloseTo(wx0)
+      expect(screenToWorldY(anchorY, current)).toBeCloseTo(wy0)
+    }
   })
 
   it('autoEventWidth stays within bounds', () => {
@@ -73,20 +88,21 @@ describe('quadrantMath', () => {
     expect(autoEventWidth('x'.repeat(200))).toBeLessThanOrEqual(MAX_EVENT_WIDTH_UNITS)
   })
 
-  it('clamps event inside Q1 colored block', () => {
+  it('clamps event inside Q1 colored block (top-right)', () => {
     const result = clampEventToQuadrant(
       event({ quadrant: 1, x: -1, y: -1 }),
       view
     )
     expect(worldToScreenX(result.x, view)).toBeGreaterThanOrEqual(200 + AXIS_GAP_PX)
-    expect(worldToScreenY(result.y, view)).toBeGreaterThanOrEqual(150 + AXIS_GAP_PX)
+    const rect = eventScreenRect(result, view)
+    expect(worldToScreenY(result.y, view) + rect.height).toBeLessThanOrEqual(150 - AXIS_GAP_PX)
   })
 
-  it('clamps event inside Q3 colored block', () => {
+  it('clamps event inside Q3 colored block (bottom-left)', () => {
     const e = event({ quadrant: 3, x: 1, y: 1, width: 4 })
     const result = clampEventToQuadrant(e, view)
     expect(worldToScreenX(result.x + result.width, view)).toBeLessThanOrEqual(200 - AXIS_GAP_PX)
-    expect(worldToScreenY(result.y, view)).toBeLessThanOrEqual(150 - AXIS_GAP_PX)
+    expect(worldToScreenY(result.y, view)).toBeGreaterThanOrEqual(150 + AXIS_GAP_PX)
   })
 
   it('escalation mirrors Q2 to Q1 horizontally without changing y', () => {

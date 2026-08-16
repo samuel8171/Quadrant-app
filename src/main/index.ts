@@ -1,7 +1,8 @@
 import { app, BrowserWindow, ipcMain, Menu } from 'electron'
 import path from 'node:path'
-import type { AppData } from '../shared/types'
+import type { AppData, ReviewExport } from '../shared/types'
 import { loadData, saveData } from './dataStore'
+import { listReviews, openReview, saveReview } from './review'
 
 function createWindow(): void {
   const win = new BrowserWindow({
@@ -29,6 +30,9 @@ app.whenReady().then(() => {
   Menu.setApplicationMenu(null)
   ipcMain.handle('data:load', () => loadData())
   ipcMain.handle('data:save', (_event, data: AppData) => saveData(data))
+  ipcMain.handle('review:save', (_event, payload: ReviewExport) => saveReview(payload))
+  ipcMain.handle('review:list', () => listReviews())
+  ipcMain.handle('review:open', (_event, filePath: string) => openReview(filePath))
   createWindow()
 
   app.on('activate', () => {

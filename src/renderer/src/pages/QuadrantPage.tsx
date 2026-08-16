@@ -9,6 +9,7 @@ import {
   QUADRANT_META,
   UNIT,
   autoEventWidth,
+  clampZoom,
   clampOrigin,
   quadrantOfWorldPoint,
   screenToWorldX,
@@ -47,6 +48,12 @@ export default function QuadrantPage(): JSX.Element {
   const centeredRef = useRef(false)
   const hoverRef = useRef<{ clientX: number; clientY: number } | null>(null)
   const viewRef = useRef<ViewState>({ zoom: 1, panX: 0, panY: 0 })
+  const targetZoomRef = useRef(1)
+  const zoomAnchorRef = useRef<{ x: number; y: number } | null>(null)
+  const zoomAnimRef = useRef<number | null>(null)
+  const panAnimRef = useRef<number | null>(null)
+  const panLastRef = useRef<{ x: number; y: number; t: number } | null>(null)
+  const panVelRef = useRef({ x: 0, y: 0 })
 
   const [view, setView] = useState<ViewState>({ zoom: 1, panX: 0, panY: 0 })
   const [size, setSize] = useState({ width: 0, height: 0 })
@@ -79,9 +86,62 @@ export default function QuadrantPage(): JSX.Element {
   useEffect(() => {
     if (!centeredRef.current && size.width > 0 && size.height > 0) {
       centeredRef.current = true
+      targetZoomRef.current = 1
       setView({ zoom: 1, panX: size.width / 2, panY: size.height / 2 })
     }
   }, [size])
+
+  const startZoomAnim = useCallback(() => {
+    if (zoomAnimRef.current !== null) return
+    const step = (): void => {
+      const current = viewRef.current
+      const target = targetZoomRef.current
+      const anchor = zoomAnchorRef.current
+      const nextZoom = clampZoom(current.zoom + (target - current.zoom) * 0.22)
+      const next = anchor
+        ? zoomAt(anchor.x, anchor.y, nextZoom, current)
+        : { ...current, zoom: nextZoom }
+      viewRef.current = next
+      setView(next)
+      if (Math.abs(target - nextZoom) > 0.0005) {
+        zoomAnimRef.current = requestAnimationFrame(step)
+      } else {
+        zoomAnimRef.current = null
+      }
+    }
+    zoomAnimRef.current = requestAnimationFrame(step)
+  }, [setView])
+
+  const startPanInertia = useCallback(() => {
+    if (panAnimRef.current !== null) return
+    let last = performance.now()
+    const step = (now: number): void => {
+      const dt = Math.min(64, now - last)
+      last = now
+      const el = viewportRef.current
+      const current = viewRef.current
+      if (el && dt > 0) {
+        const rect = el.getBoundingClientRect()
+        const v = panVelRef.current
+        const next = clampOrigin(
+          { ...current, panX: current.panX + v.x * dt, panY: current.panY + v.y * dt },
+          rect.width,
+          rect.height
+        )
+        viewRef.current = next
+        setView(next)
+        const damping = Math.exp(-dt / 140)
+        v.x *= damping
+        v.y *= damping
+      }
+      if (Math.hypot(panVelRef.current.x, panVelRef.current.y) < 0.04) {
+        panAnimRef.current = null
+        return
+      }
+      panAnimRef.current = requestAnimationFrame(step)
+    }
+    panAnimRef.current = requestAnimationFrame(step)
+  }, [setView])
 
   useEffect(() => {
     const el = viewportRef.current
@@ -91,13 +151,22 @@ export default function QuadrantPage(): JSX.Element {
       const rect = el.getBoundingClientRect()
       const x = e.clientX - rect.left
       const y = e.clientY - rect.top
-      setView((v) => {
-        const z = v.zoom * (e.deltaY < 0 ? 1.15 : 1 / 1.15)
-        return clampOrigin(zoomAt(x, y, z, v), rect.width, rect.height)
-      })
+      const delta = Math.abs(e.deltaY)
+      const steps = Math.min(4, Math.max(0.25, delta / 100))
+      const factor = e.deltaY < 0 ? Math.pow(1.12, steps) : Math.pow(1 / 1.12, steps)
+      targetZoomRef.current = clampZoom(targetZoomRef.current * factor)
+      zoomAnchorRef.current = { x, y }
+      startZoomAnim()
     }
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => el.removeEventListener('wheel', onWheel)
+  }, [startZoomAnim])
+
+  useEffect(() => {
+    return () => {
+      if (zoomAnimRef.current !== null) cancelAnimationFrame(zoomAnimRef.current)
+      if (panAnimRef.current !== null) cancelAnimationFrame(panAnimRef.current)
+    }
   }, [])
 
   useEffect(() => {
@@ -261,6 +330,12 @@ export default function QuadrantPage(): JSX.Element {
       e.preventDefault()
       viewportRef.current?.setPointerCapture(e.pointerId)
       panRef.current = { startX: e.clientX, startY: e.clientY, startView: view }
+      panLastRef.current = { x: e.clientX, y: e.clientY, t: performance.now() }
+      panVelRef.current = { x: 0, y: 0 }
+      if (panAnimRef.current !== null) {
+        cancelAnimationFrame(panAnimRef.current)
+        panAnimRef.current = null
+      }
     }
     if (e.button === 0 && !e.ctrlKey) {
       const target = e.target as Element | null
@@ -279,13 +354,22 @@ export default function QuadrantPage(): JSX.Element {
       const start = panRef.current
       const dx = e.clientX - start.startX
       const dy = e.clientY - start.startY
-      setView(
-        clampOrigin(
-          { ...start.startView, panX: start.startView.panX + dx, panY: start.startView.panY + dy },
-          rect.width,
-          rect.height
-        )
+      const next = clampOrigin(
+        { ...start.startView, panX: start.startView.panX + dx, panY: start.startView.panY + dy },
+        rect.width,
+        rect.height
       )
+      viewRef.current = next
+      setView(next)
+      const now = performance.now()
+      const last = panLastRef.current
+      if (last && now > last.t) {
+        panVelRef.current = {
+          x: (e.clientX - last.x) / (now - last.t),
+          y: (e.clientY - last.y) / (now - last.t)
+        }
+      }
+      panLastRef.current = { x: e.clientX, y: e.clientY, t: now }
     }
 
     if (dragRef.current) {
@@ -298,9 +382,13 @@ export default function QuadrantPage(): JSX.Element {
   }
 
   const onPointerUp = (e: React.PointerEvent): void => {
+    const wasPanning = panRef.current !== null
     panRef.current = null
     dragRef.current = null
     if (e.target instanceof Element) e.target.releasePointerCapture?.(e.pointerId)
+    if (wasPanning && Math.hypot(panVelRef.current.x, panVelRef.current.y) > 0.05) {
+      startPanInertia()
+    }
   }
 
   const onDoubleClick = (e: React.MouseEvent): void => {

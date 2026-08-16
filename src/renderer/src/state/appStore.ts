@@ -3,6 +3,7 @@ import type {
   AppData,
   Quadrant,
   QuadrantEvent,
+  ReviewDraft,
   WeekEvent,
   WeekPreset
 } from '../../../shared/types'
@@ -11,6 +12,7 @@ import * as eventRules from '../lib/eventRules'
 import * as goalRules from '../lib/goalRules'
 import * as quadrantSync from '../lib/quadrantSync'
 import * as weekRules from '../lib/weekRules'
+import { reviewDirty } from '../lib/reviewRules'
 import type { ViewState } from '../lib/quadrantMath'
 import { scheduleSave } from '../lib/scheduleSave'
 
@@ -71,6 +73,14 @@ interface AppState {
   moveWeekEvent: (id: string, startMin: number) => void
   setWeekCounterOffset: (offset: number) => void
   saveNow: () => void
+  reviewDraft: ReviewDraft
+  reviewEdit: ReviewDraft
+  pendingPage: Page | null
+  setReviewEdit: (patch: Partial<ReviewDraft>) => void
+  saveReviewDraft: () => void
+  discardReviewDraft: () => void
+  requestPage: (page: Page) => void
+  resolveLeave: (action: 'save' | 'discard' | 'cancel') => void
 }
 
 let clipboard: QuadrantEvent | null = null
@@ -92,6 +102,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   page: 'goals',
   activeGoalId: null,
   loaded: false,
+  reviewDraft: { completion: 0, quality: 0, stress: 0, text: '' },
+  reviewEdit: { completion: 0, quality: 0, stress: 0, text: '' },
+  pendingPage: null,
 
   init: async () => {
     const data = await window.quadrantApi.loadData()
@@ -99,6 +112,26 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   setPage: (page) => set({ page }),
+  setReviewEdit: (patch) => set((s) => ({ reviewEdit: { ...s.reviewEdit, ...patch } })),
+  saveReviewDraft: () => set((s) => ({ reviewDraft: s.reviewEdit })),
+  discardReviewDraft: () => set((s) => ({ reviewEdit: s.reviewDraft })),
+  requestPage: (page) => {
+    const s = get()
+    if (s.page === 'review' && reviewDirty(s.reviewEdit, s.reviewDraft)) {
+      set({ pendingPage: page })
+    } else {
+      set({ page })
+    }
+  },
+  resolveLeave: (action) => {
+    const s = get()
+    const target = s.pendingPage
+    if (!target) return
+    if (action === 'save') set({ reviewDraft: s.reviewEdit })
+    if (action === 'discard') set({ reviewEdit: s.reviewDraft })
+    if (action !== 'cancel') set({ page: target })
+    set({ pendingPage: null })
+  },
   openGoal: (id) => set({ activeGoalId: id }),
   closeGoal: () => set({ activeGoalId: null }),
 
