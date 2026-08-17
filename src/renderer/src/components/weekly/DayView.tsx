@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { ArrowLeft, ChevronLeft, ChevronRight, Plus } from 'lucide-react'
 import type { WeekEvent } from '../../../../shared/types'
 import ConfirmDialog from '../ConfirmDialog'
@@ -17,6 +17,7 @@ import {
   formatDayTitle,
   minuteFromOffsetY,
   minutesToLabel,
+  snapEventStart,
   snapToHour
 } from '../../lib/weekRules'
 
@@ -25,6 +26,7 @@ interface Props {
   onBack: () => void
   onShiftDay: (n: number) => void
   className?: string
+  slideClass?: string
   onAnimationEnd?: React.AnimationEventHandler<HTMLDivElement>
 }
 
@@ -55,6 +57,7 @@ export default function DayView({
   onBack,
   onShiftDay,
   className,
+  slideClass,
   onAnimationEnd
 }: Props): JSX.Element {
   const weekEvents = useAppStore((s) => s.data.weekEvents)
@@ -68,6 +71,7 @@ export default function DayView({
   const canvasRef = useRef<HTMLDivElement>(null)
   const [form, setForm] = useState<WeeklyFormState | null>(null)
   const [menu, setMenu] = useState<MenuState | null>(null)
+  const [menuClosing, setMenuClosing] = useState(false)
   const [drag, setDrag] = useState<DragState | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null)
   const [tick, setTick] = useState(0)
@@ -75,9 +79,23 @@ export default function DayView({
   const dayKey = dateKey(date)
   const dayEvents = eventsOnDate(weekEvents, dayKey)
 
+  const contentY = (clientY: number): number => {
+    const scroller = scrollRef.current
+    if (!scroller) return 0
+    return clientY - scroller.getBoundingClientRect().top + scroller.scrollTop
+  }
+
   useEffect(() => {
     const timer = window.setInterval(() => setTick((t) => t + 1), 60_000)
     return () => window.clearInterval(timer)
+  }, [])
+
+  const closeMenu = useCallback(() => {
+    setMenuClosing(true)
+    window.setTimeout(() => {
+      setMenu(null)
+      setMenuClosing(false)
+    }, 140)
   }, [])
 
   useEffect(() => {
@@ -85,11 +103,11 @@ export default function DayView({
     const onDown = (e: PointerEvent): void => {
       const target = e.target as Element | null
       if (target && target.closest('.day-menu')) return
-      setMenu(null)
+      closeMenu()
     }
     window.addEventListener('pointerdown', onDown)
     return () => window.removeEventListener('pointerdown', onDown)
-  }, [menu])
+  }, [menu, closeMenu])
 
   const now = new Date()
   const nowMin = now.getHours() * 60 + now.getMinutes()
@@ -107,24 +125,18 @@ export default function DayView({
   const onEventDragStart = (e: React.PointerEvent, event: WeekEvent): void => {
     e.preventDefault()
     const canvas = canvasRef.current
-    const scroller = scrollRef.current
-    if (!canvas || !scroller) return
+    if (!canvas) return
     canvas.setPointerCapture(e.pointerId)
-    const rect = canvas.getBoundingClientRect()
-    const pointerY = e.clientY - rect.top + scroller.scrollTop
+    const pointerY = contentY(e.clientY)
     const top = DAY_PAD_PX + eventTopPx(event.startMin, DAY_HOUR_PX)
     setDrag({ id: event.id, top, grabOffset: pointerY - top })
   }
 
   const onCanvasPointerMove = (e: React.PointerEvent): void => {
     if (!drag) return
-    const canvas = canvasRef.current
-    const scroller = scrollRef.current
-    if (!canvas || !scroller) return
     const event = weekEvents.find((ev) => ev.id === drag.id)
     if (!event) return
-    const rect = canvas.getBoundingClientRect()
-    const pointerY = e.clientY - rect.top + scroller.scrollTop
+    const pointerY = contentY(e.clientY)
     const height = eventHeightPx(event.startMin, event.endMin, DAY_HOUR_PX)
     const top = Math.min(
       DAY_PAD_PX + GRID_H - height,
@@ -133,9 +145,15 @@ export default function DayView({
     setDrag({ ...drag, top })
   }
 
-  const onCanvasPointerUp = (): void => {
+  const onCanvasPointerUp = (e: React.PointerEvent): void => {
     if (!drag) return
-    moveWeekEvent(drag.id, minuteFromOffsetY(drag.top - DAY_PAD_PX, DAY_HOUR_PX))
+    const event = weekEvents.find((ev) => ev.id === drag.id)
+    if (event) {
+      const pointerMin = minuteFromOffsetY(contentY(e.clientY) - DAY_PAD_PX, DAY_HOUR_PX)
+      const others = dayEvents.filter((ev) => ev.id !== drag.id)
+      const snapped = snapEventStart(others, event.endMin - event.startMin, pointerMin)
+      if (snapped !== null) moveWeekEvent(drag.id, snapped)
+    }
     setDrag(null)
   }
 
@@ -147,11 +165,7 @@ export default function DayView({
   const onCanvasDoubleClick = (e: React.MouseEvent): void => {
     const target = e.target as Element
     if (target.closest('.day-event')) return
-    const canvas = canvasRef.current
-    const scroller = scrollRef.current
-    if (!canvas || !scroller) return
-    const rect = canvas.getBoundingClientRect()
-    const y = e.clientY - rect.top + scroller.scrollTop
+    const y = contentY(e.clientY)
     openCreate(clampEventStart(minuteFromOffsetY(y - DAY_PAD_PX, DAY_HOUR_PX), 60))
   }
 
@@ -159,11 +173,8 @@ export default function DayView({
     e.preventDefault()
     const presetId = e.dataTransfer.getData('application/x-preset-id')
     const preset = weekPresets.find((p) => p.id === presetId)
-    const canvas = canvasRef.current
-    const scroller = scrollRef.current
-    if (!preset || !canvas || !scroller) return
-    const rect = canvas.getBoundingClientRect()
-    const y = e.clientY - rect.top + scroller.scrollTop
+    if (!preset) return
+    const y = contentY(e.clientY)
     const start = clampEventStart(
       minuteFromOffsetY(y - DAY_PAD_PX, DAY_HOUR_PX),
       preset.durationMin
@@ -201,7 +212,7 @@ export default function DayView({
           添加
         </button>
       </div>
-      <div className="day-body">
+      <div className={`day-body ${slideClass ?? ''}`} key={dayKey}>
         <div className="day-scroll" ref={scrollRef}>
           <div className="day-gutter">
             {HOURS.map((h, i) => (
@@ -272,12 +283,15 @@ export default function DayView({
       </div>
       {form && <EventFormDialog form={form} onClose={() => setForm(null)} />}
       {menu && (
-        <div className="context-menu day-menu" style={{ left: menu.x, top: menu.y }}>
+        <div
+          className={`context-menu day-menu${menuClosing ? ' closing' : ''}`}
+          style={{ left: menu.x, top: menu.y }}
+        >
           <button
             className="context-item"
             onClick={() => {
               if (menuEvent) setForm({ kind: 'event-edit', event: menuEvent })
-              setMenu(null)
+              closeMenu()
             }}
           >
             修改信息
@@ -288,7 +302,7 @@ export default function DayView({
               if (menuEvent) {
                 setDeleteTarget({ kind: 'event', id: menuEvent.id, title: menuEvent.title })
               }
-              setMenu(null)
+              closeMenu()
             }}
           >
             删除

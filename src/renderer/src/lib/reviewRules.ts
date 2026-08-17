@@ -1,19 +1,19 @@
 import type { ReviewDraft } from '../../../shared/types'
 
-export const REVIEW_RED_GREEN = [
-  '#d92626',
-  '#d94e26',
-  '#d97626',
-  '#d99d26',
-  '#d9c526',
-  '#c5d926',
-  '#9dd926',
-  '#76d926',
-  '#4ed926',
-  '#26d926'
+export const REVIEW_GREEN_RED = [
+  '#8CD9C1',
+  '#92CDE0',
+  '#8AB4F8',
+  '#97AEE8',
+  '#B4A7E5',
+  '#D8A294',
+  '#F8B18C',
+  '#E8A0A0',
+  '#D97E7E',
+  '#C85C5C'
 ] as const
 
-export const REVIEW_GREEN_RED: string[] = [...REVIEW_RED_GREEN].reverse()
+export const REVIEW_RED_GREEN: string[] = [...REVIEW_GREEN_RED].reverse()
 
 export function reviewDirty(a: ReviewDraft, b: ReviewDraft): boolean {
   return (

@@ -51,6 +51,12 @@ results.sliderValues = await evalJson(
   page,
   `JSON.stringify([...document.querySelectorAll('.review-slider-value')].map((e) => e.textContent))`
 )
+results.sliderSegmentStyles = await evalJson(
+  page,
+  `JSON.stringify([...document.querySelectorAll('.review-slider-row')].map((row) =>
+    [...row.querySelectorAll('.review-slider-segment')].slice(0, 10).map((s) => s.getAttribute('style') ?? '')
+  ))`
+)
 await shot(page, '02-review-values.png')
 
 await page.click('.review-textarea')
@@ -142,11 +148,26 @@ results.navIndicator = await evalJson(
 // 周计划单日打开/关闭动画类名
 await page.click('.nav-item:has-text("周计划")')
 await page.waitForTimeout(350)
+results.pageSwitchClass = await page.evaluate(
+  () => document.querySelector('.page-switch')?.className ?? null
+)
+await page.click('.icon-btn[title="下一周"]')
+await page.waitForTimeout(80)
+results.weekSlideClass = await page.evaluate(
+  () => document.querySelector('.week-grid')?.className ?? null
+)
+await page.waitForTimeout(300)
 await page.click('.week-col-head')
 await page.waitForTimeout(120)
 results.dayOpenClass = await page.evaluate(
   () => document.querySelector('.day-page')?.className ?? null
 )
+await page.click('.day-nav-btn[title="下一日"]')
+await page.waitForTimeout(80)
+results.daySlideClass = await page.evaluate(
+  () => document.querySelector('.day-body')?.className ?? null
+)
+await page.waitForTimeout(300)
 await shot(page, '08-day-open.png')
 await page.click('.day-topbar .back-btn')
 await page.waitForTimeout(100)

@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import type { WeekEvent, WeekPreset } from '../src/shared/types'
 import {
+  clampEndForDuration,
   clampEventStart,
   clampEventTimes,
+  clampStartForDuration,
   createPreset,
   createWeekEvent,
   dateKey,
@@ -14,10 +16,12 @@ import {
   minutesToLabel,
   mondayOf,
   moveWeekEventInList,
+  snapEventStart,
   snapToHour,
   streakNumber,
   updatePresetInList,
   updateWeekEventInList,
+  validateEventTimes,
   weekDays,
   weekIndexFromAnchor
 } from '../src/renderer/src/lib/weekRules'
@@ -119,13 +123,75 @@ describe('weekRules', () => {
     expect(deletePresetFromList(list, 'p1')).toHaveLength(0)
   })
 
-  it('moves an event, snapping start and preserving duration', () => {
+  it('moves an event, preserving duration and clamping to the day on a 5-minute grid', () => {
     const list = [event()]
     const moved = moveWeekEventInList(list, 'e1', 955)[0]
-    expect(moved.startMin).toBe(960)
-    expect(moved.endMin).toBe(1050)
-    expect(moveWeekEventInList(list, 'e1', 1380)[0].startMin).toBe(1320)
-    expect(moveWeekEventInList(list, 'e1', 1380)[1]).toBeUndefined()
+    expect(moved.startMin).toBe(955)
+    expect(moved.endMin).toBe(1045)
+    expect(moveWeekEventInList(list, 'e1', 1380)[0].startMin).toBe(1350)
+    expect(moveWeekEventInList(list, 'e1', 400)[0].startMin).toBe(420)
+  })
+
+  it('validates event times without silently fixing an inverted range', () => {
+    expect(validateEventTimes(600, 660)).toBeNull()
+    expect(validateEventTimes(1380, 420)).toBe('截止时间需晚于开始时间')
+    expect(validateEventTimes(600, 600)).toBe('截止时间需晚于开始时间')
+    expect(validateEventTimes(420, 1440)).toBe('时长不能超过10小时')
+  })
+
+  it('clamps start and end while keeping a duration constant', () => {
+    expect(clampStartForDuration(455, 60)).toBe(455)
+    expect(clampStartForDuration(1400, 60)).toBe(1380)
+    expect(clampStartForDuration(400, 60)).toBe(420)
+    expect(clampEndForDuration(480, 60)).toBe(480)
+    expect(clampEndForDuration(300, 60)).toBe(480)
+    expect(clampEndForDuration(1500, 60)).toBe(1440)
+  })
+
+  it('snaps a dragged event flush against the nearest existing event', () => {
+    const a = event({ id: 'a', startMin: 480, endMin: 540 })
+    const b = event({ id: 'b', startMin: 720, endMin: 780 })
+    expect(snapEventStart([a, b], 60, 600)).toBe(540)
+    expect(snapEventStart([a, b], 60, 660)).toBe(660)
+  })
+
+  it('reverts when a dragged event is squeezed between two events', () => {
+    const a = event({ id: 'a', startMin: 480, endMin: 540 })
+    const b = event({ id: 'b', startMin: 600, endMin: 660 })
+    expect(snapEventStart([a, b], 120, 570)).toBeNull()
+  })
+
+  it('snaps to day edges around a single event', () => {
+    const a = event({ id: 'a', startMin: 480, endMin: 540 })
+    expect(snapEventStart([a], 30, 450)).toBe(450)
+    expect(snapEventStart([a], 30, 1000)).toBe(540)
+  })
+
+  it('picks the closer side when released inside an event', () => {
+    const wide = event({ id: 'wide', startMin: 480, endMin: 600 })
+    expect(snapEventStart([wide], 30, 500)).toBe(450)
+    expect(snapEventStart([wide], 30, 590)).toBe(600)
+  })
+
+  it('reverts when there is no room above the first event', () => {
+    const first = event({ id: 'first', startMin: 480, endMin: 540 })
+    expect(snapEventStart([first], 120, 450)).toBeNull()
+  })
+
+  it('reverts when there is no room after the last event', () => {
+    const last = event({ id: 'last', startMin: 1380, endMin: 1440 })
+    expect(snapEventStart([last], 60, 1420)).toBeNull()
+  })
+
+  it('reverts when snapping inside an event is blocked on both sides', () => {
+    const a = event({ id: 'a', startMin: 480, endMin: 540 })
+    const b = event({ id: 'b', startMin: 600, endMin: 660 })
+    expect(snapEventStart([a, b], 90, 520)).toBeNull()
+  })
+
+  it('keeps whole-hour snapping when the day has no other events', () => {
+    expect(snapEventStart([], 60, 455)).toBe(480)
+    expect(snapEventStart([], 90, 1380)).toBe(1320)
   })
 
   it('updates an event and re-clamps its times', () => {

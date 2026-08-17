@@ -1,4 +1,5 @@
 import { ClipboardPaste, Copy, Eraser, Info, Save, Scissors, Trash2 } from 'lucide-react'
+import { useClosing } from '../hooks/useClosing'
 
 export interface ContextMenuState {
   x: number
@@ -27,12 +28,13 @@ const ITEMS: { action: MenuAction; label: string; icon: typeof Copy }[] = [
 ]
 
 export default function ContextMenu({ menu, canPaste, onAction, onClose }: Props): JSX.Element {
+  const { closing, close } = useClosing(onClose, 140)
   const items = menu.eventId
     ? ITEMS
     : ITEMS.filter((item) => item.action === 'paste')
 
   return (
-    <div className="context-menu" style={{ left: menu.x, top: menu.y }}>
+    <div className={`context-menu${closing ? ' closing' : ''}`} style={{ left: menu.x, top: menu.y }}>
       {items.map(({ action, label, icon: Icon }) => (
         <button
           key={action}
@@ -40,7 +42,7 @@ export default function ContextMenu({ menu, canPaste, onAction, onClose }: Props
           disabled={action === 'paste' && !canPaste}
           onClick={() => {
             onAction(action)
-            onClose()
+            close()
           }}
         >
           <Icon size={15} />

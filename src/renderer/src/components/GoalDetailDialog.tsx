@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useClosing } from '../hooks/useClosing'
 
 interface Props {
   title: string
@@ -9,10 +10,11 @@ interface Props {
 
 export default function GoalDetailDialog({ title, remark, onSave, onClose }: Props): JSX.Element {
   const [draft, setDraft] = useState(remark)
+  const { closing, close } = useClosing(onClose)
 
   return (
-    <div className="modal-mask" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
+    <div className={`modal-mask${closing ? ' closing' : ''}`} onClick={close}>
+      <div className={`modal${closing ? ' closing' : ''}`} onClick={(e) => e.stopPropagation()}>
         <h3>目标详细信息</h3>
         <label className="modal-field">
           标题
@@ -29,14 +31,14 @@ export default function GoalDetailDialog({ title, remark, onSave, onClose }: Pro
           />
         </label>
         <div className="modal-actions">
-          <button className="modal-btn" onClick={onClose}>
+          <button className="modal-btn" onClick={close}>
             取消
           </button>
           <button
             className="modal-btn primary"
             onClick={() => {
               onSave(draft)
-              onClose()
+              close()
             }}
           >
             保存

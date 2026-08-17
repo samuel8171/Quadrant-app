@@ -9,10 +9,10 @@ describe('reviewRules', () => {
   it('provides red-green and reversed green-red scales', () => {
     expect(REVIEW_RED_GREEN).toHaveLength(10)
     expect(REVIEW_GREEN_RED).toHaveLength(10)
-    expect(REVIEW_RED_GREEN[0]).toBe('#d92626')
-    expect(REVIEW_RED_GREEN[9]).toBe('#26d926')
-    expect(REVIEW_GREEN_RED[0]).toBe('#26d926')
-    expect(REVIEW_GREEN_RED[9]).toBe('#d92626')
+    expect(REVIEW_GREEN_RED[0]).toBe('#8CD9C1')
+    expect(REVIEW_GREEN_RED[9]).toBe('#C85C5C')
+    expect(REVIEW_RED_GREEN[0]).toBe('#C85C5C')
+    expect(REVIEW_RED_GREEN[9]).toBe('#8CD9C1')
   })
 
   it('detects dirty draft vs saved', () => {

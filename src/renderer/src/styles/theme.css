@@ -1017,7 +1017,8 @@ body {
 }
 
 .day-event.compact {
-  padding: 0;
+  padding: 0 4px;
+  justify-content: center;
 }
 
 .day-event.overview {
@@ -1042,6 +1043,11 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.day-event-title.short {
+  font-size: 8px;
+  line-height: 1.1;
 }
 
 .day-event-meta {
@@ -1262,10 +1268,17 @@ body {
   flex-direction: column;
   gap: 4px;
   overflow: hidden;
+  transition: transform 0.08s ease, box-shadow 0.08s ease;
+  box-shadow: 0 0 0 rgba(0, 0, 0, 0);
 }
 
 .preset-card:active {
   cursor: grabbing;
+}
+
+.preset-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.35);
 }
 
 .preset-title {
@@ -1434,6 +1447,38 @@ body {
   height: 16px;
   accent-color: var(--accent);
   cursor: pointer;
+}
+
+.create-mode-toggle {
+  display: flex;
+  gap: 8px;
+}
+
+.create-mode-toggle button {
+  flex: 1;
+  background: var(--card);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.create-mode-toggle button.selected {
+  border-color: var(--accent);
+  color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.preset-select {
+  margin-top: 8px;
+}
+
+.time-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
 }
 
 .dialog-error {
@@ -1655,11 +1700,11 @@ body {
 @keyframes toast-in {
   from {
     opacity: 0;
-    transform: translate(-50%, 8px);
+    transform: translate(-50%, 8px) scale(0.95);
   }
   to {
     opacity: 1;
-    transform: translate(-50%, 0);
+    transform: translate(-50%, 0) scale(1);
   }
 }
 
@@ -1808,5 +1853,150 @@ body {
   to {
     opacity: 0;
     transform: translateX(100%);
+  }
+}
+
+/* ---------- main page vertical switch ---------- */
+
+.page-switch {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.page-switch-up {
+  animation: page-switch-up 0.28s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.page-switch-down {
+  animation: page-switch-down 0.28s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+@keyframes page-switch-up {
+  from {
+    opacity: 0;
+    transform: translateY(28px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes page-switch-down {
+  from {
+    opacity: 0;
+    transform: translateY(-28px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ---------- modal & menu scale in/out ---------- */
+
+.modal-mask {
+  animation: fade-in 0.18s ease-out;
+}
+
+.modal-mask.closing {
+  animation: fade-out 0.16s ease-in forwards;
+}
+
+.modal {
+  animation: pop-in 0.2s cubic-bezier(0.2, 0.9, 0.3, 1.15);
+}
+
+.modal.closing {
+  animation: pop-out 0.16s ease-in forwards;
+}
+
+.context-menu {
+  animation: pop-in 0.16s cubic-bezier(0.2, 0.9, 0.3, 1.15);
+}
+
+.context-menu.closing {
+  animation: pop-out 0.14s ease-in forwards;
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes fade-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.94);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes pop-out {
+  from {
+    opacity: 1;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+}
+
+/* ---------- week / day horizontal shift ---------- */
+
+.week-slide-left {
+  animation: shift-left 0.24s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.week-slide-right {
+  animation: shift-right 0.24s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.day-slide-left {
+  animation: shift-left 0.24s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.day-slide-right {
+  animation: shift-right 0.24s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+@keyframes shift-left {
+  from {
+    opacity: 0;
+    transform: translateX(28px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes shift-right {
+  from {
+    opacity: 0;
+    transform: translateX(-28px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
   }
 }

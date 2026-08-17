@@ -10,11 +10,15 @@ import { QUADRANT_META } from '../../lib/quadrantMath'
 import {
   MAX_DURATION_MIN,
   MIN_DURATION_MIN,
+  clampEndForDuration,
   clampEventTimes,
+  clampStartForDuration,
+  validateEventTimes,
   normalizeDuration
 } from '../../lib/weekRules'
 import { useAppStore } from '../../state/appStore'
 import ConfirmDialog from '../ConfirmDialog'
+import { useClosing } from '../../hooks/useClosing'
 
 export type WeeklyFormState =
   | { kind: 'preset-create' }
@@ -41,6 +45,7 @@ interface FieldState {
   startMin: number
   endMin: number
   showInQuadrant: boolean
+  lockDuration: boolean
 }
 
 function initState(form: WeeklyFormState): FieldState {
@@ -55,7 +60,8 @@ function initState(form: WeeklyFormState): FieldState {
       customDuration: false,
       startMin: 420,
       endMin: 480,
-      showInQuadrant: false
+      showInQuadrant: false,
+      lockDuration: false
     }
   }
   if (form.kind === 'event-edit') {
@@ -69,7 +75,8 @@ function initState(form: WeeklyFormState): FieldState {
       customDuration: false,
       startMin: form.event.startMin,
       endMin: form.event.endMin,
-      showInQuadrant: form.event.showInQuadrant
+      showInQuadrant: form.event.showInQuadrant,
+      lockDuration: false
     }
   }
   if (form.kind === 'event-create') {
@@ -84,7 +91,8 @@ function initState(form: WeeklyFormState): FieldState {
       customDuration: false,
       startMin: times.startMin,
       endMin: times.endMin,
-      showInQuadrant: false
+      showInQuadrant: false,
+      lockDuration: false
     }
   }
   return {
@@ -97,27 +105,35 @@ function initState(form: WeeklyFormState): FieldState {
     customDuration: false,
     startMin: 420,
     endMin: 480,
-    showInQuadrant: false
+    showInQuadrant: false,
+    lockDuration: false
   }
 }
 
 export default function EventFormDialog({ form, onClose }: Props): JSX.Element {
+  const { closing, close } = useClosing(onClose)
   const addPreset = useAppStore((s) => s.addPreset)
   const updatePreset = useAppStore((s) => s.updatePreset)
   const deletePreset = useAppStore((s) => s.deletePreset)
   const addWeekEvent = useAppStore((s) => s.addWeekEvent)
   const updateWeekEvent = useAppStore((s) => s.updateWeekEvent)
   const deleteWeekEvent = useAppStore((s) => s.deleteWeekEvent)
+  const weekPresets = useAppStore((s) => s.data.weekPresets)
 
   const [fields, setFields] = useState<FieldState>(() => initState(form))
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [mode, setMode] = useState<'custom' | 'preset'>('custom')
+  const [selectedPresetId, setSelectedPresetId] = useState('')
 
   useEffect(() => {
     setFields(initState(form))
+    setMode('custom')
+    setSelectedPresetId('')
   }, [form])
 
   const isPreset = form.kind === 'preset-create' || form.kind === 'preset-edit'
   const isEdit = form.kind === 'preset-edit' || form.kind === 'event-edit'
+  const sortedPresets = [...weekPresets].sort((a, b) => a.createdAt.localeCompare(b.createdAt))
 
   const startHour = Math.min(23, Math.max(7, Math.floor(fields.startMin / 60)))
   const startMinute = fields.startMin % 60
@@ -125,6 +141,54 @@ export default function EventFormDialog({ form, onClose }: Props): JSX.Element {
   const endMinute = fields.endMin % 60
   const customHour = Math.min(10, Math.floor(fields.durationMin / 60))
   const customMinute = fields.durationMin % 60
+
+  const applyPreset = (presetId: string): void => {
+    setSelectedPresetId(presetId)
+    const preset = weekPresets.find((p) => p.id === presetId)
+    if (!preset) return
+    const duration = preset.durationMin
+    const start = clampStartForDuration(fields.startMin, duration)
+    setFields((f) => ({
+      ...f,
+      title: preset.title,
+      color: preset.color,
+      quadrant: preset.quadrant,
+      remark: preset.remark,
+      startMin: start,
+      endMin: start + duration,
+      durationMin: duration,
+      customDuration: false,
+      error: ''
+    }))
+  }
+
+  const setStartTime = (value: number): void => {
+    if (!fields.lockDuration) {
+      setFields((f) => ({ ...f, startMin: value, error: '' }))
+      return
+    }
+    const duration = normalizeDuration(fields.endMin - fields.startMin)
+    const start = clampStartForDuration(value, duration)
+    setFields((f) => ({ ...f, startMin: start, endMin: start + duration, error: '' }))
+  }
+
+  const setEndTime = (value: number): void => {
+    if (!fields.lockDuration) {
+      setFields((f) => ({ ...f, endMin: value, error: '' }))
+      return
+    }
+    const duration = normalizeDuration(fields.endMin - fields.startMin)
+    const end = clampEndForDuration(value, duration)
+    setFields((f) => ({ ...f, startMin: end - duration, endMin: end, error: '' }))
+  }
+
+  const switchMode = (next: 'custom' | 'preset'): void => {
+    setMode(next)
+    if (next === 'custom') {
+      setFields(initState(form))
+      setSelectedPresetId('')
+    }
+  }
 
   const save = (): void => {
     const title = fields.title.trim()
@@ -149,18 +213,15 @@ export default function EventFormDialog({ form, onClose }: Props): JSX.Element {
           remark: fields.remark
         })
       }
-      onClose()
+      close()
       return
     }
-    if (fields.endMin - fields.startMin > MAX_DURATION_MIN) {
-      setFields((f) => ({ ...f, error: '时长不能超过10小时' }))
+    const timeError = validateEventTimes(fields.startMin, fields.endMin)
+    if (timeError) {
+      setFields((f) => ({ ...f, error: timeError }))
       return
     }
     const times = clampEventTimes(fields.startMin, fields.endMin)
-    if (times.endMin <= times.startMin) {
-      setFields((f) => ({ ...f, error: '截止时间需晚于开始时间' }))
-      return
-    }
     if (form.kind === 'event-create') {
       const result = addWeekEvent({
         date: form.date,
@@ -191,13 +252,13 @@ export default function EventFormDialog({ form, onClose }: Props): JSX.Element {
         return
       }
     }
-    onClose()
+    close()
   }
 
   const doDelete = (): void => {
     if (form.kind === 'preset-edit') deletePreset(form.preset.id)
     if (form.kind === 'event-edit') deleteWeekEvent(form.event.id)
-    onClose()
+    close()
   }
 
   const titleText =
@@ -211,9 +272,46 @@ export default function EventFormDialog({ form, onClose }: Props): JSX.Element {
 
   return (
     <>
-      <div className="modal-mask" onClick={onClose}>
-        <div className="modal weekly-dialog" onClick={(e) => e.stopPropagation()}>
+      <div className={`modal-mask${closing ? ' closing' : ''}`} onClick={close}>
+        <div
+          className={`modal weekly-dialog${closing ? ' closing' : ''}`}
+          onClick={(e) => e.stopPropagation()}
+        >
         <h3>{titleText}</h3>
+        {form.kind === 'event-create' && (
+          <div className="modal-field">
+            <div className="create-mode-toggle">
+              <button
+                type="button"
+                className={mode === 'custom' ? 'selected' : ''}
+                onClick={() => switchMode('custom')}
+              >
+                自定义
+              </button>
+              <button
+                type="button"
+                className={mode === 'preset' ? 'selected' : ''}
+                onClick={() => switchMode('preset')}
+              >
+                从事件预设
+              </button>
+            </div>
+            {mode === 'preset' && (
+              <select
+                className="preset-select"
+                value={selectedPresetId}
+                onChange={(e) => applyPreset(e.target.value)}
+              >
+                <option value="">选择事件预设</option>
+                {sortedPresets.map((preset) => (
+                  <option key={preset.id} value={preset.id}>
+                    {preset.title}
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
+        )}
         <label className="modal-field">
           标题
           <input
@@ -226,7 +324,7 @@ export default function EventFormDialog({ form, onClose }: Props): JSX.Element {
                 e.preventDefault()
                 save()
               }
-              if (e.key === 'Escape') onClose()
+              if (e.key === 'Escape') close()
             }}
           />
         </label>
@@ -347,18 +445,24 @@ export default function EventFormDialog({ form, onClose }: Props): JSX.Element {
           </div>
         ) : (
           <div className="modal-field">
-            时间
+            <div className="time-head">
+              <span>时间</span>
+              <label className="toggle-row">
+                <input
+                  type="checkbox"
+                  checked={fields.lockDuration}
+                  onChange={(e) =>
+                    setFields((f) => ({ ...f, lockDuration: e.target.checked, error: '' }))
+                  }
+                />
+                锁定时长
+              </label>
+            </div>
             <div className="time-row">
               <span className="time-label">开始</span>
               <select
                 value={startHour}
-                onChange={(e) =>
-                  setFields((f) => ({
-                    ...f,
-                    startMin: Number(e.target.value) * 60 + startMinute,
-                    error: ''
-                  }))
-                }
+                onChange={(e) => setStartTime(Number(e.target.value) * 60 + startMinute)}
               >
                 {Array.from({ length: 17 }, (_, i) => i + 7).map((h) => (
                   <option key={h} value={h}>
@@ -368,13 +472,7 @@ export default function EventFormDialog({ form, onClose }: Props): JSX.Element {
               </select>
               <select
                 value={startMinute}
-                onChange={(e) =>
-                  setFields((f) => ({
-                    ...f,
-                    startMin: startHour * 60 + Number(e.target.value),
-                    error: ''
-                  }))
-                }
+                onChange={(e) => setStartTime(startHour * 60 + Number(e.target.value))}
               >
                 {MINUTE_STEPS.map((m) => (
                   <option key={m} value={m}>
@@ -388,11 +486,9 @@ export default function EventFormDialog({ form, onClose }: Props): JSX.Element {
               <select
                 value={endHour}
                 onChange={(e) =>
-                  setFields((f) => ({
-                    ...f,
-                    endMin: Number(e.target.value) * 60 + (Number(e.target.value) === 24 ? 0 : endMinute),
-                    error: ''
-                  }))
+                  setEndTime(
+                    Number(e.target.value) * 60 + (Number(e.target.value) === 24 ? 0 : endMinute)
+                  )
                 }
               >
                 {Array.from({ length: 18 }, (_, i) => i + 7).map((h) => (
@@ -404,13 +500,7 @@ export default function EventFormDialog({ form, onClose }: Props): JSX.Element {
               <select
                 value={endMinute}
                 disabled={endHour === 24}
-                onChange={(e) =>
-                  setFields((f) => ({
-                    ...f,
-                    endMin: endHour * 60 + Number(e.target.value),
-                    error: ''
-                  }))
-                }
+                onChange={(e) => setEndTime(endHour * 60 + Number(e.target.value))}
               >
                 {MINUTE_STEPS.map((m) => (
                   <option key={m} value={m}>
@@ -439,7 +529,7 @@ export default function EventFormDialog({ form, onClose }: Props): JSX.Element {
             </button>
           )}
           <span className="modal-spacer" />
-          <button className="modal-btn" onClick={onClose}>
+          <button className="modal-btn" onClick={close}>
             取消
           </button>
           <button className="modal-btn primary" onClick={save}>

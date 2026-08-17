@@ -1,10 +1,14 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import Sidebar from './components/Sidebar'
+import LeaveConfirmDialog from './components/LeaveConfirmDialog'
 import GoalsPage from './pages/GoalsPage'
 import QuadrantPage from './pages/QuadrantPage'
 import WeeklyPage from './pages/WeeklyPage'
 import ReviewPage from './pages/ReviewPage'
-import { useAppStore } from './state/appStore'
+import { installInertialScroll } from './lib/inertialScroll'
+import { useAppStore, type Page } from './state/appStore'
+
+const PAGE_ORDER: Page[] = ['goals', 'quadrant', 'weekly', 'review']
 
 export default function App(): JSX.Element {
   const page = useAppStore((s) => s.page)
@@ -13,39 +17,45 @@ export default function App(): JSX.Element {
   const pendingPage = useAppStore((s) => s.pendingPage)
   const resolveLeave = useAppStore((s) => s.resolveLeave)
 
+  const prevIndexRef = useRef(0)
+  const firstRef = useRef(true)
+  const index = PAGE_ORDER.indexOf(page)
+  const dir = index >= prevIndexRef.current ? 'up' : 'down'
+
+  useEffect(() => {
+    prevIndexRef.current = index
+    firstRef.current = false
+  }, [index])
+
   useEffect(() => {
     void init()
     const timer = window.setInterval(() => applyEscalations(), 60_000)
-    return () => window.clearInterval(timer)
+    const dispose = installInertialScroll()
+    return () => {
+      window.clearInterval(timer)
+      dispose()
+    }
   }, [init, applyEscalations])
 
   return (
     <div className="app">
       <Sidebar />
       <main className="content">
-        {page === 'goals' && <GoalsPage />}
-        {page === 'quadrant' && <QuadrantPage />}
-        {page === 'weekly' && <WeeklyPage />}
-        {page === 'review' && <ReviewPage />}
+        <div
+          className={`page-switch${firstRef.current ? '' : ` page-switch-${dir}`}`}
+          key={page}
+        >
+          {page === 'goals' && <GoalsPage />}
+          {page === 'quadrant' && <QuadrantPage />}
+          {page === 'weekly' && <WeeklyPage />}
+          {page === 'review' && <ReviewPage />}
+        </div>
       </main>
       {pendingPage && (
-        <div className="modal-mask">
-          <div className="modal confirm-modal">
-            <h3>是否保存草稿？</h3>
-            <p className="confirm-message">当前复盘内容有未保存的修改。</p>
-            <div className="modal-actions">
-              <button className="modal-btn" onClick={() => resolveLeave('cancel')}>
-                取消
-              </button>
-              <button className="modal-btn" onClick={() => resolveLeave('discard')}>
-                不保存
-              </button>
-              <button className="modal-btn primary" onClick={() => resolveLeave('save')}>
-                保存草稿
-              </button>
-            </div>
-          </div>
-        </div>
+        <LeaveConfirmDialog
+          onResolve={(action) => resolveLeave(action)}
+          onCancel={() => resolveLeave('cancel')}
+        />
       )}
     </div>
   )

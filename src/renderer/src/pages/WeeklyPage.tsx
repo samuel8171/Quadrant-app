@@ -9,9 +9,12 @@ export default function WeeklyPage(): JSX.Element {
   const [view, setView] = useState<WeeklyView>({ kind: 'week', monday: mondayOf(new Date()) })
   const [closing, setClosing] = useState(false)
   const [backAnim, setBackAnim] = useState(false)
+  const [weekSlide, setWeekSlide] = useState<'left' | 'right' | null>(null)
+  const [daySlide, setDaySlide] = useState<'left' | 'right' | null>(null)
 
   const openDay = (key: string): void => {
     setBackAnim(false)
+    setDaySlide(null)
     setView({ kind: 'day', date: key })
   }
 
@@ -29,7 +32,14 @@ export default function WeeklyPage(): JSX.Element {
 
   const shiftDay = (n: number): void => {
     if (view.kind !== 'day') return
+    setDaySlide(n > 0 ? 'left' : 'right')
     setView({ kind: 'day', date: dateKey(addDays(parseDateKey(view.date), n)) })
+  }
+
+  const shiftWeek = (weeks: number): void => {
+    if (view.kind !== 'week') return
+    setWeekSlide(weeks > 0 ? 'left' : 'right')
+    setView({ kind: 'week', monday: addDays(view.monday, weeks * 7) })
   }
 
   if (view.kind === 'day') {
@@ -40,6 +50,7 @@ export default function WeeklyPage(): JSX.Element {
         onBack={closeDay}
         onShiftDay={shiftDay}
         className={closing ? 'day-close' : 'day-open'}
+        slideClass={daySlide ? `day-slide-${daySlide}` : undefined}
         onAnimationEnd={(e) => {
           if (closing && e.animationName === 'day-close') finishClose()
         }}
@@ -51,10 +62,9 @@ export default function WeeklyPage(): JSX.Element {
     <WeekOverview
       monday={view.monday}
       onOpenDay={openDay}
-      onShift={(weeks) =>
-        setView({ kind: 'week', monday: addDays(view.monday, weeks * 7) })
-      }
+      onShift={shiftWeek}
       className={backAnim ? 'page-enter-left' : undefined}
+      slideClass={weekSlide ? `week-slide-${weekSlide}` : undefined}
     />
   )
 }

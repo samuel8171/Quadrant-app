@@ -219,7 +219,10 @@ export function moveWeekEventInList(
   return list.map((e) => {
     if (e.id !== id) return e
     const duration = e.endMin - e.startMin
-    const start = clampEventStart(newStartMin, duration)
+    const start =
+      Math.round(
+        Math.min(Math.max(newStartMin, DAY_START_MIN), DAY_END_MIN - duration) / 5
+      ) * 5
     return { ...e, startMin: start, endMin: start + duration }
   })
 }
@@ -228,4 +231,75 @@ export function eventsOnDate(list: WeekEvent[], date: string): WeekEvent[] {
   return list
     .filter((e) => e.date === date)
     .sort((a, b) => a.startMin - b.startMin || a.createdAt.localeCompare(b.createdAt))
+}
+
+export function validateEventTimes(startMin: number, endMin: number): string | null {
+  if (endMin <= startMin) return '截止时间需晚于开始时间'
+  if (endMin - startMin > MAX_DURATION_MIN) return '时长不能超过10小时'
+  return null
+}
+
+export function clampStartForDuration(startMin: number, durationMin: number): number {
+  const duration = normalizeDuration(durationMin)
+  return (
+    Math.round(
+      Math.min(Math.max(startMin, DAY_START_MIN), DAY_END_MIN - duration) / 5
+    ) * 5
+  )
+}
+
+export function clampEndForDuration(endMin: number, durationMin: number): number {
+  const duration = normalizeDuration(durationMin)
+  return (
+    Math.round(
+      Math.min(Math.max(endMin, DAY_START_MIN + duration), DAY_END_MIN) / 5
+    ) * 5
+  )
+}
+
+export function snapEventStart(
+  others: WeekEvent[],
+  durationMin: number,
+  pointerMin: number
+): number | null {
+  if (others.length === 0) {
+    return clampEventStart(pointerMin, durationMin)
+  }
+
+  const duration = normalizeDuration(durationMin)
+  let nearest = others[0]
+  let nearestDist = intervalDistance(pointerMin, nearest)
+  for (let i = 1; i < others.length; i++) {
+    const e = others[i]
+    const d = intervalDistance(pointerMin, e)
+    if (d < nearestDist || (d === nearestDist && e.startMin < nearest.startMin)) {
+      nearest = e
+      nearestDist = d
+    }
+  }
+
+  let start: number
+  if (pointerMin < nearest.startMin) {
+    start = nearest.startMin - duration
+  } else if (pointerMin > nearest.endMin) {
+    start = nearest.endMin
+  } else if (pointerMin - nearest.startMin <= nearest.endMin - pointerMin) {
+    start = nearest.startMin - duration
+  } else {
+    start = nearest.endMin
+  }
+
+  if (start < DAY_START_MIN || start + duration > DAY_END_MIN) return null
+  if (others.some((o) => overlaps(start, start + duration, o.startMin, o.endMin))) return null
+  return start
+}
+
+function intervalDistance(p: number, e: WeekEvent): number {
+  if (p < e.startMin) return e.startMin - p
+  if (p > e.endMin) return p - e.endMin
+  return 0
+}
+
+function overlaps(s1: number, e1: number, s2: number, e2: number): boolean {
+  return s1 < e2 && s2 < e1
 }

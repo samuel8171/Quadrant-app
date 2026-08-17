@@ -22,13 +22,15 @@ interface Props {
   onOpenDay: (key: string) => void
   onShift: (weeks: number) => void
   className?: string
+  slideClass?: string
 }
 
 export default function WeekOverview({
   monday,
   onOpenDay,
   onShift,
-  className
+  className,
+  slideClass
 }: Props): JSX.Element {
   const weekEvents = useAppStore((s) => s.data.weekEvents)
   const offset = useAppStore((s) => s.data.weekCounterOffset)
@@ -101,7 +103,7 @@ export default function WeekOverview({
       </header>
       <div className="week-range">{formatDateRange(monday)}</div>
       <div className="week-board" ref={boardRef}>
-        <div className="week-grid">
+        <div className={`week-grid ${slideClass ?? ''}`} key={weekIndexFromAnchor(monday)}>
           <div className="week-gutter">
             <div className="week-gutter-head" />
             <div className="week-hour-labels">

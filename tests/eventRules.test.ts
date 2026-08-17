@@ -41,6 +41,14 @@ describe('eventRules', () => {
     expect(pasted.y).toBeGreaterThan(e.y)
   })
 
+  it('pastes at an explicit target location', () => {
+    const e = createEvent('任务', 1, 3, 3, view)
+    const pasted = pasteEvent([e], e, view, -5, -5)[1]
+    expect(pasted.quadrant).toBe(3)
+    expect(pasted.x + pasted.width).toBeLessThanOrEqual(-0.5)
+    expect(pasted.y).toBe(-5)
+  })
+
   it('applies escalations only when due', () => {
     const due = createEvent('升级', 2, -5, 3, view)
     due.escalateAt = '2026-08-01T00:00:00.000Z'

@@ -27,8 +27,9 @@ export default function EventBlock({
   const quadrant = QUADRANT_META[event.quadrant]
   const compact = height < 18
   const duration = event.endMin - event.startMin
+  const shrinkTitle = !overview && duration < 30
   const short = duration < 45
-  const showTitle = overview ? height >= 10 : !compact
+  const showTitle = overview ? height >= 10 : true
   const showMeta = !overview && !compact && !short
 
   return (
@@ -55,7 +56,9 @@ export default function EventBlock({
         interactive && onContextMenu ? (e) => onContextMenu(e, event) : undefined
       }
     >
-      {showTitle && <div className="day-event-title">{event.title}</div>}
+      {showTitle && (
+        <div className={`day-event-title${shrinkTitle ? ' short' : ''}`}>{event.title}</div>
+      )}
       {showMeta && (
           <div className="day-event-meta">
             <span className="day-event-time">

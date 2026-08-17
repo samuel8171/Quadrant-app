@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { Quadrant, QuadrantEvent } from '../../../shared/types'
 import { QUADRANT_META } from '../lib/quadrantMath'
+import { useClosing } from '../hooks/useClosing'
 
 interface Props {
   event: QuadrantEvent
@@ -9,6 +10,7 @@ interface Props {
 }
 
 export default function EventDetailDialog({ event, onSave, onClose }: Props): JSX.Element {
+  const { closing, close } = useClosing(onClose)
   const [quadrant, setQuadrant] = useState<Quadrant>(event.quadrant)
   const [remark, setRemark] = useState(event.remark)
   const [deadline, setDeadline] = useState(toLocalInput(event.deadline))
@@ -31,12 +33,12 @@ export default function EventDetailDialog({ event, onSave, onClose }: Props): JS
           ? fromLocalInput(escalateAt)
           : undefined
     })
-    onClose()
+    close()
   }
 
   return (
-    <div className="modal-mask" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
+    <div className={`modal-mask${closing ? ' closing' : ''}`} onClick={close}>
+      <div className={`modal${closing ? ' closing' : ''}`} onClick={(e) => e.stopPropagation()}>
         <h3>事件详细信息</h3>
         <label className="modal-field">
           所属象限
@@ -76,7 +78,7 @@ export default function EventDetailDialog({ event, onSave, onClose }: Props): JS
           </label>
         )}
         <div className="modal-actions">
-          <button className="modal-btn" onClick={onClose}>
+          <button className="modal-btn" onClick={close}>
             取消
           </button>
           <button className="modal-btn primary" onClick={save}>

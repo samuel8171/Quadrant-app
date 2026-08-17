@@ -33,7 +33,3 @@ npm run package
 ## 数据
 
 数据保存在 `%APPDATA%/象限/plan.json`，写入前自动备份为 `plan.backup.json`。
-
-## MCP（预留）
-
-后期将提供 MCP stdio 服务，使外部 Agent 可协作读写计划数据；工具清单见 `src/main/mcp/index.ts`，当前不随主程序启动。
