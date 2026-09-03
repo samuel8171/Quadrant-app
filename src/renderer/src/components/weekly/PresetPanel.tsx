@@ -1,4 +1,5 @@
-import { Pencil, Plus, Trash2 } from 'lucide-react'
+import { ChevronDown, Pencil, Plus, Trash2 } from 'lucide-react'
+import { useState } from 'react'
 import type { WeekPreset } from '../../../../shared/types'
 import { withAlpha } from '../../lib/color'
 import { QUADRANT_META } from '../../lib/quadrantMath'
@@ -17,17 +18,21 @@ export default function PresetPanel({
   onEdit,
   onDelete
 }: Props): JSX.Element {
+  const [expanded, setExpanded] = useState(true)
   const sorted = [...presets].sort((a, b) => a.createdAt.localeCompare(b.createdAt))
 
   return (
-    <aside className="preset-panel">
+    <aside className={`preset-panel${expanded ? ' expanded' : ' collapsed'}`}>
       <div className="preset-head">
-        <h3>事件预设</h3>
-        <button className="icon-btn" title="新建预设" onClick={onAdd}>
+        <button className="preset-toggle" onClick={() => setExpanded((value) => !value)} aria-expanded={expanded}>
+          <h3>事件预设</h3>
+          <ChevronDown size={16} />
+        </button>
+        <button className="icon-btn" title="新建预设" aria-label="新建预设" onClick={onAdd}>
           <Plus size={16} />
         </button>
       </div>
-      <div className="preset-list">
+      <div className="preset-list" hidden={!expanded}>
         {sorted.length === 0 && <div className="preset-empty">暂无预设，点击 ＋ 新建</div>}
         {sorted.map((preset) => {
           const quadrant = QUADRANT_META[preset.quadrant]
@@ -48,6 +53,7 @@ export default function PresetPanel({
                 e.dataTransfer.setData('application/x-preset-id', preset.id)
                 e.dataTransfer.effectAllowed = 'copy'
               }}
+              onClick={() => onEdit(preset)}
               onDoubleClick={() => onEdit(preset)}
             >
               <div className="preset-title">{preset.title}</div>

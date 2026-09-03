@@ -169,6 +169,14 @@ export default function DayView({
     openCreate(clampEventStart(minuteFromOffsetY(y - DAY_PAD_PX, DAY_HOUR_PX), 60))
   }
 
+  const onCanvasClick = (e: React.MouseEvent): void => {
+    if (e.detail > 1) return
+    const target = e.target as Element
+    if (target.closest('.day-event')) return
+    const y = contentY(e.clientY)
+    openCreate(clampEventStart(minuteFromOffsetY(y - DAY_PAD_PX, DAY_HOUR_PX), 60))
+  }
+
   const onDropPreset = (e: React.DragEvent): void => {
     e.preventDefault()
     const presetId = e.dataTransfer.getData('application/x-preset-id')
@@ -230,6 +238,7 @@ export default function DayView({
             className="day-canvas"
             onPointerMove={onCanvasPointerMove}
             onPointerUp={onCanvasPointerUp}
+            onClick={onCanvasClick}
             onDoubleClick={onCanvasDoubleClick}
             onDragOver={(e) => {
               e.preventDefault()

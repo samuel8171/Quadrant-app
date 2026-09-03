@@ -117,9 +117,14 @@ export default function WeekOverview({
           {days.map((day) => {
             const key = dateKey(day)
             const events = eventsOnDate(weekEvents, key)
+            const isToday = key === dateKey(new Date())
             return (
               <div className="week-col" key={key}>
-                <button className="week-col-head" onClick={() => onOpenDay(key)}>
+                <button
+                  className={`week-col-head${isToday ? ' today' : ''}`}
+                  aria-label={`${weekdayName(day)} ${day.getMonth() + 1}/${day.getDate()}${isToday ? '，今天' : ''}`}
+                  onClick={() => onOpenDay(key)}
+                >
                   <span className="week-col-weekday">{weekdayName(day)}</span>
                   <span className="week-col-date">
                     {day.getMonth() + 1}/{day.getDate()}
