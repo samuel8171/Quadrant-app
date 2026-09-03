@@ -17,12 +17,43 @@ type BrowserGlobals = {
   URL?: { createObjectURL(blob: unknown): string; revokeObjectURL(url: string): void }
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object'
+}
+
+function hasStringFields(value: unknown, fields: string[]): boolean {
+  return isRecord(value) && fields.every((field) => typeof value[field] === 'string')
+}
+
 function validAppData(value: unknown): value is AppData {
-  if (!value || typeof value !== 'object') return false
+  if (!isRecord(value)) return false
   const data = value as Partial<AppData>
-  return data.version === 2 && Array.isArray(data.goals) && Array.isArray(data.events) &&
-    Array.isArray(data.weekPresets) && Array.isArray(data.weekEvents) &&
-    typeof data.weekCounterOffset === 'number'
+  if (data.version !== 2 || !Number.isFinite(data.weekCounterOffset) ||
+    !Array.isArray(data.goals) || !Array.isArray(data.events) ||
+    !Array.isArray(data.weekPresets) || !Array.isArray(data.weekEvents)) return false
+  return data.goals.every((goal) => isRecord(goal) && hasStringFields(goal, ['id', 'title', 'type', 'remark', 'createdAt']) &&
+    (goal.type === 'long' || goal.type === 'short') && typeof goal.done === 'boolean' &&
+    Array.isArray(goal.groupTitles) && goal.groupTitles.every((v) => typeof v === 'string') &&
+    Array.isArray(goal.subtasks) && goal.subtasks.every((subtask) => isRecord(subtask) &&
+      hasStringFields(subtask, ['id', 'title', 'remark']) && typeof subtask.done === 'boolean' &&
+      typeof subtask.group === 'number' && typeof subtask.order === 'number')) &&
+    data.events.every((event) => isRecord(event) && hasStringFields(event, ['id', 'text', 'remark', 'createdAt']) &&
+      [1, 2, 3, 4].includes(event.quadrant as number) &&
+      ['x', 'y', 'width'].every((field) => typeof event[field] === 'number')) &&
+    data.weekPresets.every((preset) => isRecord(preset) && hasStringFields(preset, ['id', 'title', 'color', 'remark', 'createdAt']) &&
+      [1, 2, 3, 4].includes(preset.quadrant as number) && typeof preset.durationMin === 'number') &&
+    data.weekEvents.every((event) => isRecord(event) && hasStringFields(event, ['id', 'date', 'title', 'color', 'remark', 'createdAt']) &&
+      [1, 2, 3, 4].includes(event.quadrant as number) && typeof event.startMin === 'number' &&
+      typeof event.endMin === 'number' && typeof event.showInQuadrant === 'boolean')
+}
+
+function getDefaultStorage(): WebStorage {
+  try {
+    const browser = globalThis as unknown as BrowserGlobals
+    return browser.window?.localStorage ?? { getItem: () => null, setItem: () => undefined }
+  } catch {
+    return { getItem: () => null, setItem: () => undefined }
+  }
 }
 
 function readReviews(storage: WebStorage): StoredReview[] {
@@ -51,11 +82,12 @@ function toRecord(review: StoredReview): ReviewRecord {
   }
 }
 
-export function createWebPlatformApi(storage: WebStorage = (globalThis as unknown as BrowserGlobals).window!.localStorage): QuadrantApi {
+export function createWebPlatformApi(storage?: WebStorage): QuadrantApi {
+  const safeStorage = storage ?? getDefaultStorage()
   return {
     async loadData() {
       try {
-        const raw = storage.getItem(DATA_KEY)
+        const raw = safeStorage.getItem(DATA_KEY)
         if (!raw) return defaultData()
         const value: unknown = JSON.parse(raw)
         return validAppData(value) ? value : defaultData()
@@ -64,7 +96,7 @@ export function createWebPlatformApi(storage: WebStorage = (globalThis as unknow
       }
     },
     async saveData(data) {
-      try { storage.setItem(DATA_KEY, JSON.stringify(data)) } catch { /* unavailable storage */ }
+      try { safeStorage.setItem(DATA_KEY, JSON.stringify(data)) } catch { /* unavailable storage */ }
     },
     async saveReview(payload: ReviewExport) {
       const now = new Date()
@@ -73,30 +105,36 @@ export function createWebPlatformApi(storage: WebStorage = (globalThis as unknow
       const content = `计划完成度：${payload.completion}\n计划完成质量：${payload.quality}\n压力指数：${payload.stress}\n\n${payload.text}`
       const review: StoredReview = { fileName, content, modifiedAt: now.toISOString() }
       try {
-        const reviews = readReviews(storage).filter((item) => item.fileName !== fileName)
-        storage.setItem(REVIEWS_KEY, JSON.stringify([...reviews, review]))
-      } catch { /* unavailable storage */ }
+        const reviews = readReviews(safeStorage).filter((item) => item.fileName !== fileName)
+        safeStorage.setItem(REVIEWS_KEY, JSON.stringify([...reviews, review]))
+      } catch (error) { throw error instanceof Error ? error : new Error('无法保存复盘记录') }
       return toRecord(review)
     },
     async listReviews() {
-      return readReviews(storage).map(toRecord).sort((a, b) => b.modifiedAt.localeCompare(a.modifiedAt))
+      return readReviews(safeStorage).map(toRecord).sort((a, b) => b.modifiedAt.localeCompare(a.modifiedAt))
     },
     async openReview(filePath) {
       if (!filePath.startsWith('web-review:')) return { ok: false, error: '文件不存在或已被移动' }
       const fileName = filePath.slice('web-review:'.length)
-      const review = readReviews(storage).find((item) => item.fileName === fileName)
+      const review = readReviews(safeStorage).find((item) => item.fileName === fileName)
       if (!review) return { ok: false, error: '文件不存在或已被移动' }
       const browser = globalThis as unknown as BrowserGlobals
       if (!browser.document || !browser.URL || !browser.Blob) {
         return { ok: false, error: '当前环境不支持下载文件' }
       }
-      const url = browser.URL.createObjectURL(new browser.Blob([review.content], { type: 'text/plain;charset=utf-8' }))
-      const anchor = browser.document.createElement('a')
-      anchor.href = url
-      anchor.download = fileName
-      anchor.click()
-      browser.URL.revokeObjectURL(url)
-      return { ok: true }
+      let url: string | undefined
+      try {
+        url = browser.URL.createObjectURL(new browser.Blob([review.content], { type: 'text/plain;charset=utf-8' }))
+        const anchor = browser.document.createElement('a')
+        anchor.href = url
+        anchor.download = fileName
+        anchor.click()
+        return { ok: true }
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : '无法下载文件' }
+      } finally {
+        if (url) browser.URL.revokeObjectURL(url)
+      }
     }
   }
 }

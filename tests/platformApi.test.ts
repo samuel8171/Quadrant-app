@@ -16,6 +16,8 @@ describe('web platform API', () => {
     const storage = memoryStorage()
     const api = createWebPlatformApi(storage)
     expect(await api.loadData()).toEqual(defaultData())
+    storage.setItem('quadrant-web-data-v2', JSON.stringify({ ...defaultData(), goals: [null] }))
+    expect(await api.loadData()).toEqual(defaultData())
     storage.setItem('quadrant-web-data-v2', '{broken')
     expect(await api.loadData()).toEqual(defaultData())
   })
@@ -29,5 +31,14 @@ describe('web platform API', () => {
     const record = await api.saveReview({ completion: 2, quality: 1, stress: 0, text: '本周完成' })
     expect(record.filePath).toMatch(/^web-review:/)
     expect((await api.listReviews()).map((r: ReviewRecord) => r.fileName)).toContain(record.fileName)
+  })
+
+  it('uses a no-op fallback when localStorage is unavailable and rejects failed review writes', async () => {
+    const api = createWebPlatformApi({
+      getItem: () => { throw new Error('blocked') },
+      setItem: () => { throw new Error('quota') }
+    })
+    expect(await api.loadData()).toEqual(defaultData())
+    await expect(api.saveReview({ completion: 2, quality: 1, stress: 0, text: '失败' })).rejects.toThrow()
   })
 })

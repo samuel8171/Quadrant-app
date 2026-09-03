@@ -60,7 +60,7 @@ export default function ReviewRecords(): JSX.Element {
               </span>
               <span className="review-record-main">
                 <span className="review-record-name">{r.fileName}</span>
-                <span className="review-record-meta">类型: Word 文档</span>
+                <span className="review-record-meta">类型: {r.filePath.startsWith('web-review:') ? '文本文件' : 'Word 文档'}</span>
               </span>
               <span className="review-record-date">{formatModifiedAt(r.modifiedAt)}</span>
               <span className="review-record-size">{formatSize(r.size)}</span>
