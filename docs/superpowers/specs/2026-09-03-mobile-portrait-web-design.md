@@ -59,12 +59,12 @@
 
 | 位置 | 象限 | 标题 | 辅助文案 | 主色 |
 | --- | --- | --- | --- | --- |
-| 左上 | Q1 | 重要且紧急 | 立即去做 | 红 `#FF5A57` |
-| 右上 | Q2 | 重要不紧急 | 计划去做 | 橙 `#FF9F0A` |
-| 左下 | Q3 | 紧急不重要 | 授权去做 | 蓝 `#3D8BFF` |
-| 右下 | Q4 | 不重要不紧急 | 减少去做 | 绿 `#38C759` |
+| 右上 | Q1 | 重要紧急 |  | 橙 `#FF8C00` |
+| 左上 | Q2 | 重要不紧急 |  | 黄 `#FFA500` |
+| 左下 | Q3 | 不重要不紧急 |  | 青 `#008B8B` |
+| 右下 | Q4 | 不重要紧急 |  | 紫 `#483D8B` |
 
-现有数学坐标采用 X 轴向右为“紧急度降低”、Y 轴向上为“重要度提高”：Q1 世界坐标 `x < 0, y >= 0`，Q2 `x >= 0, y >= 0`，Q3 `x < 0, y < 0`，Q4 `x >= 0, y < 0`。视觉位置遵从表格，坐标与视觉映射通过 `quadrantMath` 规则验证，不能只靠 CSS 调换。
+现有数学坐标和视觉位置保持原程序设置：Q1 世界坐标 `x >= 0, y >= 0`（右上），Q2 `x < 0, y >= 0`（左上），Q3 `x < 0, y < 0`（左下），Q4 `x >= 0, y < 0`（右下）。移动端不得通过 CSS 或数据转换调换象限。
 
 ### 手机交互
 
@@ -148,9 +148,9 @@
 
 ### 四象限主页面
 
-`A high-fidelity iOS dark-mode Eisenhower matrix productivity app in a 9:19 portrait ratio, Chinese interface. Large title “四象限”, subtitle “专注重要，掌控时间”. A precise 2 by 2 grid: top-left red card “重要且紧急 / 立即去做”, top-right orange card “重要不紧急 / 计划去做”, bottom-left blue card “紧急不重要 / 授权去做”, bottom-right green card “不重要不紧急 / 减少去做”. Each quadrant contains compact translucent task cards with clear touch affordances and small count badges. Below the grid, a subtle gesture hint and a frosted-glass bottom action sheet for quick task creation. Floating frosted-glass bottom tab bar with 目标 / 四象限 / 周计划 / 复盘, 四象限 active in blue. Apple HIG, graphite black background, accurate quadrant placement, restrained colored glow, accessible contrast, realistic app screenshot, no device frame.`
+`A high-fidelity iOS dark-mode Eisenhower matrix productivity app in a 9:19 portrait ratio, Chinese interface. Large title “四象限”. Preserve the original program’s quadrant mapping and placement exactly: top-right Q1 重要紧急 in orange, top-left Q2 重要不紧急 in amber, bottom-left Q3 不重要不紧急 in teal, bottom-right Q4 不重要紧急 in indigo. Do not swap quadrant positions or semantics. Each quadrant contains compact translucent task cards with clear touch affordances and small count badges. Below the grid, a subtle gesture hint and a frosted-glass bottom action sheet for quick task creation. Floating frosted-glass bottom tab bar with 目标 / 四象限 / 周计划 / 复盘, 四象限 active in blue. Apple HIG, graphite black background, restrained colored glow, accessible contrast, realistic app screenshot, no device frame.`
 
-图生图补充：`Keep the exact quadrant positions and semantic colors from the reference: red top-left, orange top-right, blue bottom-left, green bottom-right. Do not swap “重要不紧急” and “紧急不重要”. Replace the reference bottom navigation labels with the project’s four modules.`
+图生图补充：`Preserve the original app’s quadrant positions and colors: Q1 top-right orange, Q2 top-left amber, Q3 bottom-left teal, Q4 bottom-right indigo. Do not reinterpret or swap the original program mapping. Replace the reference bottom navigation labels with the project’s four modules.`
 
 ### 目标页面
 

@@ -15,8 +15,8 @@
 - 桌面布局保持现状。`767px` 及以下进入移动模式；`768px–1023px` 使用紧凑桌面/平板模式；`1024px` 及以上维持桌面布局。
 - 手机 Tab Bar 距离左右边缘 12px，圆角 26px；主体使用半透明深灰背景、`backdrop-filter: blur(24px) saturate(150%)`、顶部高光边和柔和外阴影。
 - 每个 Tab 的实际触控区域不小于 44×44px；图标与文本均参与点击。
-- 四个象限严格按位置：左上 Q1 红 `#FF5A57`，右上 Q2 橙 `#FF9F0A`，左下 Q3 蓝 `#3D8BFF`，右下 Q4 绿 `#38C759`。
-- X 轴向右为“紧急度降低”、Y 轴向上为“重要度提高”：Q1 `x < 0, y >= 0`，Q2 `x >= 0, y >= 0`，Q3 `x < 0, y < 0`，Q4 `x >= 0, y < 0`。
+- 四个象限位置和颜色保持原程序设置：右上 Q1 橙 `#FF8C00`，左上 Q2 黄 `#FFA500`，左下 Q3 青 `#008B8B`，右下 Q4 紫 `#483D8B`。
+- 现有数学坐标保持原程序设置：Q1 `x >= 0, y >= 0`，Q2 `x < 0, y >= 0`，Q3 `x < 0, y < 0`，Q4 `x >= 0, y < 0`。
 - 移动端根布局使用动态视口高度 `100dvh`，内容底部预留 Tab Bar 高度和 `env(safe-area-inset-bottom)`。
 - 所有横向溢出必须限制在明确的时间轴或卡片轨道内，页面本身不得产生意外横向滚动。
 - Electron 环境检测到 preload API 后透传现有 IPC；Web 环境使用 localStorage 保存 AppData。
@@ -191,16 +191,16 @@ git commit -m "feat: adapt goals and dialogs for touch"
 
 **Interfaces:**
 - Preserve existing `quadrantOfWorldPoint`, `screenToWorldX`, `screenToWorldY`, `ViewState`, and event update APIs.
-- Export `QUADRANT_META` with exact mobile colors and labels required by the spec.
+- Preserve the existing `QUADRANT_META` positions, colors and labels; mobile adaptation must not remap quadrant semantics.
 
 - [ ] **Step 1: Add failing mapping/color assertions**
 
 ```ts
 it('keeps semantic quadrant positions and mobile colors', () => {
-  expect(QUADRANT_META[1]).toMatchObject({ color: '#FF5A57', label: '重要且紧急' })
-  expect(QUADRANT_META[2]).toMatchObject({ color: '#FF9F0A', label: '重要不紧急' })
-  expect(QUADRANT_META[3]).toMatchObject({ color: '#3D8BFF', label: '紧急不重要' })
-  expect(QUADRANT_META[4]).toMatchObject({ color: '#38C759', label: '不重要不紧急' })
+  expect(QUADRANT_META[1]).toMatchObject({ color: '#FF8C00', label: '重要紧急', corner: 'top-right' })
+  expect(QUADRANT_META[2]).toMatchObject({ color: '#FFA500', label: '重要不紧急', corner: 'top-left' })
+  expect(QUADRANT_META[3]).toMatchObject({ color: '#008B8B', label: '不重要不紧急', corner: 'bottom-left' })
+  expect(QUADRANT_META[4]).toMatchObject({ color: '#483D8B', label: '不重要紧急', corner: 'bottom-right' })
 })
 ```
 
@@ -209,9 +209,9 @@ it('keeps semantic quadrant positions and mobile colors', () => {
 Run: `npm test -- tests/quadrantMath.test.ts`
 Expected: FAIL if current metadata does not match the four required colors/labels.
 
-- [ ] **Step 3: Implement metadata and mobile presentation**
+- [ ] **Step 3: Preserve metadata and implement mobile presentation**
 
-Update only metadata colors/labels and responsive presentation. Keep world-to-screen math and event persistence unchanged. On mobile show the specified gesture hint and use larger event touch handles; preserve desktop Ctrl+drag/scroll hint.
+Keep `QUADRANT_META`, world-to-screen math, event persistence, and existing quadrant positions unchanged. On mobile show the gesture hint and use larger event touch handles; preserve desktop Ctrl+drag/scroll hint.
 
 - [ ] **Step 4: Add touch gesture support without breaking mouse input**
 
