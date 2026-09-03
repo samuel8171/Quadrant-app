@@ -450,6 +450,17 @@ function GroupCard({
             >
               {title}
             </h3>
+            <button
+              className="icon-btn group-rename-btn"
+              title="重命名分组"
+              aria-label="重命名分组"
+              onClick={() => {
+                setName(title)
+                setRenaming(true)
+              }}
+            >
+              <Pencil size={15} />
+            </button>
             {canDelete && (
               <button
                 className="icon-btn danger group-delete-btn"
