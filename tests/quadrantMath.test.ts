@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { QuadrantEvent } from '../src/shared/types'
 import {
   AXIS_GAP_PX,
+  QUADRANT_META,
   MAX_EVENT_WIDTH_UNITS,
   MIN_EVENT_WIDTH_UNITS,
   autoEventWidth,
@@ -54,6 +55,13 @@ describe('quadrantMath', () => {
     expect(quadrantOfWorldPoint(-1, 1)).toBe(2)
     expect(quadrantOfWorldPoint(-1, -1)).toBe(3)
     expect(quadrantOfWorldPoint(1, -1)).toBe(4)
+  })
+
+  it('preserves original quadrant metadata positions and colors', () => {
+    expect(QUADRANT_META[1]).toMatchObject({ label: '重要紧急', color: '#FF8C00', corner: 'top-right' })
+    expect(QUADRANT_META[2]).toMatchObject({ label: '重要不紧急', color: '#FFA500', corner: 'top-left' })
+    expect(QUADRANT_META[3]).toMatchObject({ label: '不重要不紧急', color: '#008B8B', corner: 'bottom-left' })
+    expect(QUADRANT_META[4]).toMatchObject({ label: '不重要紧急', color: '#483D8B', corner: 'bottom-right' })
   })
 
   it('clamps origin 10px from every viewport edge', () => {
@@ -132,3 +140,5 @@ describe('quadrantMath', () => {
     expect(result.quadrant).toBe(2)
   })
 })
+
+

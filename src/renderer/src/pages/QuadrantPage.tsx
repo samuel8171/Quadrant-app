@@ -54,6 +54,8 @@ export default function QuadrantPage(): JSX.Element {
   const panAnimRef = useRef<number | null>(null)
   const panLastRef = useRef<{ x: number; y: number; t: number } | null>(null)
   const panVelRef = useRef({ x: 0, y: 0 })
+  const touchPointsRef = useRef(new Map<number, { x: number; y: number }>())
+  const pinchRef = useRef<{ distance: number; zoom: number; view: ViewState } | null>(null)
 
   const [view, setView] = useState<ViewState>({ zoom: 1, panX: 0, panY: 0 })
   const [size, setSize] = useState({ width: 0, height: 0 })
@@ -326,6 +328,25 @@ export default function QuadrantPage(): JSX.Element {
   }
 
   const onPointerDown = (e: React.PointerEvent): void => {
+    if (e.pointerType === 'touch') {
+      const points = touchPointsRef.current
+      points.set(e.pointerId, { x: e.clientX, y: e.clientY })
+      viewportRef.current?.setPointerCapture(e.pointerId)
+      if (points.size === 1) {
+        panRef.current = { startX: e.clientX, startY: e.clientY, startView: view }
+        panLastRef.current = { x: e.clientX, y: e.clientY, t: performance.now() }
+        panVelRef.current = { x: 0, y: 0 }
+      } else if (points.size === 2) {
+        panRef.current = null
+        const [a, b] = [...points.values()]
+        pinchRef.current = {
+          distance: Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)),
+          zoom: view.zoom,
+          view
+        }
+      }
+      return
+    }
     if (e.button === 1 || (e.button === 0 && e.ctrlKey)) {
       e.preventDefault()
       viewportRef.current?.setPointerCapture(e.pointerId)
@@ -349,6 +370,27 @@ export default function QuadrantPage(): JSX.Element {
     hoverRef.current = { clientX: e.clientX, clientY: e.clientY }
     const x = e.clientX - rect.left
     const y = e.clientY - rect.top
+
+    if (e.pointerType === 'touch') {
+      const points = touchPointsRef.current
+      if (!points.has(e.pointerId)) return
+      points.set(e.pointerId, { x: e.clientX, y: e.clientY })
+      if (points.size >= 2 && pinchRef.current) {
+        const [a, b] = [...points.values()]
+        const distance = Math.max(1, Math.hypot(a.x - b.x, a.y - b.y))
+        const centerX = (a.x + b.x) / 2 - rect.left
+        const centerY = (a.y + b.y) / 2 - rect.top
+        const next = zoomAt(
+          centerX,
+          centerY,
+          pinchRef.current.zoom * (distance / pinchRef.current.distance),
+          pinchRef.current.view
+        )
+        viewRef.current = next
+        setView(next)
+        return
+      }
+    }
 
     if (panRef.current) {
       const start = panRef.current
@@ -382,6 +424,18 @@ export default function QuadrantPage(): JSX.Element {
   }
 
   const onPointerUp = (e: React.PointerEvent): void => {
+    if (e.pointerType === 'touch') {
+      touchPointsRef.current.delete(e.pointerId)
+      pinchRef.current = null
+      if (touchPointsRef.current.size === 0) {
+        panRef.current = null
+      } else {
+        const [point] = [...touchPointsRef.current.values()]
+        panRef.current = { startX: point.x, startY: point.y, startView: viewRef.current }
+      }
+      if (e.target instanceof Element) e.target.releasePointerCapture?.(e.pointerId)
+      return
+    }
     const wasPanning = panRef.current !== null
     panRef.current = null
     dragRef.current = null
@@ -424,6 +478,18 @@ export default function QuadrantPage(): JSX.Element {
     dragRef.current = { id: event.id }
   }
 
+  const onEventLongPress = (event: QuadrantEvent, clientX: number, clientY: number): void => {
+    const rect = viewportRef.current?.getBoundingClientRect()
+    if (!rect) return
+    setMenu({
+      x: clientX,
+      y: clientY,
+      eventId: event.id,
+      worldX: screenToWorldX(clientX - rect.left, viewRef.current),
+      worldY: screenToWorldY(clientY - rect.top, viewRef.current)
+    })
+  }
+
   const onEventContextMenu = (e: React.MouseEvent, event: QuadrantEvent): void => {
     setMenu({ x: e.clientX, y: e.clientY, eventId: event.id })
   }
@@ -459,7 +525,8 @@ export default function QuadrantPage(): JSX.Element {
       <header className="page-header quadrant-header">
         <h1>四象限</h1>
         <span className="title-underline" />
-        <span className="hint-pill">🖱️ Ctrl+拖拽 平移 / 滚轮 缩放</span>
+        <span className="hint-pill desktop-only">🖱️ Ctrl+拖拽 平移 / 滚轮 缩放</span>
+        <span className="hint-pill mobile-only">👆 双指缩放 · 拖动平移 · 长按菜单</span>
       </header>
       <div
         ref={viewportRef}
@@ -491,6 +558,7 @@ export default function QuadrantPage(): JSX.Element {
                 onSelect={() => setSelectedId(e.id)}
                 onDragStart={onEventDragStart}
                 onContextMenu={onEventContextMenu}
+                onLongPress={onEventLongPress}
                 onEdit={onEditEvent}
               />
             )

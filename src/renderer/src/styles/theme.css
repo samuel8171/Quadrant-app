@@ -2123,6 +2123,20 @@ body {
     font-size: 23px;
   }
 
+  .hint-pill {
+    margin-left: auto;
+    padding: 7px 9px;
+    font-size: 11px;
+    white-space: nowrap;
+  }
+
+  .event-handle {
+    width: 14px;
+    height: 14px;
+    left: 4px;
+    border-width: 2px;
+  }
+
   .page-switch-up,
   .page-switch-down {
     animation-duration: 0.2s;

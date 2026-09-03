@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import type { QuadrantEvent } from '../../../shared/types'
 import { UNIT } from '../lib/quadrantMath'
 
@@ -9,6 +9,7 @@ interface Props {
   onSelect: () => void
   onDragStart: (e: React.PointerEvent, event: QuadrantEvent) => void
   onContextMenu: (e: React.MouseEvent, event: QuadrantEvent) => void
+  onLongPress: (event: QuadrantEvent, clientX: number, clientY: number) => void
   onEdit: (event: QuadrantEvent) => void
 }
 
@@ -25,9 +26,18 @@ export default function EventCard({
   onSelect,
   onDragStart,
   onContextMenu,
+  onLongPress,
   onEdit
 }: Props): JSX.Element {
   const [hover, setHover] = useState(false)
+  const longPressRef = useRef<number | null>(null)
+
+  const clearLongPress = (): void => {
+    if (longPressRef.current !== null) {
+      window.clearTimeout(longPressRef.current)
+      longPressRef.current = null
+    }
+  }
 
   return (
     <div
@@ -35,9 +45,23 @@ export default function EventCard({
         selected ? ' selected' : ''
       }`}
       style={{ left: event.x * UNIT, top: -event.y * UNIT, width: event.width * UNIT }}
-      onPointerDown={() => onSelect()}
+      onPointerDown={(e) => {
+        onSelect()
+        if (e.pointerType === 'touch') {
+          clearLongPress()
+          longPressRef.current = window.setTimeout(() => {
+            longPressRef.current = null
+            onLongPress(event, e.clientX, e.clientY)
+          }, 550)
+        }
+      }}
+      onPointerUp={clearLongPress}
+      onPointerCancel={clearLongPress}
       onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
+      onMouseLeave={() => {
+        setHover(false)
+        clearLongPress()
+      }}
       onDoubleClick={(e) => {
         e.stopPropagation()
         onEdit(event)
@@ -48,7 +72,7 @@ export default function EventCard({
         onContextMenu(e, event)
       }}
     >
-      {hover && (
+      {(hover || selected) && (
         <span
           className="event-handle"
           onPointerDown={(e) => {
