@@ -33,18 +33,19 @@ function validAppData(value: unknown): value is AppData {
     !Array.isArray(data.weekPresets) || !Array.isArray(data.weekEvents)) return false
   return data.goals.every((goal) => isRecord(goal) && hasStringFields(goal, ['id', 'title', 'type', 'remark', 'createdAt']) &&
     (goal.type === 'long' || goal.type === 'short') && typeof goal.done === 'boolean' &&
+    typeof goal.order === 'number' && Number.isFinite(goal.order) &&
     Array.isArray(goal.groupTitles) && goal.groupTitles.every((v) => typeof v === 'string') &&
     Array.isArray(goal.subtasks) && goal.subtasks.every((subtask) => isRecord(subtask) &&
       hasStringFields(subtask, ['id', 'title', 'remark']) && typeof subtask.done === 'boolean' &&
-      typeof subtask.group === 'number' && typeof subtask.order === 'number')) &&
+      typeof subtask.group === 'number' && Number.isFinite(subtask.group) && typeof subtask.order === 'number' && Number.isFinite(subtask.order))) &&
     data.events.every((event) => isRecord(event) && hasStringFields(event, ['id', 'text', 'remark', 'createdAt']) &&
       [1, 2, 3, 4].includes(event.quadrant as number) &&
-      ['x', 'y', 'width'].every((field) => typeof event[field] === 'number')) &&
+      ['x', 'y', 'width'].every((field) => typeof event[field] === 'number' && Number.isFinite(event[field] as number))) &&
     data.weekPresets.every((preset) => isRecord(preset) && hasStringFields(preset, ['id', 'title', 'color', 'remark', 'createdAt']) &&
-      [1, 2, 3, 4].includes(preset.quadrant as number) && typeof preset.durationMin === 'number') &&
+      [1, 2, 3, 4].includes(preset.quadrant as number) && typeof preset.durationMin === 'number' && Number.isFinite(preset.durationMin)) &&
     data.weekEvents.every((event) => isRecord(event) && hasStringFields(event, ['id', 'date', 'title', 'color', 'remark', 'createdAt']) &&
       [1, 2, 3, 4].includes(event.quadrant as number) && typeof event.startMin === 'number' &&
-      typeof event.endMin === 'number' && typeof event.showInQuadrant === 'boolean')
+      typeof event.endMin === 'number' && Number.isFinite(event.startMin) && Number.isFinite(event.endMin) && typeof event.showInQuadrant === 'boolean')
 }
 
 function getDefaultStorage(): WebStorage {
@@ -133,7 +134,9 @@ export function createWebPlatformApi(storage?: WebStorage): QuadrantApi {
       } catch (error) {
         return { ok: false, error: error instanceof Error ? error.message : '无法下载文件' }
       } finally {
-        if (url) browser.URL.revokeObjectURL(url)
+        if (url) {
+          try { browser.URL.revokeObjectURL(url) } catch { /* cleanup failures must not reject */ }
+        }
       }
     }
   }
