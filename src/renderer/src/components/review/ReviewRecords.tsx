@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { FileText } from 'lucide-react'
 import type { ReviewRecord } from '../../../../shared/types'
 import AlertDialog from '../AlertDialog'
+import { getPlatformApi } from '../../lib/platformApi'
 
 function formatModifiedAt(iso: string): string {
   const d = new Date(iso)
@@ -23,7 +24,7 @@ export default function ReviewRecords(): JSX.Element {
 
   useEffect(() => {
     let alive = true
-    void window.quadrantApi.listReviews().then((list) => {
+    void getPlatformApi().listReviews().then((list) => {
       if (!alive) return
       setRecords(list)
       setLoaded(true)
@@ -34,7 +35,7 @@ export default function ReviewRecords(): JSX.Element {
   }, [])
 
   const open = (record: ReviewRecord): void => {
-    void window.quadrantApi.openReview(record.filePath).then((res) => {
+    void getPlatformApi().openReview(record.filePath).then((res) => {
       if (!res.ok) setError(res.error ?? '无法打开文件')
     })
   }

@@ -4,6 +4,7 @@ import AlertDialog from '../components/AlertDialog'
 import ReviewRecords from '../components/review/ReviewRecords'
 import SegmentedSlider from '../components/review/SegmentedSlider'
 import { REVIEW_GREEN_RED, REVIEW_RED_GREEN } from '../lib/reviewRules'
+import { getPlatformApi } from '../lib/platformApi'
 import { useAppStore } from '../state/appStore'
 
 type ReviewView = 'compose' | 'records'
@@ -58,7 +59,7 @@ export default function ReviewPage(): JSX.Element {
 
   const saveWord = async (): Promise<void> => {
     try {
-      const record = await window.quadrantApi.saveReview(reviewEdit)
+      const record = await getPlatformApi().saveReview(reviewEdit)
       saveReviewDraft()
       showToast(`已保存：${record.fileName}`)
     } catch (err) {

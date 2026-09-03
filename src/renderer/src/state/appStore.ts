@@ -15,6 +15,7 @@ import * as weekRules from '../lib/weekRules'
 import { reviewDirty } from '../lib/reviewRules'
 import type { ViewState } from '../lib/quadrantMath'
 import { scheduleSave } from '../lib/scheduleSave'
+import { getPlatformApi } from '../lib/platformApi'
 
 export type Page = 'goals' | 'quadrant' | 'weekly' | 'review'
 
@@ -93,7 +94,7 @@ export type WeekSyncResult = { ok: true } | { ok: false; reason: 'quadrant-full'
 
 function saveSoon(data: AppData): void {
   scheduleSave(() => {
-    void window.quadrantApi.saveData(data)
+    void getPlatformApi().saveData(data)
   })
 }
 
@@ -107,7 +108,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   pendingPage: null,
 
   init: async () => {
-    const data = await window.quadrantApi.loadData()
+    const data = await getPlatformApi().loadData()
     set({ data, loaded: true })
   },
 
@@ -466,6 +467,6 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   saveNow: () => {
-    void window.quadrantApi.saveData(get().data)
+    void getPlatformApi().saveData(get().data)
   }
 }))
