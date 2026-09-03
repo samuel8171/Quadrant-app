@@ -2130,6 +2130,84 @@ body {
     overflow-x: hidden;
   }
 
+  .review-header {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .review-header-actions {
+    width: 100%;
+    margin-left: 0;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .review-btn {
+    justify-content: center;
+    min-width: 0;
+    padding: 7px 5px;
+    font-size: 12px;
+  }
+
+  .review-sliders {
+    gap: 12px;
+    margin: 4px 0 14px;
+    padding: 12px;
+  }
+
+  .review-slider-row {
+    display: block;
+    padding: 10px;
+    border-radius: 12px;
+    background: rgba(255,255,255,0.03);
+  }
+
+  .review-slider-label {
+    display: block;
+    width: auto;
+    margin-bottom: 8px;
+    font-size: 13px;
+  }
+
+  .review-slider-track {
+    height: 28px;
+  }
+
+  .review-slider-thumb {
+    width: 20px;
+    height: 20px;
+  }
+
+  .review-textarea {
+    min-height: 220px;
+    padding: 12px;
+    font-size: 16px;
+  }
+
+  .review-toast {
+    bottom: calc(20px + var(--mobile-nav-height) + env(safe-area-inset-bottom));
+    max-width: calc(100vw - 32px);
+    text-align: center;
+  }
+
+  .review-record-row {
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 8px 10px;
+    padding: 10px;
+  }
+
+  .review-record-date,
+  .review-record-size {
+    grid-column: 2;
+    font-size: 11px;
+  }
+
+  .review-record-size {
+    grid-row: 2;
+    text-align: left;
+  }
+
   .page-header {
     gap: 10px;
     margin-bottom: 16px;
