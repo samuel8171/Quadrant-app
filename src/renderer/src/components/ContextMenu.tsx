@@ -38,7 +38,7 @@ export default function ContextMenu({ menu, canPaste, onAction, onClose }: Props
       {items.map(({ action, label, icon: Icon }) => (
         <button
           key={action}
-          className="context-item"
+          className={`context-item${action === 'delete' ? ' danger' : ''}`}
           disabled={action === 'paste' && !canPaste}
           onClick={() => {
             onAction(action)

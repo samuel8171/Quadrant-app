@@ -2153,6 +2153,12 @@ body {
     height: 44px;
   }
 
+  .day-nav-btn {
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
+  }
+
   .goal-columns {
     grid-template-columns: 1fr;
     gap: 14px;
