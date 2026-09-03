@@ -140,5 +140,3 @@ describe('quadrantMath', () => {
     expect(result.quadrant).toBe(2)
   })
 })
-
-
