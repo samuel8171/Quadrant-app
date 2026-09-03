@@ -33,3 +33,31 @@ npm run package
 ## 数据
 
 数据保存在 `%APPDATA%/象限/plan.json`，写入前自动备份为 `plan.backup.json`。
+# 象限
+
+桌面 Electron + 手机竖屏 Web 时间管理应用。桌面端保留左侧导航；屏幕宽度不超过 767px 时切换为底部毛玻璃 Tab Bar。
+
+## Web 版
+
+```bash
+npm install
+npm run dev:web
+npm run build:web
+```
+
+`build:web` 输出静态文件到 `dist-web/`，可将该目录部署到 GitHub Pages（例如使用 Actions 上传 Pages artifact）。不会自动创建仓库、推送或发布。
+
+响应式断点：`<=767px` 手机底部导航，`768–1023px` 紧凑桌面/平板，`>=1024px` 桌面左侧栏。移动端按 Apple HIG 使用 44px 触控热区、动态视口高度和安全区内边距。
+
+四象限位置和语义沿用原程序：Q1 右上橙色 `#FF8C00`（重要紧急），Q2 左上黄色 `#FFA500`（重要不紧急），Q3 左下青色 `#008B8B`（不重要不紧急），Q4 右下紫色 `#483D8B`（不重要紧急）。移动适配不会调换象限。
+
+## 生图自检
+
+脚本只从环境变量读取密钥：
+
+```powershell
+$env:RIGHTAPI_API_KEY = "<your-key>"
+node scripts/visual-self-check.mjs --prompt-file docs/visual-self-check/quadrant-prompt.txt --output docs/visual-self-check/quadrant.png
+```
+
+默认接口为 `https://www.rightapi.ai/draw`，模型为 `gpt-image-2`；可用 `--endpoint`、`--model`、`--timeout` 覆盖。不要把密钥写入仓库、脚本、`.env` 或构建产物。
