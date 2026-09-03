@@ -64,7 +64,7 @@
 | 左下 | Q3 | 紧急不重要 | 授权去做 | 蓝 `#3D8BFF` |
 | 右下 | Q4 | 不重要不紧急 | 减少去做 | 绿 `#38C759` |
 
-现有数学坐标仍是 X 轴向右为“紧急度降低”、Y 轴向上为“重要度提高”：Q1 世界坐标 `x >= 0, y >= 0`，Q2 `x < 0, y >= 0`，Q3 `x < 0, y < 0`，Q4 `x >= 0, y < 0`。视觉位置遵从表格，坐标与视觉映射通过现有 `quadrantMath` 规则验证，不能只靠 CSS 调换。
+现有数学坐标采用 X 轴向右为“紧急度降低”、Y 轴向上为“重要度提高”：Q1 世界坐标 `x < 0, y >= 0`，Q2 `x >= 0, y >= 0`，Q3 `x < 0, y < 0`，Q4 `x >= 0, y < 0`。视觉位置遵从表格，坐标与视觉映射通过 `quadrantMath` 规则验证，不能只靠 CSS 调换。
 
 ### 手机交互
 
@@ -159,4 +159,3 @@
 ### 周日复盘页面
 
 `High-fidelity iOS dark-mode weekly reflection app screen, portrait 9:19, Chinese UI. Large title “周日复盘”, three stacked evaluation cards for 计划完成度, 计划完成质量, 压力指数 with colorful segmented sliders and clear values, large comfortable writing area with placeholder “写下本周的复盘…”, compact save actions, frosted-glass bottom tab bar with 复盘 active in Apple blue, accessible typography, graphite black materials, no device frame.`
-
