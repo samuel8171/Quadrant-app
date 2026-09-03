@@ -34,6 +34,7 @@ export default function Sidebar(): JSX.Element {
           <button
             key={p}
             className={`nav-item${page === p ? ' active' : ''}`}
+            aria-current={page === p ? 'page' : undefined}
             onClick={() => requestPage(p)}
           >
             <Icon size={18} />

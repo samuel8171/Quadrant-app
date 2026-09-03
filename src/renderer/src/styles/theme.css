@@ -2128,6 +2128,14 @@ body {
     animation-duration: 0.2s;
   }
 
+  .page-switch-up {
+    animation-name: page-switch-up-mobile;
+  }
+
+  .page-switch-down {
+    animation-name: page-switch-down-mobile;
+  }
+
   .icon-btn,
   .back-btn,
   .day-nav-btn,
@@ -2147,6 +2155,16 @@ body {
 
   .desktop-only { display: none !important; }
   .mobile-only { display: initial !important; }
+}
+
+@keyframes page-switch-up-mobile {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes page-switch-down-mobile {
+  from { opacity: 0; transform: translateY(-12px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 @media (min-width: 768px) {
