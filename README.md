@@ -33,11 +33,10 @@ npm run package
 ## 数据
 
 数据保存在 `%APPDATA%/象限/plan.json`，写入前自动备份为 `plan.backup.json`。
-# 象限
-
-桌面 Electron + 手机竖屏 Web 时间管理应用。桌面端保留左侧导航；屏幕宽度不超过 767px 时切换为底部毛玻璃 Tab Bar。
 
 ## Web 版
+
+桌面 Electron + 手机竖屏 Web 时间管理应用。桌面端保留左侧导航；屏幕宽度不超过 767px 时切换为底部毛玻璃 Tab Bar。
 
 ```bash
 npm install

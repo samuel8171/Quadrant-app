@@ -37,14 +37,23 @@ try {
   const raw = await response.text()
   if (!response.ok) throw new Error(`HTTP ${response.status}: ${raw.slice(0, 300)}`)
   const data = JSON.parse(raw)
-  const image = data?.data?.[0] ?? data?.output ?? data
-  const url = image?.url ?? image?.image_url
+  const candidates = [
+    ...(Array.isArray(data?.data) ? data.data : data?.data ? [data.data] : []),
+    ...(Array.isArray(data?.output) ? data.output : data?.output ? [data.output] : []),
+    data
+  ]
+  const candidate = candidates.find((item) => {
+    if (typeof item === 'string') return true
+    return Boolean(item?.url || item?.image_url || item?.b64_json || item?.base64)
+  })
+  if (!candidate) throw new Error('Response did not contain an image URL or base64 payload')
+  const url = typeof candidate === 'string' ? candidate : candidate.url ?? candidate.image_url
   if (url) {
-    const imageResponse = await fetch(url)
+    const imageResponse = await fetch(url, { signal: controller.signal })
     if (!imageResponse.ok) throw new Error(`image download HTTP ${imageResponse.status}`)
     await writeFile(output, Buffer.from(await imageResponse.arrayBuffer()))
-  } else if (image?.b64_json || image?.base64) {
-    await writeFile(output, Buffer.from(image.b64_json ?? image.base64, 'base64'))
+  } else if (candidate?.b64_json || candidate?.base64) {
+    await writeFile(output, Buffer.from(candidate.b64_json ?? candidate.base64, 'base64'))
   } else {
     throw new Error('Response did not contain an image URL or base64 payload')
   }

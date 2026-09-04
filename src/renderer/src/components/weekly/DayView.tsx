@@ -20,6 +20,7 @@ import {
   snapEventStart,
   snapToHour
 } from '../../lib/weekRules'
+import { shouldCreateOnCanvasClick } from '../../lib/weeklyMobileLayout'
 
 interface Props {
   date: Date
@@ -75,6 +76,8 @@ export default function DayView({
   const [drag, setDrag] = useState<DragState | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null)
   const [tick, setTick] = useState(0)
+  const suppressCanvasClickRef = useRef(false)
+  const lastPointerTypeRef = useRef<string>('mouse')
 
   const dayKey = dateKey(date)
   const dayEvents = eventsOnDate(weekEvents, dayKey)
@@ -127,6 +130,7 @@ export default function DayView({
     const canvas = canvasRef.current
     if (!canvas) return
     canvas.setPointerCapture(e.pointerId)
+    suppressCanvasClickRef.current = true
     const pointerY = contentY(e.clientY)
     const top = DAY_PAD_PX + eventTopPx(event.startMin, DAY_HOUR_PX)
     setDrag({ id: event.id, top, grabOffset: pointerY - top })
@@ -170,9 +174,13 @@ export default function DayView({
   }
 
   const onCanvasClick = (e: React.MouseEvent): void => {
-    if (e.detail > 1) return
+    const wasDragging = suppressCanvasClickRef.current
+    suppressCanvasClickRef.current = false
     const target = e.target as Element
     if (target.closest('.day-event')) return
+    const pointerType =
+      (e.nativeEvent as MouseEvent & { pointerType?: string }).pointerType ?? lastPointerTypeRef.current
+    if (!shouldCreateOnCanvasClick(pointerType, e.detail, wasDragging)) return
     const y = contentY(e.clientY)
     openCreate(clampEventStart(minuteFromOffsetY(y - DAY_PAD_PX, DAY_HOUR_PX), 60))
   }
@@ -235,6 +243,7 @@ export default function DayView({
           </div>
           <div
             ref={canvasRef}
+            onPointerDownCapture={(e) => { lastPointerTypeRef.current = e.pointerType }}
             className="day-canvas"
             onPointerMove={onCanvasPointerMove}
             onPointerUp={onCanvasPointerUp}

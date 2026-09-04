@@ -12,6 +12,8 @@ import {
   clampZoom,
   clampOrigin,
   quadrantOfWorldPoint,
+  shouldCaptureTouchPointer,
+  shouldProcessTouchMove,
   screenToWorldX,
   screenToWorldY,
   zoomAt,
@@ -331,7 +333,14 @@ export default function QuadrantPage(): JSX.Element {
     if (e.pointerType === 'touch') {
       const points = touchPointsRef.current
       points.set(e.pointerId, { x: e.clientX, y: e.clientY })
-      viewportRef.current?.setPointerCapture(e.pointerId)
+      const target = e.target as Element | null
+      const targetIsEvent = !!target?.closest('.event-card')
+      if (shouldCaptureTouchPointer(targetIsEvent)) {
+        viewportRef.current?.setPointerCapture(e.pointerId)
+      }
+      if (points.size === 1 && targetIsEvent) {
+        return
+      }
       if (points.size === 1) {
         panRef.current = { startX: e.clientX, startY: e.clientY, startView: view }
         panLastRef.current = { x: e.clientX, y: e.clientY, t: performance.now() }
@@ -373,8 +382,8 @@ export default function QuadrantPage(): JSX.Element {
 
     if (e.pointerType === 'touch') {
       const points = touchPointsRef.current
-      if (!points.has(e.pointerId)) return
-      points.set(e.pointerId, { x: e.clientX, y: e.clientY })
+      if (!shouldProcessTouchMove(points.has(e.pointerId), dragRef.current !== null)) return
+      if (points.has(e.pointerId)) points.set(e.pointerId, { x: e.clientX, y: e.clientY })
       if (points.size >= 2 && pinchRef.current) {
         const [a, b] = [...points.values()]
         const distance = Math.max(1, Math.hypot(a.x - b.x, a.y - b.y))
@@ -427,6 +436,7 @@ export default function QuadrantPage(): JSX.Element {
     if (e.pointerType === 'touch') {
       touchPointsRef.current.delete(e.pointerId)
       pinchRef.current = null
+      dragRef.current = null
       if (touchPointsRef.current.size === 0) {
         panRef.current = null
       } else {

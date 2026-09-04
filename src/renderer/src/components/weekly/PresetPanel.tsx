@@ -65,13 +65,13 @@ export default function PresetPanel({
               )}
               <div className="preset-duration">{formatDuration(preset.durationMin)}</div>
               <div className="preset-actions">
-                <button className="icon-btn" title="编辑预设" onClick={() => onEdit(preset)}>
+                <button className="icon-btn" title="编辑预设" onClick={(e) => { e.stopPropagation(); onEdit(preset) }}>
                   <Pencil size={14} />
                 </button>
                 <button
                   className="icon-btn danger"
                   title="删除预设"
-                  onClick={() => onDelete(preset)}
+                  onClick={(e) => { e.stopPropagation(); onDelete(preset) }}
                 >
                   <Trash2 size={14} />
                 </button>

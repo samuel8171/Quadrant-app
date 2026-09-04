@@ -52,6 +52,14 @@ export function quadrantOfWorldPoint(wx: number, wy: number): Quadrant {
   return 4
 }
 
+export function shouldCaptureTouchPointer(targetIsEvent: boolean): boolean {
+  return !targetIsEvent
+}
+
+export function shouldProcessTouchMove(hasTouchPoint: boolean, hasDrag: boolean): boolean {
+  return hasTouchPoint || hasDrag
+}
+
 export function clampOrigin(view: ViewState, width: number, height: number): ViewState {
   return {
     zoom: view.zoom,

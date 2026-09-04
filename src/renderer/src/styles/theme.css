@@ -1003,6 +1003,21 @@ body {
   box-shadow: inset 0 -2px 0 var(--accent);
 }
 
+.week-col-head.today .week-col-date {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.week-today-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 2px rgba(77, 163, 255, 0.2);
+}
+
 .week-col-weekday {
   font-size: 12px;
 }
@@ -2151,14 +2166,14 @@ body {
   }
 
   .review-sliders {
-    gap: 12px;
-    margin: 4px 0 14px;
-    padding: 12px;
+    gap: 8px;
+    margin: 4px 0 8px;
+    padding: 8px;
   }
 
   .review-slider-row {
     display: block;
-    padding: 10px;
+    padding: 6px 8px;
     border-radius: 12px;
     background: rgba(255,255,255,0.03);
   }
@@ -2166,12 +2181,19 @@ body {
   .review-slider-label {
     display: block;
     width: auto;
-    margin-bottom: 8px;
+    margin-bottom: 4px;
     font-size: 13px;
   }
 
   .review-slider-track {
-    height: 28px;
+    height: 44px;
+    display: flex;
+    align-items: center;
+  }
+
+  .review-slider-segments {
+    height: 22px;
+    width: 100%;
   }
 
   .review-slider-thumb {
@@ -2180,9 +2202,11 @@ body {
   }
 
   .review-textarea {
-    min-height: 220px;
+    min-height: 96px;
+    max-height: max(96px, calc(100dvh - 575px));
     padding: 12px;
     font-size: 16px;
+    overflow-y: auto;
   }
 
   .review-toast {
@@ -2273,16 +2297,16 @@ body {
   }
 
   .week-grid {
-    grid-template-columns: 52px repeat(7, minmax(96px, 1fr));
-    width: max-content;
-    min-width: 100%;
+    grid-template-columns: 52px repeat(7, minmax(var(--mobile-week-day-min-width, 96px), 1fr));
+    width: 100%;
+    min-width: 0;
     overflow-x: auto;
     overflow-y: auto;
     overscroll-behavior-x: contain;
   }
 
   .week-col {
-    min-width: 96px;
+    min-width: var(--mobile-week-day-min-width, 96px);
   }
 
   .week-col-head {
@@ -2290,6 +2314,21 @@ body {
     top: 0;
     z-index: 3;
     background: rgba(12, 14, 18, 0.94);
+  }
+
+  .week-gutter {
+    position: sticky;
+    left: 0;
+    z-index: 4;
+    background: rgba(12, 14, 18, 0.96);
+  }
+
+  .week-gutter-head {
+    position: sticky;
+    top: 0;
+    left: 0;
+    z-index: 5;
+    background: rgba(12, 14, 18, 0.96);
   }
 
   .preset-panel {
@@ -2407,6 +2446,7 @@ body {
     right: 12px;
     bottom: calc(12px + var(--mobile-nav-height) + env(safe-area-inset-bottom));
     top: auto !important;
+    z-index: 110;
     min-width: 0;
     padding: 8px;
     border-radius: 20px;
@@ -2429,6 +2469,7 @@ body {
   .modal-mask {
     align-items: flex-end;
     padding: 0;
+    z-index: 120;
   }
 
   .modal {
@@ -2458,6 +2499,10 @@ body {
   .modal-field textarea {
     min-height: 44px;
     font-size: 16px;
+  }
+
+  .day-canvas {
+    touch-action: pan-y;
   }
 
   .desktop-only { display: none !important; }

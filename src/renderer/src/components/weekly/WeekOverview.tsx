@@ -13,6 +13,11 @@ import {
   weekIndexFromAnchor,
   weekdayName
 } from '../../lib/weekRules'
+import {
+  MOBILE_WEEK_DAY_MIN_WIDTH,
+  MOBILE_WEEK_END_MIN,
+  MOBILE_WEEK_START_MIN
+} from '../../lib/weeklyMobileLayout'
 import EventBlock from './EventBlock'
 
 const HEADER_H = 44
@@ -36,6 +41,7 @@ export default function WeekOverview({
   const offset = useAppStore((s) => s.data.weekCounterOffset)
   const setOffset = useAppStore((s) => s.setWeekCounterOffset)
   const boardRef = useRef<HTMLDivElement>(null)
+  const gridRef = useRef<HTMLDivElement>(null)
   const [boardH, setBoardH] = useState(0)
   const [editingStreak, setEditingStreak] = useState<string | null>(null)
 
@@ -53,7 +59,22 @@ export default function WeekOverview({
   const base = weekIndexFromAnchor(monday)
   const n = streakNumber(monday, offset)
   const days = weekDays(monday)
-  const hours = Array.from({ length: 17 }, (_, i) => 420 + i * 60)
+  const hours = Array.from(
+    { length: (MOBILE_WEEK_END_MIN - MOBILE_WEEK_START_MIN) / 60 },
+    (_, i) => MOBILE_WEEK_START_MIN + i * 60
+  )
+
+  useEffect(() => {
+    const grid = gridRef.current
+    if (!grid || !window.matchMedia('(max-width: 767px)').matches) return
+    const todayKey = dateKey(new Date())
+    const todayIndex = days.findIndex((day) => dateKey(day) === todayKey)
+    if (todayIndex < 0) return
+    const viewportWidth = grid.clientWidth
+    const target = 52 + todayIndex * MOBILE_WEEK_DAY_MIN_WIDTH -
+      Math.max(0, (viewportWidth - MOBILE_WEEK_DAY_MIN_WIDTH) / 2)
+    grid.scrollLeft = Math.max(0, Math.min(target, grid.scrollWidth - viewportWidth))
+  }, [monday.getTime()])
 
   const commitStreak = (value: string): void => {
     const parsed = parseInt(value, 10)
@@ -103,7 +124,12 @@ export default function WeekOverview({
       </header>
       <div className="week-range">{formatDateRange(monday)}</div>
       <div className="week-board" ref={boardRef}>
-        <div className={`week-grid ${slideClass ?? ''}`} key={weekIndexFromAnchor(monday)}>
+        <div
+          ref={gridRef}
+          className={`week-grid ${slideClass ?? ''}`}
+          key={weekIndexFromAnchor(monday)}
+          style={{ '--mobile-week-day-min-width': `${MOBILE_WEEK_DAY_MIN_WIDTH}px` } as React.CSSProperties}
+        >
           <div className="week-gutter">
             <div className="week-gutter-head" />
             <div className="week-hour-labels">
@@ -128,6 +154,7 @@ export default function WeekOverview({
                   <span className="week-col-weekday">{weekdayName(day)}</span>
                   <span className="week-col-date">
                     {day.getMonth() + 1}/{day.getDate()}
+                    {isToday && <span className="week-today-dot" aria-hidden="true" />}
                   </span>
                 </button>
                 <div

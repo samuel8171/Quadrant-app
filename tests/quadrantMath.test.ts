@@ -12,6 +12,8 @@ import {
   escalateEvent,
   eventScreenRect,
   quadrantOfWorldPoint,
+  shouldCaptureTouchPointer,
+  shouldProcessTouchMove,
   screenToWorldX,
   screenToWorldY,
   worldToScreenX,
@@ -62,6 +64,16 @@ describe('quadrantMath', () => {
     expect(QUADRANT_META[2]).toMatchObject({ label: '重要不紧急', color: '#FFA500', corner: 'top-left' })
     expect(QUADRANT_META[3]).toMatchObject({ label: '不重要不紧急', color: '#008B8B', corner: 'bottom-left' })
     expect(QUADRANT_META[4]).toMatchObject({ label: '不重要紧急', color: '#483D8B', corner: 'bottom-right' })
+  })
+
+  it('keeps event touches out of viewport capture while allowing canvas touches', () => {
+    expect(shouldCaptureTouchPointer(false)).toBe(true)
+    expect(shouldCaptureTouchPointer(true)).toBe(false)
+  })
+
+  it('processes a touch drag even when the event handle owns capture', () => {
+    expect(shouldProcessTouchMove(false, true)).toBe(true)
+    expect(shouldProcessTouchMove(false, false)).toBe(false)
   })
 
   it('clamps origin 10px from every viewport edge', () => {
