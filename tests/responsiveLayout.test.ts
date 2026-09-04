@@ -31,4 +31,19 @@ describe('responsive layout metrics', () => {
     const source = readFileSync(resolve(process.cwd(), 'src/renderer/src/components/weekly/PresetPanel.tsx'), 'utf8')
     expect(source).toMatch(/stopPropagation\(\)/)
   })
+
+  it('keeps the mobile quadrant gesture hint aligned with touch creation', () => {
+    const source = readFileSync(resolve(process.cwd(), 'src/renderer/src/pages/QuadrantPage.tsx'), 'utf8')
+    expect(source).toContain('拖动画布 · 双指缩放 · 双击新建')
+  })
+
+  it('defines a compact tablet layout between mobile and desktop', () => {
+    expect(themeCss).toMatch(/@media \(min-width: 768px\) and \(max-width: 1023px\)/)
+    expect(themeCss).toMatch(
+      /@media \(min-width: 768px\) and \(max-width: 1023px\)[\s\S]*\.sidebar\s*\{[\s\S]*width:\s*176px/
+    )
+    expect(themeCss).toMatch(
+      /@media \(min-width: 768px\) and \(max-width: 1023px\)[\s\S]*\.week-grid\s*\{[\s\S]*grid-template-columns:\s*46px/
+    )
+  })
 })

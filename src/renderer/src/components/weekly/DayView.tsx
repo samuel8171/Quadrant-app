@@ -121,8 +121,8 @@ export default function DayView({
     return clampEventStart(base, 60)
   }
 
-  const openCreate = (startMin: number): void => {
-    setForm({ kind: 'event-create', date: dayKey, startMin })
+  const openCreate = (startMin: number, presetId?: string): void => {
+    setForm({ kind: 'event-create', date: dayKey, startMin, presetId })
   }
 
   const onEventDragStart = (e: React.PointerEvent, event: WeekEvent): void => {
@@ -294,6 +294,7 @@ export default function DayView({
           presets={weekPresets}
           onAdd={() => setForm({ kind: 'preset-create' })}
           onEdit={(preset) => setForm({ kind: 'preset-edit', preset })}
+          onUse={(preset) => openCreate(defaultCreateStart(), preset.id)}
           onDelete={(preset) =>
             setDeleteTarget({ kind: 'preset', id: preset.id, title: preset.title })
           }

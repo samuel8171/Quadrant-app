@@ -9,3 +9,7 @@ export function shouldCreateOnCanvasClick(
 ): boolean {
   return pointerType === 'touch' && detail === 1 && !wasDragging
 }
+
+export function shouldUsePresetOnTap(viewportWidth: number): boolean {
+  return viewportWidth <= 767
+}

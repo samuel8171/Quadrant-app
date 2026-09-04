@@ -23,7 +23,7 @@ import { useClosing } from '../../hooks/useClosing'
 export type WeeklyFormState =
   | { kind: 'preset-create' }
   | { kind: 'preset-edit'; preset: WeekPreset }
-  | { kind: 'event-create'; date: string; startMin: number }
+  | { kind: 'event-create'; date: string; startMin: number; presetId?: string }
   | { kind: 'event-edit'; event: WeekEvent }
 
 interface Props {
@@ -48,7 +48,7 @@ interface FieldState {
   lockDuration: boolean
 }
 
-function initState(form: WeeklyFormState): FieldState {
+function initState(form: WeeklyFormState, presets: WeekPreset[] = []): FieldState {
   if (form.kind === 'preset-edit') {
     return {
       title: form.preset.title,
@@ -80,14 +80,17 @@ function initState(form: WeeklyFormState): FieldState {
     }
   }
   if (form.kind === 'event-create') {
-    const times = clampEventTimes(form.startMin, form.startMin + 60)
+    const preset = form.presetId ? presets.find((item) => item.id === form.presetId) : undefined
+    const duration = preset?.durationMin ?? 60
+    const startMin = clampStartForDuration(form.startMin, duration)
+    const times = clampEventTimes(startMin, startMin + duration)
     return {
-      title: '',
-      color: WEEK_COLORS[0],
-      quadrant: 1,
-      remark: '',
+      title: preset?.title ?? '',
+      color: preset?.color ?? WEEK_COLORS[0],
+      quadrant: preset?.quadrant ?? 1,
+      remark: preset?.remark ?? '',
       error: '',
-      durationMin: 60,
+      durationMin: duration,
       customDuration: false,
       startMin: times.startMin,
       endMin: times.endMin,
@@ -120,16 +123,16 @@ export default function EventFormDialog({ form, onClose }: Props): JSX.Element {
   const deleteWeekEvent = useAppStore((s) => s.deleteWeekEvent)
   const weekPresets = useAppStore((s) => s.data.weekPresets)
 
-  const [fields, setFields] = useState<FieldState>(() => initState(form))
+  const [fields, setFields] = useState<FieldState>(() => initState(form, weekPresets))
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [mode, setMode] = useState<'custom' | 'preset'>('custom')
   const [selectedPresetId, setSelectedPresetId] = useState('')
 
   useEffect(() => {
-    setFields(initState(form))
-    setMode('custom')
-    setSelectedPresetId('')
-  }, [form])
+    setFields(initState(form, weekPresets))
+    setMode(form.kind === 'event-create' && form.presetId ? 'preset' : 'custom')
+    setSelectedPresetId(form.kind === 'event-create' ? form.presetId ?? '' : '')
+  }, [form, weekPresets])
 
   const isPreset = form.kind === 'preset-create' || form.kind === 'preset-edit'
   const isEdit = form.kind === 'preset-edit' || form.kind === 'event-edit'
@@ -185,7 +188,8 @@ export default function EventFormDialog({ form, onClose }: Props): JSX.Element {
   const switchMode = (next: 'custom' | 'preset'): void => {
     setMode(next)
     if (next === 'custom') {
-      setFields(initState(form))
+      const customForm = form.kind === 'event-create' ? { ...form, presetId: undefined } : form
+      setFields(initState(customForm, weekPresets))
       setSelectedPresetId('')
     }
   }
@@ -231,7 +235,8 @@ export default function EventFormDialog({ form, onClose }: Props): JSX.Element {
         startMin: times.startMin,
         endMin: times.endMin,
         remark: fields.remark,
-        showInQuadrant: fields.showInQuadrant
+        showInQuadrant: fields.showInQuadrant,
+        presetId: selectedPresetId || undefined
       })
       if (!result.ok) {
         setFields((f) => ({ ...f, error: '该象限事件已达30个，无法继续添加' }))

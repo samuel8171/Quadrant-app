@@ -536,7 +536,7 @@ export default function QuadrantPage(): JSX.Element {
         <h1>四象限</h1>
         <span className="title-underline" />
         <span className="hint-pill desktop-only">🖱️ Ctrl+拖拽 平移 / 滚轮 缩放</span>
-        <span className="hint-pill mobile-only">👆 双指缩放 · 拖动平移 · 长按菜单</span>
+        <span className="hint-pill mobile-only">👆 拖动画布 · 双指缩放 · 双击新建</span>
       </header>
       <div
         ref={viewportRef}

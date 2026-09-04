@@ -3,7 +3,8 @@ import {
   MOBILE_WEEK_DAY_MIN_WIDTH,
   MOBILE_WEEK_END_MIN,
   MOBILE_WEEK_START_MIN,
-  shouldCreateOnCanvasClick
+  shouldCreateOnCanvasClick,
+  shouldUsePresetOnTap
 } from '../src/renderer/src/lib/weeklyMobileLayout'
 
 describe('weekly mobile layout metrics', () => {
@@ -18,5 +19,11 @@ describe('weekly mobile layout metrics', () => {
     expect(shouldCreateOnCanvasClick('mouse', 1, false)).toBe(false)
     expect(shouldCreateOnCanvasClick('touch', 2, false)).toBe(false)
     expect(shouldCreateOnCanvasClick('touch', 1, true)).toBe(false)
+  })
+
+  it('uses a preset tap as event creation only in the mobile breakpoint', () => {
+    expect(shouldUsePresetOnTap(767)).toBe(true)
+    expect(shouldUsePresetOnTap(375)).toBe(true)
+    expect(shouldUsePresetOnTap(768)).toBe(false)
   })
 })

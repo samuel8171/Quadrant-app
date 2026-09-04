@@ -1,14 +1,16 @@
 import { ChevronDown, Pencil, Plus, Trash2 } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { WeekPreset } from '../../../../shared/types'
 import { withAlpha } from '../../lib/color'
 import { QUADRANT_META } from '../../lib/quadrantMath'
 import { formatDuration } from '../../lib/weekRules'
+import { shouldUsePresetOnTap } from '../../lib/weeklyMobileLayout'
 
 interface Props {
   presets: WeekPreset[]
   onAdd: () => void
   onEdit: (preset: WeekPreset) => void
+  onUse: (preset: WeekPreset) => void
   onDelete: (preset: WeekPreset) => void
 }
 
@@ -16,10 +18,22 @@ export default function PresetPanel({
   presets,
   onAdd,
   onEdit,
+  onUse,
   onDelete
 }: Props): JSX.Element {
   const [expanded, setExpanded] = useState(true)
+  const [viewportWidth, setViewportWidth] = useState(() =>
+    typeof window === 'undefined' ? 1024 : window.innerWidth
+  )
   const sorted = [...presets].sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+
+  useEffect(() => {
+    const updateViewportWidth = (): void => setViewportWidth(window.innerWidth)
+    window.addEventListener('resize', updateViewportWidth)
+    return () => window.removeEventListener('resize', updateViewportWidth)
+  }, [])
+
+  const isMobile = shouldUsePresetOnTap(viewportWidth)
 
   return (
     <aside className={`preset-panel${expanded ? ' expanded' : ' collapsed'}`}>
@@ -53,8 +67,10 @@ export default function PresetPanel({
                 e.dataTransfer.setData('application/x-preset-id', preset.id)
                 e.dataTransfer.effectAllowed = 'copy'
               }}
-              onClick={() => onEdit(preset)}
-              onDoubleClick={() => onEdit(preset)}
+              onClick={() => (isMobile ? onUse(preset) : onEdit(preset))}
+              onDoubleClick={() => {
+                if (!isMobile) onEdit(preset)
+              }}
             >
               <div className="preset-title">{preset.title}</div>
               {showMeta && (
