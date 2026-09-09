@@ -17,6 +17,7 @@
     "package": "electron-vite build && electron-builder --win portable"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.116.0",
     "docx": "^9.7.1",
     "lucide-react": "^0.424.0",
     "react": "^18.3.1",
