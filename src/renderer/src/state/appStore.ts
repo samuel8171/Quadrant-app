@@ -16,6 +16,7 @@ import { reviewDirty } from '../lib/reviewRules'
 import type { ViewState } from '../lib/quadrantMath'
 import { scheduleSave } from '../lib/scheduleSave'
 import { getPlatformApi } from '../lib/platformApi'
+import { syncData as syncCloudData } from '../lib/cloudSync2'
 
 export type Page = 'goals' | 'quadrant' | 'weekly' | 'review'
 
@@ -25,6 +26,7 @@ interface AppState {
   activeGoalId: string | null
   loaded: boolean
   init: () => Promise<void>
+  syncData: () => Promise<{ ok: boolean; message: string }>
   setPage: (page: Page) => void
   openGoal: (id: string) => void
   closeGoal: () => void
@@ -110,6 +112,11 @@ export const useAppStore = create<AppState>((set, get) => ({
   init: async () => {
     const data = await getPlatformApi().loadData()
     set({ data, loaded: true })
+  },
+
+  syncData: async () => {
+    try { const data = await syncCloudData(get().data); set({ data }); getPlatformApi().saveData(data); return { ok: true, message: '同步完成' } }
+    catch (error) { return { ok: false, message: error instanceof Error ? error.message : '同步失败' } }
   },
 
   setPage: (page) => set({ page }),

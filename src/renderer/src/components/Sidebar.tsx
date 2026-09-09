@@ -1,4 +1,5 @@
-import { CalendarDays, Grid2x2, RefreshCcw, Target } from 'lucide-react'
+import { useState } from 'react'
+import { CalendarDays, Cloud, Grid2x2, RefreshCcw, Target } from 'lucide-react'
 import type { Page } from '../state/appStore'
 import { useAppStore } from '../state/appStore'
 
@@ -13,6 +14,10 @@ export default function Sidebar(): JSX.Element {
   const page = useAppStore((s) => s.page)
   const requestPage = useAppStore((s) => s.requestPage)
   const activeIndex = NAV.findIndex((n) => n.page === page)
+  const syncData = useAppStore((s) => s.syncData)
+  const [message, setMessage] = useState('')
+  const [busy, setBusy] = useState(false)
+  async function sync() { setBusy(true); const r = await syncData(); setMessage(r.message); setBusy(false); window.setTimeout(() => setMessage(''), 2500) }
 
   return (
     <aside className="sidebar">
@@ -42,6 +47,8 @@ export default function Sidebar(): JSX.Element {
           </button>
         ))}
       </nav>
+      <button className="nav-item sync-button" onClick={() => void sync()} disabled={busy}><Cloud size={18}/><span>{busy ? '同步中…' : '同步数据'}</span></button>
+      {message && <div className="sync-message">{message}</div>}
       <div className="tagline">
         <span>✨ 专注当下，赢得未来</span>
         <span>每一个小目标，都是通往大目标的基石。</span>

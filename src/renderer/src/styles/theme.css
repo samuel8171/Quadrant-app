@@ -74,6 +74,18 @@ body {
   min-height: 0;
 }
 
+.sidebar-bottom { margin-top: auto; }
+.sync-button { margin-top: auto; }
+.sync-message { color: var(--text-secondary); font-size: 12px; padding: 0 8px; }
+.login-shell { min-height: 100%; display: grid; place-items: center; background: var(--bg); }
+.login-card { width: min(380px, calc(100vw - 40px)); padding: 34px; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: 0 20px 60px rgba(0,0,0,.3); }
+.login-card .brand-name { font-size: 28px; }
+.login-subtitle { text-align: center; color: var(--text-secondary); margin: 8px 0 26px; }
+.login-card label { display:block; color:var(--text-secondary); font-size:13px; margin-top:14px; }
+.login-card input { display:block; width:100%; margin-top:7px; padding:11px 12px; color:var(--text); background:var(--card); border:1px solid var(--border); border-radius:var(--radius-sm); font:inherit; }
+.primary-button { width:100%; margin-top:24px; padding:11px; border:0; border-radius:var(--radius-sm); background:var(--accent); color:#fff; font-weight:600; cursor:pointer; }
+.login-error { color:var(--danger); font-size:13px; margin-top:14px; }
+
 .mobile-only { display: none; }
 .desktop-only { display: initial; }
 
@@ -2184,6 +2196,9 @@ body {
   .tagline {
     display: none;
   }
+
+  .sync-button { position: absolute; right: 8px; top: 7px; height: 44px; min-width: 44px; width: 44px; padding: 4px 2px; flex-direction: column; font-size: 10px; }
+  .sync-message { position: fixed; right: 14px; bottom: calc(var(--mobile-nav-height) + 18px); z-index: 110; }
 
   .nav {
     height: 100%;
