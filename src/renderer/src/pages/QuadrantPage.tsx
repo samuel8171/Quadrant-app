@@ -488,16 +488,10 @@ export default function QuadrantPage(): JSX.Element {
     dragRef.current = { id: event.id }
   }
 
-  const onEventLongPress = (event: QuadrantEvent, clientX: number, clientY: number): void => {
-    const rect = viewportRef.current?.getBoundingClientRect()
-    if (!rect) return
-    setMenu({
-      x: clientX,
-      y: clientY,
-      eventId: event.id,
-      worldX: screenToWorldX(clientX - rect.left, viewRef.current),
-      worldY: screenToWorldY(clientY - rect.top, viewRef.current)
-    })
+  const onEventLongPress = (e: React.PointerEvent, event: QuadrantEvent): void => {
+    e.preventDefault()
+    viewportRef.current?.setPointerCapture(e.pointerId)
+    dragRef.current = { id: event.id }
   }
 
   const onEventContextMenu = (e: React.MouseEvent, event: QuadrantEvent): void => {

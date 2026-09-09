@@ -9,7 +9,7 @@ interface Props {
   onSelect: () => void
   onDragStart: (e: React.PointerEvent, event: QuadrantEvent) => void
   onContextMenu: (e: React.MouseEvent, event: QuadrantEvent) => void
-  onLongPress: (event: QuadrantEvent, clientX: number, clientY: number) => void
+  onLongPress: (e: React.PointerEvent, event: QuadrantEvent) => void
   onEdit: (event: QuadrantEvent) => void
 }
 
@@ -30,6 +30,7 @@ export default function EventCard({
   onEdit
 }: Props): JSX.Element {
   const [hover, setHover] = useState(false)
+  const [touchDragging, setTouchDragging] = useState(false)
   const longPressRef = useRef<number | null>(null)
 
   const clearLongPress = (): void => {
@@ -41,7 +42,7 @@ export default function EventCard({
 
   return (
     <div
-      className={`event-card q${event.quadrant}${overdue ? ' overdue' : ''}${
+      className={`event-card q${event.quadrant}${touchDragging ? ' touch-dragging' : ''}${overdue ? ' overdue' : ''}${
         selected ? ' selected' : ''
       }`}
       style={{ left: event.x * UNIT, top: -event.y * UNIT, width: event.width * UNIT }}
@@ -51,12 +52,13 @@ export default function EventCard({
           clearLongPress()
           longPressRef.current = window.setTimeout(() => {
             longPressRef.current = null
-            onLongPress(event, e.clientX, e.clientY)
+            setTouchDragging(true)
+            onLongPress(e, event)
           }, 550)
         }
       }}
-      onPointerUp={clearLongPress}
-      onPointerCancel={clearLongPress}
+      onPointerUp={() => { clearLongPress(); setTouchDragging(false) }}
+      onPointerCancel={() => { clearLongPress(); setTouchDragging(false) }}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => {
         setHover(false)

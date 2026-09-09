@@ -78,6 +78,7 @@ export default function DayView({
   const [tick, setTick] = useState(0)
   const suppressCanvasClickRef = useRef(false)
   const lastPointerTypeRef = useRef<string>('mouse')
+  const longPressRef = useRef<number | null>(null)
 
   const dayKey = dateKey(date)
   const dayEvents = eventsOnDate(weekEvents, dayKey)
@@ -127,6 +128,15 @@ export default function DayView({
 
   const onEventDragStart = (e: React.PointerEvent, event: WeekEvent): void => {
     e.preventDefault()
+    if (e.pointerType === 'touch') {
+      if (longPressRef.current !== null) window.clearTimeout(longPressRef.current)
+      longPressRef.current = window.setTimeout(() => { longPressRef.current = null; beginDrag(e, event) }, 550)
+      return
+    }
+    beginDrag(e, event)
+  }
+
+  const beginDrag = (e: React.PointerEvent, event: WeekEvent): void => {
     const canvas = canvasRef.current
     if (!canvas) return
     canvas.setPointerCapture(e.pointerId)
@@ -150,6 +160,7 @@ export default function DayView({
   }
 
   const onCanvasPointerUp = (e: React.PointerEvent): void => {
+    if (longPressRef.current !== null) { window.clearTimeout(longPressRef.current); longPressRef.current = null }
     if (!drag) return
     const event = weekEvents.find((ev) => ev.id === drag.id)
     if (event) {

@@ -24,3 +24,17 @@ export async function syncData(local: AppData): Promise<AppData> {
   if (saveError) throw saveError
   return data
 }
+
+export async function uploadData(data: AppData): Promise<void> {
+  const { data: session } = await supabase.auth.getSession()
+  if (!session.session) throw new Error('请先登录云端账号')
+  const { error } = await supabase.from('user_data').upsert({ user_id: session.session.user.id, data, updated_at: new Date().toISOString() })
+  if (error) throw error
+}
+
+export function subscribeRealtime(onData: (data: AppData) => void): () => void {
+  const channel = supabase.channel('quadrant-user-data').on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'user_data' }, (payload) => {
+    if (validCloudData(payload.new?.data)) onData(payload.new.data)
+  }).subscribe()
+  return () => { void supabase.removeChannel(channel) }
+}

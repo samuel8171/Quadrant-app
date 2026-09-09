@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { CalendarDays, Cloud, Grid2x2, RefreshCcw, Target } from 'lucide-react'
 import type { Page } from '../state/appStore'
 import { useAppStore } from '../state/appStore'
+import ConfirmDialog from './ConfirmDialog'
 
 const NAV: { page: Page; label: string; icon: typeof Target }[] = [
   { page: 'goals', label: '目标', icon: Target },
@@ -15,9 +16,12 @@ export default function Sidebar(): JSX.Element {
   const requestPage = useAppStore((s) => s.requestPage)
   const activeIndex = NAV.findIndex((n) => n.page === page)
   const syncData = useAppStore((s) => s.syncData)
+  const uploadData = useAppStore((s) => s.uploadData)
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
-  async function sync() { setBusy(true); const r = await syncData(); setMessage(r.message); setBusy(false); window.setTimeout(() => setMessage(''), 2500) }
+  const [confirm, setConfirm] = useState<'sync' | 'upload' | null>(null)
+  const isDesktop = Boolean((window as any).quadrantApi)
+  async function run(action: 'sync' | 'upload') { setConfirm(null); setBusy(true); const r = action === 'sync' ? await syncData() : await uploadData(); setMessage(r.message); setBusy(false); window.setTimeout(() => setMessage(''), 2500) }
 
   return (
     <aside className="sidebar">
@@ -47,12 +51,12 @@ export default function Sidebar(): JSX.Element {
           </button>
         ))}
       </nav>
-      <button className="nav-item sync-button" onClick={() => void sync()} disabled={busy}><Cloud size={18}/><span>{busy ? '同步中…' : '同步数据'}</span></button>
-      {message && <div className="sync-message">{message}</div>}
+      {isDesktop && <><button className="nav-item upload-button" onClick={() => setConfirm('upload')} disabled={busy}><Cloud size={18}/><span>上传数据</span></button><button className="nav-item sync-button" onClick={() => setConfirm('sync')} disabled={busy}><Cloud size={18}/><span>{busy ? '处理中…' : '同步数据'}</span></button>{message && <div className="sync-message">{message}</div>}</>}
       <div className="tagline">
         <span>✨ 专注当下，赢得未来</span>
         <span>每一个小目标，都是通往大目标的基石。</span>
       </div>
+      {confirm && <ConfirmDialog message={confirm === 'sync' ? '确认从云端同步数据？' : '确认上传当前数据到云端？'} onConfirm={() => void run(confirm)} onCancel={() => setConfirm(null)} />}
     </aside>
   )
 }

@@ -16,7 +16,7 @@ import { reviewDirty } from '../lib/reviewRules'
 import type { ViewState } from '../lib/quadrantMath'
 import { scheduleSave } from '../lib/scheduleSave'
 import { getPlatformApi } from '../lib/platformApi'
-import { syncData as syncCloudData } from '../lib/cloudSync2'
+import { syncData as syncCloudData, uploadData as uploadCloudData } from '../lib/cloudSync2'
 
 export type Page = 'goals' | 'quadrant' | 'weekly' | 'review'
 
@@ -27,6 +27,8 @@ interface AppState {
   loaded: boolean
   init: () => Promise<void>
   syncData: () => Promise<{ ok: boolean; message: string }>
+  uploadData: () => Promise<{ ok: boolean; message: string }>
+  applyCloudData: (data: AppData) => void
   setPage: (page: Page) => void
   openGoal: (id: string) => void
   closeGoal: () => void
@@ -97,6 +99,7 @@ export type WeekSyncResult = { ok: true } | { ok: false; reason: 'quadrant-full'
 function saveSoon(data: AppData): void {
   scheduleSave(() => {
     void getPlatformApi().saveData(data)
+    if (!(globalThis as any).window?.quadrantApi) void uploadCloudData(data)
   })
 }
 
@@ -118,6 +121,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     try { const data = await syncCloudData(get().data); set({ data }); getPlatformApi().saveData(data); return { ok: true, message: '同步完成' } }
     catch (error) { return { ok: false, message: error instanceof Error ? error.message : '同步失败' } }
   },
+  uploadData: async () => {
+    try { await uploadCloudData(get().data); return { ok: true, message: '上传完成' } }
+    catch (error) { return { ok: false, message: error instanceof Error ? error.message : '上传失败' } }
+  },
+  applyCloudData: (data) => set({ data }),
 
   setPage: (page) => set({ page }),
   setReviewEdit: (patch) => set((s) => ({ reviewEdit: { ...s.reviewEdit, ...patch } })),

@@ -8,7 +8,7 @@ import ReviewPage from './pages/ReviewPage'
 import { installInertialScroll } from './lib/inertialScroll'
 import { useAppStore, type Page } from './state/appStore'
 import LoginPage from './pages/LoginPage'
-import { supabase } from './lib/cloudSync2'
+import { subscribeRealtime, supabase } from './lib/cloudSync2'
 
 const PAGE_ORDER: Page[] = ['goals', 'quadrant', 'weekly', 'review']
 
@@ -19,6 +19,7 @@ export default function App(): JSX.Element {
   const page = useAppStore((s) => s.page)
   const init = useAppStore((s) => s.init)
   const applyEscalations = useAppStore((s) => s.applyEscalations)
+  const applyCloudData = useAppStore((s) => s.applyCloudData)
   const pendingPage = useAppStore((s) => s.pendingPage)
   const resolveLeave = useAppStore((s) => s.resolveLeave)
 
@@ -42,6 +43,11 @@ export default function App(): JSX.Element {
       dispose()
     }
   }, [authenticated, init, applyEscalations])
+
+  useEffect(() => {
+    if (!authenticated || isDesktop) return
+    return subscribeRealtime(applyCloudData)
+  }, [authenticated, isDesktop, applyCloudData])
 
   if (!authenticated) return <LoginPage onLoggedIn={() => setAuthenticated(true)} />
 
