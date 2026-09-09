@@ -49,10 +49,12 @@ export default function EventCard({
       onPointerDown={(e) => {
         onSelect()
         if (e.pointerType === 'touch') {
+          const card = e.currentTarget as HTMLElement
           clearLongPress()
           longPressRef.current = window.setTimeout(() => {
             longPressRef.current = null
             setTouchDragging(true)
+            card.setPointerCapture?.(e.pointerId)
             onLongPress(e, event)
           }, 550)
         }

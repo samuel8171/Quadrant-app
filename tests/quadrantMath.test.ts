@@ -13,6 +13,8 @@ import {
   eventScreenRect,
   quadrantOfWorldPoint,
   shouldCaptureTouchPointer,
+  shouldCaptureEventPointer,
+  shouldClearDragOnPointerLeave,
   shouldProcessTouchMove,
   screenToWorldX,
   screenToWorldY,
@@ -74,6 +76,18 @@ describe('quadrantMath', () => {
   it('processes a touch drag even when the event handle owns capture', () => {
     expect(shouldProcessTouchMove(false, true)).toBe(true)
     expect(shouldProcessTouchMove(false, false)).toBe(false)
+  })
+
+  it('captures the event element for touch and pen drags', () => {
+    expect(shouldCaptureEventPointer('touch')).toBe(true)
+    expect(shouldCaptureEventPointer('pen')).toBe(true)
+    expect(shouldCaptureEventPointer('mouse')).toBe(false)
+  })
+
+  it('does not cancel touch or pen drags when leaving the viewport', () => {
+    expect(shouldClearDragOnPointerLeave('touch')).toBe(false)
+    expect(shouldClearDragOnPointerLeave('pen')).toBe(false)
+    expect(shouldClearDragOnPointerLeave('mouse')).toBe(true)
   })
 
   it('clamps origin 10px from every viewport edge', () => {

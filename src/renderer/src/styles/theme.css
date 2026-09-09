@@ -2531,15 +2531,18 @@ body {
 
   .group-grid {
     width: 100% !important;
+    max-width: 1000px;
     height: auto !important;
     margin: 0;
     grid-template-columns: minmax(0, 1fr) !important;
     grid-template-rows: none !important;
+    grid-auto-rows: max-content;
     align-content: start;
   }
 
   .group-card {
     min-height: 0;
+    height: max-content;
     overflow: visible;
   }
 
@@ -2548,11 +2551,15 @@ body {
     flex: none;
   }
 
-  .goal-check, .goal-check .checkmark { width: 30px; height: 30px; }
+  .goal-check { width: 44px; height: 44px; align-items: center; justify-content: center; }
+  .goal-check .checkmark { width: 10px; height: 10px; border-radius: 2px; }
   .goal-title { flex: 1; min-width: 0; text-align: left; }
   .event-card { touch-action: none; }
   .event-card.touch-dragging, .day-event.touch-dragging { transform: scale(1.06); z-index: 10; }
   .review-sliders { flex: 0 0 auto; }
+  .review-sliders { height: 150px; box-sizing: border-box; gap: 0; }
+  .review-slider-row { flex: 1; min-height: 0; }
+  .review-slider-value { display: none; }
   .review-slider-track { height: 30px; }
   .review-textarea { flex: 1; min-height: 0; max-height: none; }
 
@@ -2618,6 +2625,7 @@ body {
 
   .day-canvas {
     touch-action: pan-y;
+    min-height: 370px;
   }
 
   .desktop-only { display: none !important; }

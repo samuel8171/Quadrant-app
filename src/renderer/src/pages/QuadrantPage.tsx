@@ -13,6 +13,8 @@ import {
   clampOrigin,
   quadrantOfWorldPoint,
   shouldCaptureTouchPointer,
+  shouldCaptureEventPointer,
+  shouldClearDragOnPointerLeave,
   shouldProcessTouchMove,
   screenToWorldX,
   screenToWorldY,
@@ -484,13 +486,16 @@ export default function QuadrantPage(): JSX.Element {
 
   const onEventDragStart = (e: React.PointerEvent, event: QuadrantEvent): void => {
     e.preventDefault()
-    viewportRef.current?.setPointerCapture(e.pointerId)
+    if (shouldCaptureEventPointer(e.pointerType)) {
+      ;(e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId)
+    } else {
+      viewportRef.current?.setPointerCapture(e.pointerId)
+    }
     dragRef.current = { id: event.id }
   }
 
   const onEventLongPress = (e: React.PointerEvent, event: QuadrantEvent): void => {
     e.preventDefault()
-    viewportRef.current?.setPointerCapture(e.pointerId)
     dragRef.current = { id: event.id }
   }
 
@@ -538,9 +543,9 @@ export default function QuadrantPage(): JSX.Element {
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
-        onPointerLeave={() => {
+        onPointerLeave={(e) => {
           panRef.current = null
-          dragRef.current = null
+          if (shouldClearDragOnPointerLeave(e.pointerType)) dragRef.current = null
           hoverRef.current = null
           setHoverQuadrant(null)
         }}

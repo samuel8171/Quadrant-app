@@ -60,6 +60,15 @@ export function shouldProcessTouchMove(hasTouchPoint: boolean, hasDrag: boolean)
   return hasTouchPoint || hasDrag
 }
 
+export function shouldCaptureEventPointer(pointerType: string): boolean {
+  return pointerType === 'touch' || pointerType === 'pen'
+}
+
+export function shouldClearDragOnPointerLeave(pointerType: string): boolean {
+  return pointerType !== 'touch' && pointerType !== 'pen'
+}
+
+
 export function clampOrigin(view: ViewState, width: number, height: number): ViewState {
   return {
     zoom: view.zoom,

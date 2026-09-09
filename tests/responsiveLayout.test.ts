@@ -27,6 +27,22 @@ describe('responsive layout metrics', () => {
     expect(themeCss).toMatch(/week-today-dot/)
   })
 
+  it('keeps mobile goal checks compact while preserving a touch target', () => {
+    expect(mobileCss).toMatch(/\.goal-check\s*\{[\s\S]*width:\s*44px[\s\S]*height:\s*44px/)
+    expect(mobileCss).toMatch(/\.goal-check \.checkmark\s*\{[\s\S]*width:\s*10px[\s\S]*height:\s*10px/)
+  })
+
+  it('lets mobile subtask cards grow with content and caps their width', () => {
+    expect(mobileCss).toMatch(/\.group-grid\s*\{[\s\S]*max-width:\s*1000px[\s\S]*grid-auto-rows:\s*max-content/)
+    expect(mobileCss).toMatch(/\.group-card\s*\{[\s\S]*height:\s*max-content/)
+  })
+
+  it('sets mobile day timeline minimum height and review slider layout', () => {
+    expect(mobileCss).toMatch(/\.day-canvas\s*\{[\s\S]*min-height:\s*370px/)
+    expect(mobileCss).toMatch(/\.review-sliders\s*\{[\s\S]*height:\s*150px/)
+    expect(mobileCss).toMatch(/\.review-slider-value\s*\{\s*display:\s*none;/)
+  })
+
   it('stops preset action buttons from opening the card editor', () => {
     const source = readFileSync(resolve(process.cwd(), 'src/renderer/src/components/weekly/PresetPanel.tsx'), 'utf8')
     expect(source).toMatch(/stopPropagation\(\)/)
