@@ -75,9 +75,17 @@ body {
 }
 
 .sidebar-bottom { margin-top: auto; }
-.sync-button { margin-top: auto; }
+/* 侧栏底部布局：有云同步按钮时由按钮组吃掉剩余空间、寄语紧随其下 30px；
+   纯网页端没有这两个按钮，此时寄语自己撑到底部（否则它会浮在导航下方）。 */
+.upload-button,
 .login-button { margin-top: auto; }
-.upload-button { margin-bottom: 20px; }
+.sync-button { margin-top: 0; }
+.tagline { margin-top: auto; }
+.sidebar:has(.upload-button) .tagline,
+.sidebar:has(.login-button) .tagline {
+  /* 与上方按钮组的视觉间距固定 30px；父容器已贡献一个 gap，这里只补差额。 */
+  margin-top: calc(30px - var(--sidebar-gap, 24px));
+}
 .sync-message { color: var(--text-secondary); font-size: 12px; padding: 0 8px; }
 .login-shell { min-height: 100%; display: grid; place-items: center; background: var(--bg); }
 .login-card { width: min(380px, calc(100vw - 40px)); padding: 34px; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: 0 20px 60px rgba(0,0,0,.3); }
@@ -92,6 +100,7 @@ body {
 .desktop-only { display: initial; }
 
 .sidebar {
+  --sidebar-gap: 24px;
   width: 220px;
   min-width: 220px;
   background: var(--panel);
@@ -99,7 +108,7 @@ body {
   display: flex;
   flex-direction: column;
   padding: 20px 14px;
-  gap: 24px;
+  gap: var(--sidebar-gap);
 }
 
 .brand {
@@ -181,7 +190,6 @@ body {
 }
 
 .tagline {
-  margin-top: auto;
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -2157,10 +2165,11 @@ body {
 
 @media (min-width: 768px) and (max-width: 1023px) {
   .sidebar {
+    --sidebar-gap: 18px;
     width: 176px;
     min-width: 176px;
     padding: 16px 10px;
-    gap: 18px;
+    gap: var(--sidebar-gap);
   }
 
   .brand {
