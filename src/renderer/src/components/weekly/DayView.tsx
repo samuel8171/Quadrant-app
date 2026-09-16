@@ -23,6 +23,7 @@ import {
   type SnapHint
 } from '../../lib/weekRules'
 import { shouldCreateOnCanvasClick } from '../../lib/weeklyMobileLayout'
+import { PRESET_DRAG_MIME, carriesPresetDrag, endPresetDrag, getDraggingPresetId } from '../../lib/presetDrag'
 import { useCanvasGestures } from '../../hooks/useCanvasGestures'
 
 interface Props {
@@ -89,6 +90,8 @@ export default function DayView({
   const [drag, setDrag] = useState<DragState | null>(null)
   const dragRef = useRef<DragState | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null)
+  /** 预设拖入时的落点预览（桌面端 HTML5 DnD）。 */
+  const [dropPreview, setDropPreview] = useState<{ startMin: number; presetId: string } | null>(null)
   const [tick, setTick] = useState(0)
   /** 拖动结束后短时间内忽略 click（浏览器会在 pointerup 后补发）。 */
   const suppressCanvasClickUntilRef = useRef(0)
@@ -235,6 +238,22 @@ export default function DayView({
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
+  // 拖动在画布外结束（松手于别处 / Esc 取消）时不会再有 dragover，
+  // 落点预览会永远留在画面上——这两个 window 级事件做兜底清理。
+  useEffect(() => {
+    if (!dropPreview) return
+    const clear = (): void => {
+      endPresetDrag()
+      setDropPreview(null)
+    }
+    window.addEventListener('dragend', clear)
+    window.addEventListener('drop', clear)
+    return () => {
+      window.removeEventListener('dragend', clear)
+      window.removeEventListener('drop', clear)
+    }
+  }, [dropPreview])
+
   const onEventContextMenu = (e: React.MouseEvent, event: WeekEvent): void => {
     e.preventDefault()
     setMenu({ x: e.clientX, y: e.clientY, eventId: event.id })
@@ -262,7 +281,9 @@ export default function DayView({
 
   const onDropPreset = (e: React.DragEvent): void => {
     e.preventDefault()
-    const presetId = e.dataTransfer.getData('application/x-preset-id')
+    setDropPreview(null)
+    const presetId = e.dataTransfer.getData(PRESET_DRAG_MIME) || getDraggingPresetId()
+    endPresetDrag()
     const preset = weekPresets.find((p) => p.id === presetId)
     if (!preset) return
     const y = contentY(e.clientY)
@@ -284,6 +305,9 @@ export default function DayView({
 
   const menuEvent = menu ? weekEvents.find((ev) => ev.id === menu.eventId) : undefined
   const dragEvent = drag ? weekEvents.find((ev) => ev.id === drag.id) : undefined
+  const dropPreviewPreset = dropPreview
+    ? weekPresets.find((p) => p.id === dropPreview.presetId)
+    : undefined
 
   return (
     <div className={`day-page ${className ?? ''}`} onAnimationEnd={onAnimationEnd}>
@@ -320,7 +344,7 @@ export default function DayView({
           <div
             ref={canvasRef}
             onPointerDownCapture={(e) => { lastPointerTypeRef.current = e.pointerType }}
-            className="day-canvas"
+            className={`day-canvas${dropPreview ? ' drop-active' : ''}`}
             onPointerDown={gestures.onPointerDown}
             onPointerMove={gestures.onPointerMove}
             onPointerUp={gestures.onPointerUp}
@@ -328,8 +352,28 @@ export default function DayView({
             onClick={onCanvasClick}
             onDoubleClick={onCanvasDoubleClick}
             onDragOver={(e) => {
+              // 只接管自家载荷；其他类型（例如从桌面拖进来一个文件）不 preventDefault，
+              // 让浏览器保持"此处不可放置"的默认反馈。
+              if (!carriesPresetDrag(e.dataTransfer.types)) return
               e.preventDefault()
               e.dataTransfer.dropEffect = 'copy'
+              const preset = weekPresets.find((p) => p.id === getDraggingPresetId())
+              if (!preset) return
+              const start = clampEventStart(
+                minuteFromOffsetY(contentY(e.clientY) - DAY_PAD_PX, DAY_HOUR_PX),
+                preset.durationMin
+              )
+              setDropPreview((prev) =>
+                prev && prev.startMin === start && prev.presetId === preset.id
+                  ? prev
+                  : { startMin: start, presetId: preset.id }
+              )
+            }}
+            onDragLeave={(e) => {
+              // 在画布内部子元素之间移动同样会触发 dragleave，只认真正离开画布的那一次。
+              const next = e.relatedTarget as Node | null
+              if (next && e.currentTarget.contains(next)) return
+              setDropPreview(null)
             }}
             onDrop={onDropPreset}
             onContextMenu={(e) => e.preventDefault()}
@@ -378,6 +422,26 @@ export default function DayView({
               >
                 <span className="day-event-ghost-time">
                   {minutesToLabel(drag.snapStart)}-{minutesToLabel(drag.snapStart + drag.duration)}
+                </span>
+              </div>
+            )}
+            {dropPreview && dropPreviewPreset && (
+              <div
+                className="day-event-ghost drop-preview"
+                style={{
+                  top: DAY_PAD_PX + eventTopPx(dropPreview.startMin, DAY_HOUR_PX),
+                  height: eventHeightPx(
+                    dropPreview.startMin,
+                    dropPreview.startMin + dropPreviewPreset.durationMin,
+                    DAY_HOUR_PX
+                  ),
+                  background: withAlpha(dropPreviewPreset.color, 0.22),
+                  borderColor: withAlpha(dropPreviewPreset.color, 0.9)
+                }}
+              >
+                <span className="day-event-ghost-time">
+                  {minutesToLabel(dropPreview.startMin)}-
+                  {minutesToLabel(dropPreview.startMin + dropPreviewPreset.durationMin)}
                 </span>
               </div>
             )}

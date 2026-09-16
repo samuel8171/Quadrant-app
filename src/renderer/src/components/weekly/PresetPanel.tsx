@@ -5,6 +5,7 @@ import { withAlpha } from '../../lib/color'
 import { QUADRANT_META } from '../../lib/quadrantMath'
 import { formatDuration } from '../../lib/weekRules'
 import { shouldUsePresetOnTap } from '../../lib/weeklyMobileLayout'
+import { PRESET_DRAG_MIME, beginPresetDrag, endPresetDrag } from '../../lib/presetDrag'
 
 interface Props {
   presets: WeekPreset[]
@@ -64,9 +65,14 @@ export default function PresetPanel({
                 height: Math.min(260, Math.max(56, 56 + (preset.durationMin / 60) * 24))
               }}
               onDragStart={(e) => {
-                e.dataTransfer.setData('application/x-preset-id', preset.id)
+                // 时间轴在 dragover 阶段读不到 dataTransfer 内容，靠这个登记簿反查预设。
+                beginPresetDrag(preset.id)
+                e.dataTransfer.setData(PRESET_DRAG_MIME, preset.id)
                 e.dataTransfer.effectAllowed = 'copy'
               }}
+              // 拖到画布外松手、或按 Esc 取消时，必须清掉登记簿与预览，
+              // 否则时间轴上会残留一个永远不会消失的落点幽灵。
+              onDragEnd={() => endPresetDrag()}
               onClick={() => (isMobile ? onUse(preset) : onEdit(preset))}
               onDoubleClick={() => {
                 if (!isMobile) onEdit(preset)

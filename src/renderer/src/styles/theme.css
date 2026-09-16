@@ -1321,6 +1321,16 @@ body {
   touch-action: none;
 }
 
+/* 预设拖入时的可放置反馈（仅桌面端 HTML5 DnD 会触发） */
+.day-canvas.drop-active {
+  outline: 1px dashed rgba(138, 180, 248, 0.55);
+  outline-offset: -3px;
+}
+
+.day-event-ghost.drop-preview {
+  border-style: solid;
+}
+
 .day-grid-bg {
   position: absolute;
   left: 0;
