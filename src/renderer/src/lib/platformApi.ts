@@ -1,8 +1,16 @@
 import { defaultData } from '../../../shared/defaults'
-import type { AppData, QuadrantApi, ReviewExport, ReviewRecord } from '../../../shared/types'
+import type {
+  AppData,
+  QuadrantApi,
+  ReviewExport,
+  ReviewRecord,
+  SyncMeta
+} from '../../../shared/types'
 
 const DATA_KEY = 'quadrant-web-data-v2'
 const REVIEWS_KEY = 'quadrant-web-reviews-v1'
+/** 同步元信息独立键位：与业务数据分开，避免"清数据"时把同步记忆一起清掉。 */
+export const SYNC_META_KEY = 'quadrant-web-sync-meta-v1'
 
 type StoredReview = { fileName: string; content: string; modifiedAt: string }
 export interface WebStorage {
@@ -99,6 +107,19 @@ export function createWebPlatformApi(storage?: WebStorage): QuadrantApi {
     async saveData(data) {
       try { safeStorage.setItem(DATA_KEY, JSON.stringify(data)) } catch { /* unavailable storage */ }
     },
+    async loadSyncMeta() {
+      try {
+        const raw = safeStorage.getItem(SYNC_META_KEY)
+        if (!raw) return null
+        const value: unknown = JSON.parse(raw)
+        return isRecord(value) ? (value as unknown as Partial<SyncMeta>) : null
+      } catch {
+        return null
+      }
+    },
+    async saveSyncMeta(meta) {
+      try { safeStorage.setItem(SYNC_META_KEY, JSON.stringify(meta)) } catch { /* unavailable storage */ }
+    },
     async saveReview(payload: ReviewExport) {
       const now = new Date()
       const date = `${now.getFullYear()}年${now.getMonth() + 1}月${now.getDate()}日`
@@ -146,4 +167,10 @@ export function getPlatformApi(): QuadrantApi {
   const browser = globalThis as unknown as BrowserGlobals
   if (browser.window?.quadrantApi) return browser.window.quadrantApi
   return createWebPlatformApi()
+}
+
+/** 是否运行在 Electron 壳里（据此决定是否启用自动云同步）。 */
+export function isDesktopRuntime(): boolean {
+  const browser = globalThis as unknown as BrowserGlobals
+  return Boolean(browser.window?.quadrantApi)
 }

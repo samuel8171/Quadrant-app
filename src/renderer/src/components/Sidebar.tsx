@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
-import { CalendarDays, Cloud, Grid2x2, RefreshCcw, Target } from 'lucide-react'
+import { CalendarDays, Cloud, CloudUpload, Grid2x2, RefreshCcw, Target } from 'lucide-react'
 import type { Page } from '../state/appStore'
 import { useAppStore } from '../state/appStore'
 import ConfirmDialog from './ConfirmDialog'
 import CloudLoginDialog from './CloudLoginDialog'
+import type { SyncAction } from '../lib/syncSummary'
 import { hasCloudSession, supabase } from '../lib/cloudSync2'
 
 const NAV: { page: Page; label: string; icon: typeof Target }[] = [
@@ -13,19 +14,24 @@ const NAV: { page: Page; label: string; icon: typeof Target }[] = [
   { page: 'review', label: '周日复盘', icon: RefreshCcw }
 ]
 
-type CloudAction = 'sync' | 'upload'
+interface PendingConfirm {
+  action: SyncAction
+  detail: string
+  warning: boolean
+}
 
 export default function Sidebar(): JSX.Element {
   const page = useAppStore((s) => s.page)
   const requestPage = useAppStore((s) => s.requestPage)
   const activeIndex = NAV.findIndex((n) => n.page === page)
-  const syncData = useAppStore((s) => s.syncData)
-  const uploadData = useAppStore((s) => s.uploadData)
+  const inspectCloud = useAppStore((s) => s.inspectCloud)
+  const pushToCloud = useAppStore((s) => s.pushToCloud)
+  const pullFromCloud = useAppStore((s) => s.pullFromCloud)
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
-  const [confirm, setConfirm] = useState<CloudAction | null>(null)
+  const [confirm, setConfirm] = useState<PendingConfirm | null>(null)
   const [loginOpen, setLoginOpen] = useState(false)
-  const [pendingAction, setPendingAction] = useState<CloudAction | null>(null)
+  const [pendingAction, setPendingAction] = useState<SyncAction | null>(null)
   const [hasSession, setHasSession] = useState(false)
   const isDesktop = Boolean((window as any).quadrantApi)
 
@@ -44,16 +50,28 @@ export default function Sidebar(): JSX.Element {
     }
   }, [isDesktop])
 
-  async function perform(action: CloudAction): Promise<void> {
+  async function perform(action: SyncAction): Promise<void> {
     setBusy(true)
-    const r = action === 'sync' ? await syncData() : await uploadData()
+    const r = action === 'push' ? await pushToCloud() : await pullFromCloud()
     setMessage(r.message)
     setBusy(false)
     window.setTimeout(() => setMessage(''), 2500)
   }
 
-  async function run(action: CloudAction): Promise<void> {
-    setConfirm(null)
+  /**
+   * 先取差异摘要再弹确认框。
+   *
+   * 这一步是本期同步方案的核心护栏：两个方向都是「整份覆盖」，没有行级合并，
+   * 用户必须在按下确认前看到"会被覆盖多少条、云端是什么时候的"。
+   */
+  async function openConfirm(action: SyncAction): Promise<void> {
+    setBusy(true)
+    const info = await inspectCloud(action)
+    setBusy(false)
+    setConfirm({ action, detail: info.detail, warning: info.hasWarning })
+  }
+
+  async function run(action: SyncAction): Promise<void> {
     const ok = await hasCloudSession()
     setHasSession(ok)
     if (!ok) {
@@ -61,14 +79,18 @@ export default function Sidebar(): JSX.Element {
       setLoginOpen(true)
       return
     }
-    await perform(action)
+    await openConfirm(action)
   }
 
   function handleLoggedIn(): void {
     const action = pendingAction
     setPendingAction(null)
     setHasSession(true)
-    if (action) void perform(action)
+    if (action) void openConfirm(action)
+  }
+
+  function confirmLabel(action: SyncAction): string {
+    return action === 'push' ? '确认上传到云端？' : '确认从云端恢复？'
   }
 
   return (
@@ -99,12 +121,51 @@ export default function Sidebar(): JSX.Element {
           </button>
         ))}
       </nav>
-      {isDesktop && <>{hasSession ? <><button className="nav-item upload-button" onClick={() => setConfirm('upload')} disabled={busy}><Cloud size={18}/><span>上传数据</span></button><button className="nav-item sync-button" onClick={() => setConfirm('sync')} disabled={busy}><Cloud size={18}/><span>{busy ? '处理中…' : '同步数据'}</span></button></> : <button className="nav-item login-button" onClick={() => setLoginOpen(true)} disabled={busy}><Cloud size={18}/><span>登录云端</span></button>}{message && <div className="sync-message">{message}</div>}</>}
+      {isDesktop && (
+        <>
+          {hasSession ? (
+            <>
+              <button
+                className="nav-item upload-button"
+                onClick={() => void run('push')}
+                disabled={busy}
+                title="用本机数据覆盖云端"
+              >
+                <CloudUpload size={18} />
+                <span>{busy ? '处理中…' : '上传到云端'}</span>
+              </button>
+              <button
+                className="nav-item sync-button"
+                onClick={() => void run('pull')}
+                disabled={busy}
+                title="用云端数据覆盖本机"
+              >
+                <Cloud size={18} />
+                <span>从云端恢复</span>
+              </button>
+            </>
+          ) : (
+            <button className="nav-item login-button" onClick={() => setLoginOpen(true)} disabled={busy}>
+              <Cloud size={18} />
+              <span>登录云端</span>
+            </button>
+          )}
+          {message && <div className="sync-message">{message}</div>}
+        </>
+      )}
       <div className="tagline">
         <span>✨ 专注当下，赢得未来</span>
         <span>每一个小目标，都是通往大目标的基石。</span>
       </div>
-      {confirm && <ConfirmDialog message={confirm === 'sync' ? '确认从云端同步数据？' : '确认上传当前数据到云端？'} onConfirm={() => void run(confirm)} onCancel={() => setConfirm(null)} />}
+      {confirm && (
+        <ConfirmDialog
+          message={confirmLabel(confirm.action)}
+          detail={confirm.detail}
+          warning={confirm.warning}
+          onConfirm={() => void perform(confirm.action)}
+          onCancel={() => setConfirm(null)}
+        />
+      )}
       {loginOpen && <CloudLoginDialog onCancel={() => { setLoginOpen(false); setPendingAction(null) }} onLoggedIn={handleLoggedIn} />}
     </aside>
   )

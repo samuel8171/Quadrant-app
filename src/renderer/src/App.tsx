@@ -8,7 +8,9 @@ import ReviewPage from './pages/ReviewPage'
 import { installInertialScroll } from './lib/inertialScroll'
 import { useAppStore, type Page } from './state/appStore'
 import LoginPage from './pages/LoginPage'
-import { subscribeRealtime, supabase } from './lib/cloudSync2'
+import { subscribeSyncNotices, supabase } from './lib/cloudSync2'
+import { flushPendingSave } from './lib/scheduleSave'
+import { readSyncMeta } from './lib/syncMeta'
 
 const PAGE_ORDER: Page[] = ['goals', 'quadrant', 'weekly', 'review']
 
@@ -19,7 +21,7 @@ export default function App(): JSX.Element {
   const page = useAppStore((s) => s.page)
   const init = useAppStore((s) => s.init)
   const applyEscalations = useAppStore((s) => s.applyEscalations)
-  const applyCloudData = useAppStore((s) => s.applyCloudData)
+  const syncOnResume = useAppStore((s) => s.syncOnResume)
   const pendingPage = useAppStore((s) => s.pendingPage)
   const resolveLeave = useAppStore((s) => s.resolveLeave)
 
@@ -46,8 +48,43 @@ export default function App(): JSX.Element {
 
   useEffect(() => {
     if (!authenticated || isDesktop) return
-    return subscribeRealtime(applyCloudData)
-  }, [authenticated, isDesktop, applyCloudData])
+    // 变更通知只当"该去对账了"的信号：拉不拉由 syncOnResume 里的修订号比对决定，
+    // 所以重复通知、乱序通知都不会造成多余写入。deviceId 抑制自己的回环。
+    return subscribeSyncNotices((notice) => {
+      void (async () => {
+        const meta = await readSyncMeta()
+        if (notice.deviceId === meta.deviceId) return
+        await syncOnResume()
+      })()
+    })
+  }, [authenticated, isDesktop, syncOnResume])
+
+  useEffect(() => {
+    if (!authenticated || isDesktop) return
+    // 移动端最关键的一条：Safari 冻结后台页面会断开 WebSocket，期间的云端变更
+    // 一条都收不到，回到前台必须主动补拉一次。
+    const onVisible = (): void => {
+      if (document.visibilityState === 'visible') void syncOnResume()
+    }
+    const onOnline = (): void => void syncOnResume()
+    document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener('online', onOnline)
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible)
+      window.removeEventListener('online', onOnline)
+    }
+  }, [authenticated, isDesktop, syncOnResume])
+
+  useEffect(() => {
+    // 保存防抖是 500ms，而浏览器/Electron 关闭页面时不会等定时器。
+    const onHide = (): void => flushPendingSave()
+    window.addEventListener('pagehide', onHide)
+    window.addEventListener('beforeunload', onHide)
+    return () => {
+      window.removeEventListener('pagehide', onHide)
+      window.removeEventListener('beforeunload', onHide)
+    }
+  }, [])
 
   if (!authenticated) return <LoginPage onLoggedIn={() => setAuthenticated(true)} />
 

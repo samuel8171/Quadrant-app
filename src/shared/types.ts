@@ -81,6 +81,30 @@ export interface AppData {
   weekCounterOffset: number
 }
 
+/**
+ * 同步元信息。**刻意独立于 `AppData`**：它描述的是"本机视角的同步状态"，
+ * 不属于用户数据。若塞进 `AppData`，它会被当作业务数据一起上传到云端，
+ * 并且每次同步都会把一个无意义的字段差异写进云端载荷。
+ */
+export interface SyncMeta {
+  /** 本机标识；用来判断一条云端变更是否由自己写入（回环抑制）。 */
+  deviceId: string
+  /** 最近一次从云端成功读取的时刻（ISO）。 */
+  lastPulledAt: string | null
+  /** 最近一次成功写入云端的时刻（ISO）。 */
+  lastPushedAt: string | null
+  /** 最近一次已知的云端修订号（当前实现取云端行的 `updated_at`）。 */
+  cloudRevision: string | null
+  /** 本地存在尚未成功上传的改动（离线编辑期间为 true）。 */
+  dirty: boolean
+}
+
+/** 云端快照的元信息（不含整份数据，用于廉价地比对"云端是否变了"）。 */
+export interface CloudMeta {
+  exists: boolean
+  revision: string | null
+}
+
 export interface ReviewDraft {
   completion: number
   quality: number
@@ -108,4 +132,7 @@ export interface QuadrantApi {
   saveReview(payload: ReviewExport): Promise<ReviewRecord>
   listReviews(): Promise<ReviewRecord[]>
   openReview(filePath: string): Promise<{ ok: boolean; error?: string }>
+  /** 同步元信息独立存放：网页端 localStorage，桌面端 `sync.json`。 */
+  loadSyncMeta(): Promise<Partial<SyncMeta> | null>
+  saveSyncMeta(meta: SyncMeta): Promise<void>
 }

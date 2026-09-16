@@ -1,24 +1,54 @@
 import { create } from 'zustand'
 import type {
   AppData,
+  CloudMeta,
   Quadrant,
   QuadrantEvent,
   ReviewDraft,
   WeekEvent,
   WeekPreset
 } from '../../../shared/types'
-import { defaultData } from '../../../shared/defaults'
+import { defaultData, isEmptyData } from '../../../shared/defaults'
 import * as eventRules from '../lib/eventRules'
 import * as goalRules from '../lib/goalRules'
 import * as quadrantSync from '../lib/quadrantSync'
 import * as weekRules from '../lib/weekRules'
 import { reviewDirty } from '../lib/reviewRules'
 import type { ViewState } from '../lib/quadrantMath'
-import { scheduleSave } from '../lib/scheduleSave'
-import { getPlatformApi } from '../lib/platformApi'
-import { syncData as syncCloudData, uploadData as uploadCloudData } from '../lib/cloudSync2'
+import { flushPendingSave, scheduleSave } from '../lib/scheduleSave'
+import { getPlatformApi, isDesktopRuntime } from '../lib/platformApi'
+import {
+  announceSync,
+  fetchCloudData,
+  fetchCloudMeta,
+  hasCloudSession,
+  pushCloudData
+} from '../lib/cloudSync2'
+import {
+  buildSyncDetail,
+  countEntities,
+  formatSyncDetail,
+  type SyncAction
+} from '../lib/syncSummary'
+import {
+  decideStartup,
+  isCloudChangedElsewhere,
+  markPulled,
+  markPushed,
+  markSyncDirty,
+  readSyncMeta,
+  shouldPushOnStartup
+} from '../lib/syncMeta'
 
 export type Page = 'goals' | 'quadrant' | 'weekly' | 'review'
+
+export interface CloudInspect {
+  ok: boolean
+  /** 差异摘要正文（失败时是错误原因）。 */
+  detail: string
+  /** 摘要中是否含需要用户额外注意的警示。 */
+  hasWarning: boolean
+}
 
 interface AppState {
   data: AppData
@@ -26,8 +56,11 @@ interface AppState {
   activeGoalId: string | null
   loaded: boolean
   init: () => Promise<void>
-  syncData: () => Promise<{ ok: boolean; message: string }>
-  uploadData: () => Promise<{ ok: boolean; message: string }>
+  inspectCloud: (action: SyncAction) => Promise<CloudInspect>
+  pushToCloud: () => Promise<{ ok: boolean; message: string }>
+  pullFromCloud: () => Promise<{ ok: boolean; message: string }>
+  /** 前台恢复 / 网络恢复时对账一次。 */
+  syncOnResume: () => Promise<void>
   applyCloudData: (data: AppData) => void
   setPage: (page: Page) => void
   openGoal: (id: string) => void
@@ -99,8 +132,82 @@ export type WeekSyncResult = { ok: true } | { ok: false; reason: 'quadrant-full'
 function saveSoon(data: AppData): void {
   scheduleSave(() => {
     void getPlatformApi().saveData(data)
-    if (!(globalThis as any).window?.quadrantApi) void uploadCloudData(data)
+    void syncAfterLocalSave(data)
   })
+}
+
+/**
+ * 本地落盘之后的云端副作用。
+ *
+ * 关键约束：**桌面端不自动上传**。桌面端的云端动作全部是显式按钮行为
+ * （「上传到云端」/「从云端恢复」），这样用户对"什么被覆盖"始终有感知。
+ */
+async function syncAfterLocalSave(data: AppData): Promise<void> {
+  if (isDesktopRuntime()) return
+  try {
+    const before = await readSyncMeta()
+    await markSyncDirty()
+    if (isEmptyData(data) && before.cloudRevision === null) {
+      // 空数据写入保护。触发场景：新设备、或清了浏览器缓存 → 读不到本地数据 →
+      // 本地退化为空。此时若照常自动上传，**第一笔操作就会把云端整份覆盖成空**。
+      //
+      // 判据特意收紧到「本机没有任何同步记忆」：有记忆说明本机同步过，此刻为空
+      // 就是用户真的把内容删光了，那是正常编辑，必须照常上传（否则会"删了又回来"）。
+      // 清缓存/换设备都会连同步记忆一起丢，所以真正危险的场景仍然被覆盖。
+      const cloud = await fetchCloudData()
+      if (cloud.data && !isEmptyData(cloud.data)) {
+        useAppStore.getState().applyCloudData(cloud.data)
+        await markPulled(cloud.revision)
+      }
+      return
+    }
+    const { revision } = await pushCloudData(data)
+    const meta = await markPushed(revision)
+    void announceSync({ deviceId: meta.deviceId, revision })
+  } catch {
+    /* 离线或未登录：保留 dirty，留给启动对账与前台恢复补传 */
+  }
+}
+
+/**
+ * 启动 / 前台恢复时的对账：先比元信息（廉价），再决定拉还是推。
+ *
+ * 首屏不会被它阻塞——调用方先把本地数据渲染出来，再在后台跑这里。
+ */
+async function reconcileWithCloud(): Promise<void> {
+  const state = useAppStore.getState()
+  const local = state.data
+  const meta = await readSyncMeta()
+  let cloud: CloudMeta
+  try {
+    cloud = await fetchCloudMeta()
+  } catch {
+    return
+  }
+  const session = await hasCloudSession()
+  const input = { hasSession: session, local, cloud, meta }
+
+  if (decideStartup(input).kind === 'adopt-cloud') {
+    try {
+      const { revision, data } = await fetchCloudData()
+      if (!data) return
+      state.applyCloudData(data)
+      await markPulled(revision)
+    } catch {
+      /* 拉取失败保持原状，下次前台恢复会重试 */
+    }
+    return
+  }
+
+  if (shouldPushOnStartup(input)) {
+    try {
+      const { revision } = await pushCloudData(local)
+      const next = await markPushed(revision)
+      void announceSync({ deviceId: next.deviceId, revision })
+    } catch {
+      /* 补传失败不致命：dirty 仍为真 */
+    }
+  }
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -113,19 +220,73 @@ export const useAppStore = create<AppState>((set, get) => ({
   pendingPage: null,
 
   init: async () => {
+    // 先把本地数据渲染出来，云端对账放到后面——网络慢时首屏不该等它。
     const data = await getPlatformApi().loadData()
     set({ data, loaded: true })
+    if (isDesktopRuntime()) return
+    await reconcileWithCloud()
   },
 
-  syncData: async () => {
-    try { const data = await syncCloudData(get().data); set({ data }); getPlatformApi().saveData(data); return { ok: true, message: '同步完成' } }
-    catch (error) { return { ok: false, message: error instanceof Error ? error.message : '同步失败' } }
+  inspectCloud: async (action) => {
+    const local = countEntities(get().data)
+    try {
+      const meta = await readSyncMeta()
+      const { revision, data } = await fetchCloudData()
+      const detail = buildSyncDetail({
+        action,
+        local,
+        cloud: data ? countEntities(data) : null,
+        cloudUpdatedAt: revision,
+        cloudChangedElsewhere: isCloudChangedElsewhere(
+          { exists: revision !== null, revision },
+          meta
+        ),
+        localDirty: meta.dirty
+      })
+      return { ok: true, detail: formatSyncDetail(detail), hasWarning: detail.warning !== null }
+    } catch (error) {
+      return {
+        ok: false,
+        detail: error instanceof Error ? error.message : '无法读取云端信息',
+        hasWarning: true
+      }
+    }
   },
-  uploadData: async () => {
-    try { await uploadCloudData(get().data); return { ok: true, message: '上传完成' } }
-    catch (error) { return { ok: false, message: error instanceof Error ? error.message : '上传失败' } }
+
+  pushToCloud: async () => {
+    try {
+      const { revision } = await pushCloudData(get().data)
+      const meta = await markPushed(revision)
+      void announceSync({ deviceId: meta.deviceId, revision })
+      return { ok: true, message: '已上传到云端' }
+    } catch (error) {
+      return { ok: false, message: error instanceof Error ? error.message : '上传失败' }
+    }
   },
-  applyCloudData: (data) => set({ data }),
+
+  pullFromCloud: async () => {
+    try {
+      const { revision, data } = await fetchCloudData()
+      if (!data) return { ok: false, message: '云端暂无数据' }
+      get().applyCloudData(data)
+      await markPulled(revision)
+      return { ok: true, message: '已从云端恢复' }
+    } catch (error) {
+      return { ok: false, message: error instanceof Error ? error.message : '恢复失败' }
+    }
+  },
+
+  syncOnResume: async () => {
+    if (isDesktopRuntime()) return
+    await reconcileWithCloud()
+  },
+
+  applyCloudData: (data) => {
+    // 实时/对账推送过来的数据必须**落盘**：只改内存的话，下次冷启动又回到旧数据，
+    // 表现为"同步过的东西过一会儿自己变回去了"。
+    set({ data })
+    void getPlatformApi().saveData(data)
+  },
 
   setPage: (page) => set({ page }),
   setReviewEdit: (patch) => set((s) => ({ reviewEdit: { ...s.reviewEdit, ...patch } })),
@@ -482,6 +643,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   saveNow: () => {
+    // 先兑现挂起的防抖写入（它捕获的 data 可能比此刻的内存快照更早被触发），
+    // 再落一次当前快照，确保两笔都不丢。
+    flushPendingSave()
     void getPlatformApi().saveData(get().data)
   }
 }))

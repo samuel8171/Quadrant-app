@@ -584,6 +584,26 @@ body {
   word-break: break-word;
 }
 
+/* 同步差异摘要：保留换行，等宽数字便于比对条数 */
+.confirm-detail {
+  margin: 4px 0 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--text-dim, #9aa1ad);
+  font-size: 12px;
+  line-height: 1.7;
+  white-space: pre-line;
+  word-break: break-word;
+}
+
+.confirm-detail.warning {
+  background: rgba(232, 160, 160, 0.12);
+  border-color: rgba(232, 160, 160, 0.4);
+  color: #f0c4c4;
+}
+
 .quadrant-page {
   flex: 1;
   display: flex;
