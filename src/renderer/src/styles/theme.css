@@ -76,6 +76,7 @@ body {
 
 .sidebar-bottom { margin-top: auto; }
 .sync-button { margin-top: auto; }
+.login-button { margin-top: auto; }
 .upload-button { margin-bottom: 20px; }
 .sync-message { color: var(--text-secondary); font-size: 12px; padding: 0 8px; }
 .login-shell { min-height: 100%; display: grid; place-items: center; background: var(--bg); }
@@ -645,6 +646,11 @@ body {
   align-items: center;
   justify-content: center;
   text-align: center;
+  /* 触屏手势全部由指针事件自管：禁掉浏览器滚动/双击缩放，避免 pointercancel 打断拖动。 */
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
 }
 
 .event-card.q1 {
@@ -677,16 +683,31 @@ body {
   outline-offset: 2px;
 }
 
+/* 长按就绪 / 拖动中：抬起反馈，抬起手指即打开菜单或提交落点。 */
+.event-card.armed,
+.event-card.dragging {
+  transform: scale(1.04);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.5);
+  z-index: 5;
+}
+
 .event-handle {
   position: absolute;
-  left: 5px;
+  left: 4px;
   top: 50%;
-  width: 8px;
-  height: 8px;
+  width: 12px;
+  height: 12px;
   transform: translateY(-50%);
   border: 1.5px solid currentColor;
   border-radius: 50%;
   cursor: grab;
+}
+
+/* 触屏没有 hover，把手既不可见也不可用：整卡拖动取代它。 */
+@media (hover: none) {
+  .event-handle {
+    display: none;
+  }
 }
 
 .event-text {
@@ -1060,6 +1081,14 @@ body {
   gap: 1px;
   color: #ffffff;
   min-height: 4px;
+  /*
+   * 关键修复：事件块自身的 touch-action 覆盖 .day-canvas 的 pan-y。
+   * 有效值 = 交集(none, pan-y) = none → 从块体起手的纵向拖动不再触发容器滚动，
+   * 浏览器也就不会派发 pointercancel。空白区与时间标尺仍可滚动。
+   */
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .day-event:not(.read-only) {
@@ -1085,10 +1114,42 @@ body {
   line-height: 1.25;
 }
 
+/* 拖动中的块体留在原位并转半透明，落点由幽灵预览表示（落点即所见）。 */
 .day-event.dragging {
-  opacity: 0.86;
-  z-index: 3;
+  opacity: 0.45;
+  z-index: 2;
   cursor: grabbing;
+  transform: scale(0.98);
+}
+
+.day-event.armed {
+  transform: scale(1.03);
+  z-index: 3;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+}
+
+/* 落点预览：显示吸附后的位置与时间区间。 */
+.day-event-ghost {
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  z-index: 4;
+  border-radius: 6px;
+  border: 1.5px dashed;
+  pointer-events: none;
+  display: flex;
+  align-items: flex-start;
+  padding: 1px 5px;
+  overflow: hidden;
+}
+
+.day-event-ghost-time {
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.3;
+  white-space: nowrap;
+  color: rgba(255, 255, 255, 0.92);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
 }
 
 .day-event-title {
@@ -1723,9 +1784,7 @@ body {
   transform: translate(-50%, -50%);
   transition: left 0.15s ease;
   pointer-events: none;
-}
-
-.review-textarea {
+}.review-textarea {
   flex: none;
   width: 100%;
   background: var(--card);
@@ -2198,7 +2257,8 @@ body {
     display: none;
   }
 
-  .sync-button { position: absolute; right: 8px; top: 7px; height: 44px; min-width: 44px; width: 44px; padding: 4px 2px; flex-direction: column; font-size: 10px; }
+  .sync-button,
+  .login-button { position: absolute; right: 8px; top: 7px; height: 44px; min-width: 44px; width: 44px; padding: 4px 2px; flex-direction: column; font-size: 10px; }
   .upload-button { display: none; }
   .sync-message { position: fixed; right: 14px; bottom: calc(var(--mobile-nav-height) + 18px); z-index: 110; }
 
@@ -2277,18 +2337,36 @@ body {
     padding: 8px;
   }
 
+  /*
+   * 标签与轨道同行（原先标签独占一行，行内容高约 76px 而 flex:1 只给到 44px，
+   * 每行溢出约 43px，导致标签被轨道压住、第三条轨道压到文本框）。
+   * 标签定宽 → 三条轨道必然等长。
+   */
   .review-slider-row {
-    display: block;
-    padding: 6px 8px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 8px;
     border-radius: 12px;
     background: rgba(255,255,255,0.03);
   }
 
   .review-slider-label {
     display: block;
-    width: auto;
-    margin-bottom: 4px;
-    font-size: 13px;
+    flex: 0 0 68px;
+    width: 68px;
+    margin-bottom: 0;
+    font-size: 11px;
+    line-height: 1.25;
+    white-space: nowrap;
+  }
+
+  /*
+   * 覆盖桌面端为数值气泡预留的 padding-top（该气泡在移动端隐藏）；
+   * 左右各留半个滑块宽度，滑到 0%/100% 时滑块不会压到标签或溢出面板。
+   */
+  .review-slider {
+    padding: 0 10px;
   }
 
   .review-slider-track {
@@ -2554,13 +2632,11 @@ body {
   .goal-check { width: 44px; height: 44px; align-items: center; justify-content: center; }
   .goal-check .checkmark { width: 10px; height: 10px; border-radius: 2px; }
   .goal-title { flex: 1; min-width: 0; text-align: left; }
-  .event-card { touch-action: none; }
-  .event-card.touch-dragging, .day-event.touch-dragging { transform: scale(1.06); z-index: 10; }
   .review-sliders { flex: 0 0 auto; }
   .review-sliders { height: 150px; box-sizing: border-box; gap: 0; }
   .review-slider-row { flex: 1; min-height: 0; }
   .review-slider-value { display: none; }
-  .review-slider-track { height: 30px; }
+  /* 行内不再需要竖向压缩，沿用移动端 44px 触摸目标（原 30px 覆盖已移除）。 */
   .review-textarea { flex: 1; min-height: 0; max-height: none; }
 
   .context-menu {

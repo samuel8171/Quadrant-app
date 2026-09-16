@@ -9,6 +9,10 @@ export async function login(username: string, password: string): Promise<void> {
   const { error } = await supabase.auth.signInWithPassword({ email: usernameToEmail(username), password })
   if (error) throw error
 }
+export async function hasCloudSession(): Promise<boolean> {
+  const { data } = await supabase.auth.getSession()
+  return Boolean(data.session)
+}
 export function validCloudData(value: unknown): value is AppData {
   const d = value as Partial<AppData> | null
   return !!d && d.version === 2 && Array.isArray(d.goals) && Array.isArray(d.events) && Array.isArray(d.weekPresets) && Array.isArray(d.weekEvents)

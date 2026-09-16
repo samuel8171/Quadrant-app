@@ -148,50 +148,49 @@ describe('weekRules', () => {
     expect(clampEndForDuration(1500, 60)).toBe(1440)
   })
 
-  it('snaps a dragged event flush against the nearest existing event', () => {
+  it('drops the block where it was released on a 5-minute grid', () => {
     const a = event({ id: 'a', startMin: 480, endMin: 540 })
     const b = event({ id: 'b', startMin: 720, endMin: 780 })
-    expect(snapEventStart([a, b], 60, 600)).toBe(540)
-    expect(snapEventStart([a, b], 60, 660)).toBe(660)
+    // 旧实现会把卡片贴到最近事件的边缘（600 → 540），落点与手指无关。
+    expect(snapEventStart([a, b], 60, 600)).toBe(600)
+    expect(snapEventStart([a, b], 60, 603)).toBe(605)
+    // 旧实现会整点吸附（455 → 480）。
+    expect(snapEventStart([], 60, 455)).toBe(455)
   })
 
-  it('reverts when a dragged event is squeezed between two events', () => {
+  it('slides past an occupied slot in the direction of travel', () => {
     const a = event({ id: 'a', startMin: 480, endMin: 540 })
-    const b = event({ id: 'b', startMin: 600, endMin: 660 })
-    expect(snapEventStart([a, b], 120, 570)).toBeNull()
+    const b = event({ id: 'b', startMin: 720, endMin: 780 })
+    // 向下拖（later）撞上 b → 落到 b 之后；向上拖（earlier）→ 落到 b 之前。
+    expect(snapEventStart([a, b], 60, 700, 'later')).toBe(780)
+    expect(snapEventStart([a, b], 60, 700, 'earlier')).toBe(660)
   })
 
-  it('snaps to day edges around a single event', () => {
+  it('clamps the drop inside the visible day', () => {
     const a = event({ id: 'a', startMin: 480, endMin: 540 })
     expect(snapEventStart([a], 30, 450)).toBe(450)
-    expect(snapEventStart([a], 30, 1000)).toBe(540)
+    expect(snapEventStart([a], 30, 1000)).toBe(1000)
+    expect(snapEventStart([], 90, 1380)).toBe(1350)
+    expect(snapEventStart([], 60, 100)).toBe(420)
   })
 
-  it('picks the closer side when released inside an event', () => {
+  it('falls back to the opposite side when the travel direction has no room', () => {
     const wide = event({ id: 'wide', startMin: 480, endMin: 600 })
     expect(snapEventStart([wide], 30, 500)).toBe(450)
-    expect(snapEventStart([wide], 30, 590)).toBe(600)
-  })
-
-  it('reverts when there is no room above the first event', () => {
+    expect(snapEventStart([wide], 30, 590, 'later')).toBe(600)
     const first = event({ id: 'first', startMin: 480, endMin: 540 })
-    expect(snapEventStart([first], 120, 450)).toBeNull()
+    expect(snapEventStart([first], 120, 450, 'earlier')).toBe(540)
   })
 
-  it('reverts when there is no room after the last event', () => {
-    const last = event({ id: 'last', startMin: 1380, endMin: 1440 })
-    expect(snapEventStart([last], 60, 1420)).toBeNull()
-  })
-
-  it('reverts when snapping inside an event is blocked on both sides', () => {
+  it('returns null only when the day is packed solid', () => {
     const a = event({ id: 'a', startMin: 480, endMin: 540 })
     const b = event({ id: 'b', startMin: 600, endMin: 660 })
-    expect(snapEventStart([a, b], 90, 520)).toBeNull()
-  })
-
-  it('keeps whole-hour snapping when the day has no other events', () => {
-    expect(snapEventStart([], 60, 455)).toBe(480)
-    expect(snapEventStart([], 90, 1380)).toBe(1320)
+    expect(snapEventStart([a, b], 120, 570)).toBe(660)
+    expect(snapEventStart([a, b], 90, 520)).toBe(660)
+    const last = event({ id: 'last', startMin: 1380, endMin: 1440 })
+    expect(snapEventStart([last], 60, 1420)).toBe(1320)
+    const packed = [event({ id: 'paced', startMin: 420, endMin: 1440 })]
+    expect(snapEventStart(packed, 60, 600)).toBeNull()
   })
 
   it('updates an event and re-clamps its times', () => {

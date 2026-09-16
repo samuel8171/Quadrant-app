@@ -48,9 +48,25 @@ describe('responsive layout metrics', () => {
     expect(source).toMatch(/stopPropagation\(\)/)
   })
 
-  it('keeps the mobile quadrant gesture hint aligned with touch creation', () => {
+  it('keeps the mobile quadrant gesture hint aligned with the gesture vocabulary', () => {
     const source = readFileSync(resolve(process.cwd(), 'src/renderer/src/pages/QuadrantPage.tsx'), 'utf8')
-    expect(source).toContain('拖动画布 · 双指缩放 · 双击新建')
+    // 手机端提示必须同时覆盖三件事，它们分别由位移阈值、长按阈值与自研双击判定实现：
+    expect(source).toContain('拖动移动 · 长按菜单 · 双击新建')
+    expect(source).toContain('mobile-only')
+  })
+
+  it('routes quadrant and day-view gestures through the shared kernel', () => {
+    const quadrant = readFileSync(resolve(process.cwd(), 'src/renderer/src/pages/QuadrantPage.tsx'), 'utf8')
+    const dayView = readFileSync(
+      resolve(process.cwd(), 'src/renderer/src/components/weekly/DayView.tsx'),
+      'utf8'
+    )
+    // 禁止回退到"按 550ms 静止才算长按拖动"的旧实现，也禁止依赖原生 dblclick 做触屏双击。
+    for (const source of [quadrant, dayView]) {
+      expect(source).toContain('useCanvasGestures')
+      expect(source).toMatch(/onPointerCancel/)
+      expect(source).not.toMatch(/setTimeout\([\s\S]{0,120}?550/)
+    }
   })
 
   it('defines a compact tablet layout between mobile and desktop', () => {

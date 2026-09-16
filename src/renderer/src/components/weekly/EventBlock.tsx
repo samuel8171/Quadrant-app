@@ -9,9 +9,12 @@ interface Props {
   height: number
   interactive: boolean
   overview?: boolean
+  /** 正在拖动：块体留在原位并转半透明，落点由幽灵预览表示。 */
   dragging?: boolean
-  onPointerDown?: (e: React.PointerEvent, event: WeekEvent) => void
+  /** 长按已就绪（视觉抬起），抬起手指即打开菜单。 */
+  armed?: boolean
   onContextMenu?: (e: React.MouseEvent, event: WeekEvent) => void
+  onEdit?: (event: WeekEvent) => void
 }
 
 export default function EventBlock({
@@ -21,8 +24,9 @@ export default function EventBlock({
   interactive,
   overview,
   dragging,
-  onPointerDown,
-  onContextMenu
+  armed,
+  onContextMenu,
+  onEdit
 }: Props): JSX.Element {
   const quadrant = QUADRANT_META[event.quadrant]
   const compact = height < 18
@@ -36,8 +40,8 @@ export default function EventBlock({
     <div
       data-event-id={event.id}
       className={`day-event${compact ? ' compact' : ''}${dragging ? ' dragging' : ''}${
-        interactive ? '' : ' read-only'
-      }${overview ? ' overview' : ''}`}
+        armed ? ' armed' : ''
+      }${interactive ? '' : ' read-only'}${overview ? ' overview' : ''}`}
       style={{
         top,
         height,
@@ -46,11 +50,10 @@ export default function EventBlock({
         boxShadow: `inset 3px 0 0 0 ${event.color}`
       }}
       title={interactive ? undefined : `${event.title} ${minutesToLabel(event.startMin)}-${minutesToLabel(event.endMin)}`}
-      onPointerDown={
-        interactive && onPointerDown ? (e) => onPointerDown(e, event) : undefined
-      }
       onDoubleClick={(e) => {
-        if (interactive) e.stopPropagation()
+        if (!interactive) return
+        e.stopPropagation()
+        onEdit?.(event)
       }}
       onContextMenu={
         interactive && onContextMenu ? (e) => onContextMenu(e, event) : undefined

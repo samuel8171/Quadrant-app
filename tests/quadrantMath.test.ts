@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import type { QuadrantEvent } from '../src/shared/types'
 import {
   AXIS_GAP_PX,
+  AXIS_GAP_UNITS,
+  EVENT_HEIGHT_UNITS,
   QUADRANT_META,
   MAX_EVENT_WIDTH_UNITS,
   MIN_EVENT_WIDTH_UNITS,
@@ -11,11 +13,9 @@ import {
   clampZoom,
   escalateEvent,
   eventScreenRect,
+  quadrantOfEventCenter,
   quadrantOfWorldPoint,
-  shouldCaptureTouchPointer,
-  shouldCaptureEventPointer,
   shouldClearDragOnPointerLeave,
-  shouldProcessTouchMove,
   screenToWorldX,
   screenToWorldY,
   worldToScreenX,
@@ -68,20 +68,24 @@ describe('quadrantMath', () => {
     expect(QUADRANT_META[4]).toMatchObject({ label: '不重要紧急', color: '#483D8B', corner: 'bottom-right' })
   })
 
-  it('keeps event touches out of viewport capture while allowing canvas touches', () => {
-    expect(shouldCaptureTouchPointer(false)).toBe(true)
-    expect(shouldCaptureTouchPointer(true)).toBe(false)
+  it('classifies an event by its center, not by its top-left anchor', () => {
+    // 宽 10、高 1.6 的卡片：左上角已在轴上方，但中心仍在轴下方 → 归下半象限。
+    expect(quadrantOfEventCenter({ x: 0, y: 0.5, width: 10 })).toBe(4)
+    expect(quadrantOfEventCenter({ x: 0, y: 5, width: 10 })).toBe(1)
+    expect(quadrantOfEventCenter({ x: -10, y: 5, width: 10 })).toBe(2)
+    expect(quadrantOfEventCenter({ x: -12, y: 0.5, width: 10 })).toBe(3)
   })
 
-  it('processes a touch drag even when the event handle owns capture', () => {
-    expect(shouldProcessTouchMove(false, true)).toBe(true)
-    expect(shouldProcessTouchMove(false, false)).toBe(false)
-  })
-
-  it('captures the event element for touch and pen drags', () => {
-    expect(shouldCaptureEventPointer('touch')).toBe(true)
-    expect(shouldCaptureEventPointer('pen')).toBe(true)
-    expect(shouldCaptureEventPointer('mouse')).toBe(false)
+  it('keeps the axis gap in world units so it does not shrink when zooming out', () => {
+    // 轴距是世界单位常量，与缩放无关；旧实现按屏幕像素夹取，zoom 2.5 时留下的
+    // 合法事件缩到 0.5 后视觉轴距只剩约 2px。
+    expect(AXIS_GAP_UNITS).toBe(AXIS_GAP_PX / 20)
+    const nearAxis = event({ quadrant: 1, x: -3, y: -3 })
+    for (const zoom of [0.5, 1, 2.5]) {
+      const clamped = clampEventToQuadrant(nearAxis, { ...view, zoom })
+      expect(clamped.x).toBeCloseTo(AXIS_GAP_UNITS)
+      expect(clamped.y).toBeCloseTo(AXIS_GAP_UNITS + EVENT_HEIGHT_UNITS)
+    }
   })
 
   it('does not cancel touch or pen drags when leaving the viewport', () => {

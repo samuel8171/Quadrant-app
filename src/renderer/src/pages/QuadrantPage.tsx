@@ -4,6 +4,7 @@ import ConfirmDialog from '../components/ConfirmDialog'
 import ContextMenu, { type ContextMenuState } from '../components/ContextMenu'
 import EventCard from '../components/EventCard'
 import EventDetailDialog from '../components/EventDetailDialog'
+import { previewMove } from '../lib/eventRules'
 import {
   AXIS_GAP_PX,
   QUADRANT_META,
@@ -12,15 +13,13 @@ import {
   clampZoom,
   clampOrigin,
   quadrantOfWorldPoint,
-  shouldCaptureTouchPointer,
-  shouldCaptureEventPointer,
   shouldClearDragOnPointerLeave,
-  shouldProcessTouchMove,
   screenToWorldX,
   screenToWorldY,
   zoomAt,
   type ViewState
 } from '../lib/quadrantMath'
+import { useCanvasGestures, type GestureContext } from '../hooks/useCanvasGestures'
 import { hasClipboardEvent, useAppStore } from '../state/appStore'
 
 interface EditingState {
@@ -30,6 +29,20 @@ interface EditingState {
   quadrant: Quadrant
   x: number
   y: number
+}
+
+interface DragState {
+  id: string
+  /** 指针世界坐标 - 卡片左上角世界坐标：拖动时卡片不再跳位。 */
+  grabOffsetX: number
+  grabOffsetY: number
+}
+
+interface PreviewState {
+  id: string
+  x: number
+  y: number
+  quadrant: Quadrant
 }
 
 const RADIUS = 12
@@ -48,7 +61,8 @@ export default function QuadrantPage(): JSX.Element {
   const viewportRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const panRef = useRef<{ startX: number; startY: number; startView: ViewState } | null>(null)
-  const dragRef = useRef<{ id: string } | null>(null)
+  const dragRef = useRef<DragState | null>(null)
+  const dragPreviewRef = useRef<PreviewState | null>(null)
   const centeredRef = useRef(false)
   const hoverRef = useRef<{ clientX: number; clientY: number } | null>(null)
   const viewRef = useRef<ViewState>({ zoom: 1, panX: 0, panY: 0 })
@@ -60,6 +74,9 @@ export default function QuadrantPage(): JSX.Element {
   const panVelRef = useRef({ x: 0, y: 0 })
   const touchPointsRef = useRef(new Map<number, { x: number; y: number }>())
   const pinchRef = useRef<{ distance: number; zoom: number; view: ViewState } | null>(null)
+  const lastPointerTypeRef = useRef<string>('mouse')
+  const eventsRef = useRef<QuadrantEvent[]>(events)
+  eventsRef.current = events
 
   const [view, setView] = useState<ViewState>({ zoom: 1, panX: 0, panY: 0 })
   const [size, setSize] = useState({ width: 0, height: 0 })
@@ -70,6 +87,7 @@ export default function QuadrantPage(): JSX.Element {
   const [detailId, setDetailId] = useState<string | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [deletePendingId, setDeletePendingId] = useState<string | null>(null)
+  const [dragPreview, setDragPreview] = useState<PreviewState | null>(null)
   const [tick, setTick] = useState(0)
 
   viewRef.current = view
@@ -201,6 +219,26 @@ export default function QuadrantPage(): JSX.Element {
     return () => window.removeEventListener('pointerdown', onDown)
   }, [menu])
 
+  const clearDragState = useCallback((): void => {
+    panRef.current = null
+    dragRef.current = null
+    dragPreviewRef.current = null
+    setDragPreview(null)
+  }, [])
+
+  const openEditById = useCallback((id: string): void => {
+    const ev = eventsRef.current.find((e) => e.id === id)
+    if (!ev) return
+    setEditing({
+      mode: 'edit',
+      id: ev.id,
+      text: ev.text,
+      quadrant: ev.quadrant,
+      x: ev.x,
+      y: ev.y
+    })
+  }, [])
+
   // Ctrl+C / Ctrl+X / Ctrl+V 键盘复制粘贴。
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
@@ -327,88 +365,34 @@ export default function QuadrantPage(): JSX.Element {
   }, [draw])
 
   const clientToViewport = (clientX: number, clientY: number): { x: number; y: number } => {
-    const rect = viewportRef.current!.getBoundingClientRect()
+    const rect = viewportRef.current?.getBoundingClientRect()
+    if (!rect) return { x: 0, y: 0 }
     return { x: clientX - rect.left, y: clientY - rect.top }
   }
 
-  const onPointerDown = (e: React.PointerEvent): void => {
-    if (e.pointerType === 'touch') {
-      const points = touchPointsRef.current
-      points.set(e.pointerId, { x: e.clientX, y: e.clientY })
-      const target = e.target as Element | null
-      const targetIsEvent = !!target?.closest('.event-card')
-      if (shouldCaptureTouchPointer(targetIsEvent)) {
-        viewportRef.current?.setPointerCapture(e.pointerId)
-      }
-      if (points.size === 1 && targetIsEvent) {
-        return
-      }
-      if (points.size === 1) {
-        panRef.current = { startX: e.clientX, startY: e.clientY, startView: view }
-        panLastRef.current = { x: e.clientX, y: e.clientY, t: performance.now() }
-        panVelRef.current = { x: 0, y: 0 }
-      } else if (points.size === 2) {
-        panRef.current = null
-        const [a, b] = [...points.values()]
-        pinchRef.current = {
-          distance: Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)),
-          zoom: view.zoom,
-          view
-        }
-      }
-      return
+  const beginPinch = useCallback((): void => {
+    const [a, b] = [...touchPointsRef.current.values()]
+    if (!a || !b) return
+    panRef.current = null
+    pinchRef.current = {
+      distance: Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)),
+      zoom: viewRef.current.zoom,
+      view: viewRef.current
     }
-    if (e.button === 1 || (e.button === 0 && e.ctrlKey)) {
-      e.preventDefault()
-      viewportRef.current?.setPointerCapture(e.pointerId)
-      panRef.current = { startX: e.clientX, startY: e.clientY, startView: view }
-      panLastRef.current = { x: e.clientX, y: e.clientY, t: performance.now() }
-      panVelRef.current = { x: 0, y: 0 }
-      if (panAnimRef.current !== null) {
-        cancelAnimationFrame(panAnimRef.current)
-        panAnimRef.current = null
-      }
-    }
-    if (e.button === 0 && !e.ctrlKey) {
-      const target = e.target as Element | null
-      if (!target?.closest('.event-card')) setSelectedId(null)
-    }
-  }
+  }, [])
 
-  const onPointerMove = (e: React.PointerEvent): void => {
-    const rect = viewportRef.current?.getBoundingClientRect()
-    if (!rect) return
-    hoverRef.current = { clientX: e.clientX, clientY: e.clientY }
-    const x = e.clientX - rect.left
-    const y = e.clientY - rect.top
-
-    if (e.pointerType === 'touch') {
-      const points = touchPointsRef.current
-      if (!shouldProcessTouchMove(points.has(e.pointerId), dragRef.current !== null)) return
-      if (points.has(e.pointerId)) points.set(e.pointerId, { x: e.clientX, y: e.clientY })
-      if (points.size >= 2 && pinchRef.current) {
-        const [a, b] = [...points.values()]
-        const distance = Math.max(1, Math.hypot(a.x - b.x, a.y - b.y))
-        const centerX = (a.x + b.x) / 2 - rect.left
-        const centerY = (a.y + b.y) / 2 - rect.top
-        const next = zoomAt(
-          centerX,
-          centerY,
-          pinchRef.current.zoom * (distance / pinchRef.current.distance),
-          pinchRef.current.view
-        )
-        viewRef.current = next
-        setView(next)
-        return
-      }
-    }
-
-    if (panRef.current) {
-      const start = panRef.current
-      const dx = e.clientX - start.startX
-      const dy = e.clientY - start.startY
+  /** 平移画布：手势内核与"双指抬起一指后剩余手指继续平移"共用同一实现。 */
+  const applyPan = useCallback(
+    (clientX: number, clientY: number): void => {
+      const pan = panRef.current
+      const rect = viewportRef.current?.getBoundingClientRect()
+      if (!pan || !rect) return
       const next = clampOrigin(
-        { ...start.startView, panX: start.startView.panX + dx, panY: start.startView.panY + dy },
+        {
+          ...pan.startView,
+          panX: pan.startView.panX + (clientX - pan.startX),
+          panY: pan.startView.panY + (clientY - pan.startY)
+        },
         rect.width,
         rect.height
       )
@@ -418,51 +402,133 @@ export default function QuadrantPage(): JSX.Element {
       const last = panLastRef.current
       if (last && now > last.t) {
         panVelRef.current = {
-          x: (e.clientX - last.x) / (now - last.t),
-          y: (e.clientY - last.y) / (now - last.t)
+          x: (clientX - last.x) / (now - last.t),
+          y: (clientY - last.y) / (now - last.t)
         }
       }
-      panLastRef.current = { x: e.clientX, y: e.clientY, t: now }
-    }
+      panLastRef.current = { x: clientX, y: clientY, t: now }
+    },
+    [setView]
+  )
 
-    if (dragRef.current) {
-      const wx = screenToWorldX(x, view)
-      const wy = screenToWorldY(y, view)
-      moveEvent(dragRef.current.id, wx, wy, view)
-    }
-
-    setHoverQuadrant(quadrantOfWorldPoint(screenToWorldX(x, view), screenToWorldY(y, view)))
-  }
-
-  const onPointerUp = (e: React.PointerEvent): void => {
-    if (e.pointerType === 'touch') {
-      touchPointsRef.current.delete(e.pointerId)
-      pinchRef.current = null
-      dragRef.current = null
-      if (touchPointsRef.current.size === 0) {
-        panRef.current = null
-      } else {
-        const [point] = [...touchPointsRef.current.values()]
-        panRef.current = { startX: point.x, startY: point.y, startView: viewRef.current }
+  // 手势内核：位移 > 8px 才算拖动，长按满阈值抬起手指才开菜单，
+  // 双击由自研判定给出（原生 dblclick 在触屏上不可靠）。
+  const gestures = useCanvasGestures({
+    resolveHit: (e) => {
+      const target = e.target as Element | null
+      const card = target?.closest('.event-card') as HTMLElement | null
+      const id = card?.dataset.eventId
+      if (!card || !id) return { kind: 'canvas' }
+      // 鼠标沿用"把手拖动"，避免左键在卡面上误拖；触屏/笔整卡可拖（把手在触屏下隐藏）。
+      if (e.pointerType === 'mouse' && !target?.closest('.event-handle')) return { kind: 'canvas' }
+      return { kind: 'item', id }
+    },
+    onDragStart: (ctx: GestureContext) => {
+      if (ctx.hit.kind === 'item') {
+        const ev = eventsRef.current.find((e) => e.id === ctx.hit.id)
+        const rect = viewportRef.current?.getBoundingClientRect()
+        if (!ev || !rect) return
+        const worldX = screenToWorldX(ctx.start.x - rect.left, viewRef.current)
+        const worldY = screenToWorldY(ctx.start.y - rect.top, viewRef.current)
+        dragRef.current = {
+          id: ev.id,
+          grabOffsetX: worldX - ev.x,
+          grabOffsetY: worldY - ev.y
+        }
+        dragPreviewRef.current = { id: ev.id, x: ev.x, y: ev.y, quadrant: ev.quadrant }
+        setDragPreview(dragPreviewRef.current)
+        setSelectedId(ev.id)
+        return
       }
-      if (e.target instanceof Element) e.target.releasePointerCapture?.(e.pointerId)
-      return
-    }
-    const wasPanning = panRef.current !== null
-    panRef.current = null
-    dragRef.current = null
-    if (e.target instanceof Element) e.target.releasePointerCapture?.(e.pointerId)
-    if (wasPanning && Math.hypot(panVelRef.current.x, panVelRef.current.y) > 0.05) {
-      startPanInertia()
-    }
-  }
-
-  const onDoubleClick = (e: React.MouseEvent): void => {
-    const target = e.target as Element
-    if (!target.closest('.event-card')) {
-      const { x, y } = clientToViewport(e.clientX, e.clientY)
-      const wx = screenToWorldX(x, view)
-      const wy = screenToWorldY(y, view)
+      // 画布平移：触屏单指／笔直接平移；鼠标需中键或 Ctrl+左键（与既有桌面习惯一致）。
+      const mousePan = ctx.pointerType === 'mouse' && (ctx.button === 1 || ctx.ctrlKey)
+      if (ctx.pointerType === 'mouse' && !mousePan) return
+      if (panAnimRef.current !== null) {
+        cancelAnimationFrame(panAnimRef.current)
+        panAnimRef.current = null
+      }
+      panRef.current = { startX: ctx.start.x, startY: ctx.start.y, startView: viewRef.current }
+      panLastRef.current = { x: ctx.start.x, y: ctx.start.y, t: performance.now() }
+      panVelRef.current = { x: 0, y: 0 }
+    },
+    onDragMove: (ctx: GestureContext) => {
+      const rect = viewportRef.current?.getBoundingClientRect()
+      if (!rect) return
+      if (panRef.current) applyPan(ctx.current.x, ctx.current.y)
+      const drag = dragRef.current
+      if (drag) {
+        const ev = eventsRef.current.find((e) => e.id === drag.id)
+        if (ev) {
+          // 拖动期间只更新预览，不写库；抓取偏移与中心判象限在 previewMove 内完成。
+          const next = previewMove(
+            ev,
+            screenToWorldX(ctx.current.x - rect.left, viewRef.current),
+            screenToWorldY(ctx.current.y - rect.top, viewRef.current),
+            drag.grabOffsetX,
+            drag.grabOffsetY,
+            viewRef.current
+          )
+          const preview: PreviewState = {
+            id: next.id,
+            x: next.x,
+            y: next.y,
+            quadrant: next.quadrant
+          }
+          dragPreviewRef.current = preview
+          setDragPreview(preview)
+        }
+      }
+    },
+    onDragEnd: () => {
+      const wasPanning = panRef.current !== null
+      panRef.current = null
+      const drag = dragRef.current
+      const preview = dragPreviewRef.current
+      dragRef.current = null
+      dragPreviewRef.current = null
+      setDragPreview(null)
+      if (drag && preview && preview.id === drag.id) {
+        const ev = eventsRef.current.find((e) => e.id === drag.id)
+        if (ev && (ev.x !== preview.x || ev.y !== preview.y || ev.quadrant !== preview.quadrant)) {
+          // 只在抬起时提交一次，减少 95% 以上写入，并避免拖动过程中被实时同步回滚。
+          moveEvent(drag.id, preview.x, preview.y, viewRef.current)
+        }
+      }
+      if (wasPanning && Math.hypot(panVelRef.current.x, panVelRef.current.y) > 0.05) {
+        startPanInertia()
+      }
+    },
+    onLongPress: (ctx: GestureContext) => {
+      // 桌面已有右键菜单，长按只在触屏/笔上作为菜单入口。
+      if (ctx.pointerType === 'mouse') return
+      if (ctx.hit.kind === 'item' && ctx.hit.id) {
+        setSelectedId(ctx.hit.id)
+        setMenu({ x: ctx.current.x, y: ctx.current.y, eventId: ctx.hit.id })
+        return
+      }
+      const { x, y } = clientToViewport(ctx.current.x, ctx.current.y)
+      setMenu({
+        x: ctx.current.x,
+        y: ctx.current.y,
+        worldX: screenToWorldX(x, viewRef.current),
+        worldY: screenToWorldY(y, viewRef.current)
+      })
+    },
+    onTap: (ctx: GestureContext, isDouble: boolean) => {
+      // 桌面沿用原生 click / dblclick，避免两条判定路径互相打架。
+      if (ctx.pointerType === 'mouse') return
+      if (ctx.hit.kind === 'item') {
+        if (isDouble && ctx.hit.id) openEditById(ctx.hit.id)
+        return
+      }
+      if (!isDouble) {
+        setSelectedId(null)
+        setMenu(null)
+        return
+      }
+      const { x, y } = clientToViewport(ctx.current.x, ctx.current.y)
+      const wx = screenToWorldX(x, viewRef.current)
+      const wy = screenToWorldY(y, viewRef.current)
       setEditing({
         mode: 'create',
         text: '',
@@ -470,7 +536,114 @@ export default function QuadrantPage(): JSX.Element {
         x: wx,
         y: wy
       })
+    },
+    onCancel: clearDragState
+  })
+
+  const gesturesRef = useRef(gestures)
+  gesturesRef.current = gestures
+
+  // Esc 回滚正在进行的拖动（不提交）。
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key !== 'Escape') return
+      if (dragRef.current || panRef.current) gesturesRef.current.cancel()
     }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
+  const onPointerDown = (e: React.PointerEvent): void => {
+    lastPointerTypeRef.current = e.pointerType
+    if (e.pointerType === 'touch' || e.pointerType === 'pen') {
+      const points = touchPointsRef.current
+      points.set(e.pointerId, { x: e.clientX, y: e.clientY })
+      if (points.size >= 2) {
+        // 双指缩放接管：先取消单指手势，第二指不再进入手势内核。
+        gestures.cancel()
+        if (points.size === 2) beginPinch()
+        return
+      }
+    }
+    gestures.onPointerDown(e)
+  }
+
+  const onPointerMove = (e: React.PointerEvent): void => {
+    const rect = viewportRef.current?.getBoundingClientRect()
+    if (!rect) return
+    hoverRef.current = { clientX: e.clientX, clientY: e.clientY }
+
+    if (e.pointerType !== 'mouse') {
+      const points = touchPointsRef.current
+      if (points.has(e.pointerId)) points.set(e.pointerId, { x: e.clientX, y: e.clientY })
+      if (points.size >= 2 && pinchRef.current) {
+        const [a, b] = [...points.values()]
+        const dist = Math.max(1, Math.hypot(a.x - b.x, a.y - b.y))
+        const next = zoomAt(
+          (a.x + b.x) / 2 - rect.left,
+          (a.y + b.y) / 2 - rect.top,
+          pinchRef.current.zoom * (dist / pinchRef.current.distance),
+          pinchRef.current.view
+        )
+        viewRef.current = next
+        setView(next)
+        return
+      }
+    }
+
+    gestures.onPointerMove(e)
+    // 双指缩放后只剩一指：手势内核里已无活动指针，由页面继续平移。
+    if (!gestures.isActive() && panRef.current) applyPan(e.clientX, e.clientY)
+
+    const x = e.clientX - rect.left
+    const y = e.clientY - rect.top
+    setHoverQuadrant(quadrantOfWorldPoint(screenToWorldX(x, viewRef.current), screenToWorldY(y, viewRef.current)))
+  }
+
+  const onPointerUp = (e: React.PointerEvent): void => {
+    if (e.pointerType !== 'mouse') {
+      const points = touchPointsRef.current
+      points.delete(e.pointerId)
+      if (points.size === 0) {
+        pinchRef.current = null
+        panRef.current = null
+      } else if (points.size === 1) {
+        // 双指抬起一指后，由剩下那一指重新开始平移。
+        pinchRef.current = null
+        const [point] = [...points.values()]
+        panRef.current = { startX: point.x, startY: point.y, startView: viewRef.current }
+        panLastRef.current = { x: point.x, y: point.y, t: performance.now() }
+        panVelRef.current = { x: 0, y: 0 }
+      }
+    }
+    gestures.onPointerUp(e)
+  }
+
+  const onPointerCancel = (e: React.PointerEvent): void => {
+    touchPointsRef.current.delete(e.pointerId)
+    pinchRef.current = null
+    gestures.onPointerCancel(e)
+  }
+
+  const onDoubleClick = (e: React.MouseEvent): void => {
+    // 触屏双击走自研判定（见 gestures.onTap），这里只服务鼠标。
+    if (lastPointerTypeRef.current !== 'mouse') return
+    const target = e.target as Element | null
+    const cardId = (target?.closest('.event-card') as HTMLElement | null)?.dataset.eventId
+    if (cardId) {
+      openEditById(cardId)
+      return
+    }
+    const { x, y } = clientToViewport(e.clientX, e.clientY)
+    const wx = screenToWorldX(x, viewRef.current)
+    const wy = screenToWorldY(y, viewRef.current)
+    setEditing({
+      mode: 'create',
+      text: '',
+      quadrant: quadrantOfWorldPoint(wx, wy),
+      x: wx,
+      y: wy
+    })
   }
 
   const onViewportContextMenu = (e: React.MouseEvent): void => {
@@ -479,39 +652,13 @@ export default function QuadrantPage(): JSX.Element {
     setMenu({
       x: e.clientX,
       y: e.clientY,
-      worldX: screenToWorldX(x, view),
-      worldY: screenToWorldY(y, view)
+      worldX: screenToWorldX(x, viewRef.current),
+      worldY: screenToWorldY(y, viewRef.current)
     })
-  }
-
-  const onEventDragStart = (e: React.PointerEvent, event: QuadrantEvent): void => {
-    e.preventDefault()
-    if (shouldCaptureEventPointer(e.pointerType)) {
-      ;(e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId)
-    } else {
-      viewportRef.current?.setPointerCapture(e.pointerId)
-    }
-    dragRef.current = { id: event.id }
-  }
-
-  const onEventLongPress = (e: React.PointerEvent, event: QuadrantEvent): void => {
-    e.preventDefault()
-    dragRef.current = { id: event.id }
   }
 
   const onEventContextMenu = (e: React.MouseEvent, event: QuadrantEvent): void => {
     setMenu({ x: e.clientX, y: e.clientY, eventId: event.id })
-  }
-
-  const onEditEvent = (event: QuadrantEvent): void => {
-    setEditing({
-      mode: 'edit',
-      id: event.id,
-      text: event.text,
-      quadrant: event.quadrant,
-      x: event.x,
-      y: event.y
-    })
   }
 
   const commitEditing = (): void => {
@@ -534,8 +681,8 @@ export default function QuadrantPage(): JSX.Element {
       <header className="page-header quadrant-header">
         <h1>四象限</h1>
         <span className="title-underline" />
-        <span className="hint-pill desktop-only">🖱️ Ctrl+拖拽 平移 / 滚轮 缩放</span>
-        <span className="hint-pill mobile-only">👆 拖动画布 · 双指缩放 · 双击新建</span>
+        <span className="hint-pill desktop-only">🖱️ Ctrl+拖拽 平移 / 滚轮 缩放 / 双击新建</span>
+        <span className="hint-pill mobile-only">👆 拖动移动 · 长按菜单 · 双击新建</span>
       </header>
       <div
         ref={viewportRef}
@@ -543,11 +690,11 @@ export default function QuadrantPage(): JSX.Element {
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
+        onPointerCancel={onPointerCancel}
         onPointerLeave={(e) => {
-          panRef.current = null
-          if (shouldClearDragOnPointerLeave(e.pointerType)) dragRef.current = null
           hoverRef.current = null
           setHoverQuadrant(null)
+          if (shouldClearDragOnPointerLeave(e.pointerType)) gestures.cancel()
         }}
         onDoubleClick={onDoubleClick}
         onContextMenu={onViewportContextMenu}
@@ -557,21 +704,23 @@ export default function QuadrantPage(): JSX.Element {
           className="event-layer"
           style={{ transform: `translate(${view.panX}px, ${view.panY}px) scale(${view.zoom})` }}
         >
-          {events.map((e) =>
-            editing?.id === e.id ? null : (
+          {events.map((e) => {
+            if (editing?.id === e.id) return null
+            const preview = dragPreview?.id === e.id ? dragPreview : null
+            const shown = preview ? { ...e, x: preview.x, y: preview.y, quadrant: preview.quadrant } : e
+            return (
               <EventCard
                 key={e.id}
-                event={e}
+                event={shown}
                 overdue={overdue(e)}
                 selected={selectedId === e.id}
+                armed={gestures.armedId === e.id}
+                dragging={dragPreview?.id === e.id}
                 onSelect={() => setSelectedId(e.id)}
-                onDragStart={onEventDragStart}
                 onContextMenu={onEventContextMenu}
-                onLongPress={onEventLongPress}
-                onEdit={onEditEvent}
               />
             )
-          )}
+          })}
           {editing && (
             <input
               className="event-input"

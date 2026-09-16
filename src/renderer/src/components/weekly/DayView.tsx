@@ -5,6 +5,7 @@ import ConfirmDialog from '../ConfirmDialog'
 import EventBlock from './EventBlock'
 import EventFormDialog, { type WeeklyFormState } from './EventFormDialog'
 import PresetPanel from './PresetPanel'
+import { withAlpha } from '../../lib/color'
 import { useAppStore } from '../../state/appStore'
 import {
   DAY_HOUR_PX,
@@ -18,9 +19,11 @@ import {
   minuteFromOffsetY,
   minutesToLabel,
   snapEventStart,
-  snapToHour
+  snapToHour,
+  type SnapHint
 } from '../../lib/weekRules'
 import { shouldCreateOnCanvasClick } from '../../lib/weeklyMobileLayout'
+import { useCanvasGestures } from '../../hooks/useCanvasGestures'
 
 interface Props {
   date: Date
@@ -39,8 +42,16 @@ interface MenuState {
 
 interface DragState {
   id: string
-  top: number
+  /** 指针内容坐标 - 块体顶部，保证抓起瞬间不跳位。 */
   grabOffset: number
+  height: number
+  duration: number
+  /** 拖动开始时的开始分钟，用于判断"是否真的会移动"。 */
+  originStart: number
+  /** 吸附后的开始分钟；null 表示当日已无空位（不提交）。 */
+  snapStart: number | null
+  hint: SnapHint
+  lastDesired: number
 }
 
 interface DeleteTarget {
@@ -52,6 +63,8 @@ interface DeleteTarget {
 const GRID_H = 17 * DAY_HOUR_PX
 const CONTENT_H = DAY_PAD_PX * 2 + GRID_H
 const HOURS = Array.from({ length: 18 }, (_, i) => 420 + i * 60)
+/** 拖动/取消结束后忽略 click 的时间窗：浏览器的补发 click 会紧随 pointerup 到达。 */
+const CLICK_SUPPRESS_MS = 350
 
 export default function DayView({
   date,
@@ -74,14 +87,20 @@ export default function DayView({
   const [menu, setMenu] = useState<MenuState | null>(null)
   const [menuClosing, setMenuClosing] = useState(false)
   const [drag, setDrag] = useState<DragState | null>(null)
+  const dragRef = useRef<DragState | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null)
   const [tick, setTick] = useState(0)
-  const suppressCanvasClickRef = useRef(false)
+  /** 拖动结束后短时间内忽略 click（浏览器会在 pointerup 后补发）。 */
+  const suppressCanvasClickUntilRef = useRef(0)
   const lastPointerTypeRef = useRef<string>('mouse')
-  const longPressRef = useRef<number | null>(null)
 
   const dayKey = dateKey(date)
   const dayEvents = eventsOnDate(weekEvents, dayKey)
+
+  const updateDrag = useCallback((next: DragState | null): void => {
+    dragRef.current = next
+    setDrag(next)
+  }, [])
 
   const contentY = (clientY: number): number => {
     const scroller = scrollRef.current
@@ -126,51 +145,95 @@ export default function DayView({
     setForm({ kind: 'event-create', date: dayKey, startMin, presetId })
   }
 
-  const onEventDragStart = (e: React.PointerEvent, event: WeekEvent): void => {
-    e.preventDefault()
-    if (e.pointerType === 'touch') {
-      if (longPressRef.current !== null) window.clearTimeout(longPressRef.current)
-      longPressRef.current = window.setTimeout(() => { longPressRef.current = null; beginDrag(e, event) }, 550)
-      return
+  /**
+   * 时间轴拖动：位移 > 8px 即起拖（不再等 550ms 静止），落点以 5 分钟网格吸附并
+   * 滑向最近空位，拖动期间只渲染幽灵预览、抬起时才提交。
+   * 取消（`pointercancel` / Esc / 双指）一律不提交。
+   */
+  const gestures = useCanvasGestures({
+    resolveHit: (e) => {
+      const el = e.target as Element | null
+      const block = el?.closest('.day-event') as HTMLElement | null
+      const id = block?.dataset.eventId
+      if (!block || !id || block.classList.contains('read-only')) return { kind: 'canvas' }
+      return { kind: 'item', id }
+    },
+    onDragStart: (ctx) => {
+      if (ctx.hit.kind !== 'item' || !ctx.hit.id) return
+      const event = weekEvents.find((ev) => ev.id === ctx.hit.id)
+      if (!event) return
+      suppressCanvasClickUntilRef.current = performance.now() + CLICK_SUPPRESS_MS
+      const pointerY = contentY(ctx.start.y)
+      const top = DAY_PAD_PX + eventTopPx(event.startMin, DAY_HOUR_PX)
+      updateDrag({
+        id: event.id,
+        grabOffset: pointerY - top,
+        height: eventHeightPx(event.startMin, event.endMin, DAY_HOUR_PX),
+        duration: event.endMin - event.startMin,
+        originStart: event.startMin,
+        snapStart: event.startMin,
+        hint: 'later',
+        lastDesired: event.startMin
+      })
+    },
+    onDragMove: (ctx) => {
+      const current = dragRef.current
+      if (!current) return
+      const pointerY = contentY(ctx.current.y)
+      const desired = minuteFromOffsetY(pointerY - current.grabOffset - DAY_PAD_PX, DAY_HOUR_PX)
+      const hint: SnapHint =
+        desired > current.lastDesired ? 'later' : desired < current.lastDesired ? 'earlier' : current.hint
+      const others = dayEvents.filter((ev) => ev.id !== current.id)
+      const snapStart = snapEventStart(others, current.duration, desired, hint)
+      if (snapStart === current.snapStart && hint === current.hint) {
+        // 落点未变：只更新方向基准，不触发重渲染。
+        dragRef.current = { ...current, lastDesired: desired }
+        return
+      }
+      updateDrag({ ...current, hint, lastDesired: desired, snapStart })
+    },
+    onDragEnd: () => {
+      const current = dragRef.current
+      updateDrag(null)
+      // 指针抬起后浏览器还会补一个 click：用短时间窗拦掉，避免它被当成"点击空白新建"。
+      suppressCanvasClickUntilRef.current = performance.now() + CLICK_SUPPRESS_MS
+      if (!current || current.snapStart === null) return
+      const event = weekEvents.find((ev) => ev.id === current.id)
+      if (!event || event.startMin === current.snapStart) return
+      moveWeekEvent(current.id, current.snapStart)
+    },
+    onLongPress: (ctx) => {
+      // 桌面已有右键菜单，长按只在触屏/笔上作为菜单入口。
+      if (ctx.pointerType === 'mouse') return
+      if (ctx.hit.kind === 'item' && ctx.hit.id) {
+        setMenu({ x: ctx.current.x, y: ctx.current.y, eventId: ctx.hit.id })
+      }
+    },
+    onTap: (ctx, isDouble) => {
+      if (ctx.pointerType === 'mouse') return
+      if (!isDouble || ctx.hit.kind !== 'item' || !ctx.hit.id) return
+      const event = weekEvents.find((ev) => ev.id === ctx.hit.id)
+      if (event) setForm({ kind: 'event-edit', event })
+    },
+    onCancel: () => {
+      updateDrag(null)
+      // 取消（含 Esc）后浏览器仍可能补一个 click，同样需要拦掉。
+      suppressCanvasClickUntilRef.current = performance.now() + CLICK_SUPPRESS_MS
     }
-    beginDrag(e, event)
-  }
+  })
 
-  const beginDrag = (e: React.PointerEvent, event: WeekEvent): void => {
-    const canvas = canvasRef.current
-    if (!canvas) return
-    canvas.setPointerCapture(e.pointerId)
-    suppressCanvasClickRef.current = true
-    const pointerY = contentY(e.clientY)
-    const top = DAY_PAD_PX + eventTopPx(event.startMin, DAY_HOUR_PX)
-    setDrag({ id: event.id, top, grabOffset: pointerY - top })
-  }
+  const gesturesRef = useRef(gestures)
+  gesturesRef.current = gestures
 
-  const onCanvasPointerMove = (e: React.PointerEvent): void => {
-    if (!drag) return
-    const event = weekEvents.find((ev) => ev.id === drag.id)
-    if (!event) return
-    const pointerY = contentY(e.clientY)
-    const height = eventHeightPx(event.startMin, event.endMin, DAY_HOUR_PX)
-    const top = Math.min(
-      DAY_PAD_PX + GRID_H - height,
-      Math.max(DAY_PAD_PX, pointerY - drag.grabOffset)
-    )
-    setDrag({ ...drag, top })
-  }
-
-  const onCanvasPointerUp = (e: React.PointerEvent): void => {
-    if (longPressRef.current !== null) { window.clearTimeout(longPressRef.current); longPressRef.current = null }
-    if (!drag) return
-    const event = weekEvents.find((ev) => ev.id === drag.id)
-    if (event) {
-      const pointerMin = minuteFromOffsetY(contentY(e.clientY) - DAY_PAD_PX, DAY_HOUR_PX)
-      const others = dayEvents.filter((ev) => ev.id !== drag.id)
-      const snapped = snapEventStart(others, event.endMin - event.startMin, pointerMin)
-      if (snapped !== null) moveWeekEvent(drag.id, snapped)
+  // Esc 回滚正在进行的拖动（不提交）。
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key !== 'Escape') return
+      if (dragRef.current) gesturesRef.current.cancel()
     }
-    setDrag(null)
-  }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
 
   const onEventContextMenu = (e: React.MouseEvent, event: WeekEvent): void => {
     e.preventDefault()
@@ -185,8 +248,9 @@ export default function DayView({
   }
 
   const onCanvasClick = (e: React.MouseEvent): void => {
-    const wasDragging = suppressCanvasClickRef.current
-    suppressCanvasClickRef.current = false
+    const now = performance.now()
+    const wasDragging = now < suppressCanvasClickUntilRef.current
+    suppressCanvasClickUntilRef.current = 0
     const target = e.target as Element
     if (target.closest('.day-event')) return
     const pointerType =
@@ -219,6 +283,7 @@ export default function DayView({
   }
 
   const menuEvent = menu ? weekEvents.find((ev) => ev.id === menu.eventId) : undefined
+  const dragEvent = drag ? weekEvents.find((ev) => ev.id === drag.id) : undefined
 
   return (
     <div className={`day-page ${className ?? ''}`} onAnimationEnd={onAnimationEnd}>
@@ -256,8 +321,10 @@ export default function DayView({
             ref={canvasRef}
             onPointerDownCapture={(e) => { lastPointerTypeRef.current = e.pointerType }}
             className="day-canvas"
-            onPointerMove={onCanvasPointerMove}
-            onPointerUp={onCanvasPointerUp}
+            onPointerDown={gestures.onPointerDown}
+            onPointerMove={gestures.onPointerMove}
+            onPointerUp={gestures.onPointerUp}
+            onPointerCancel={gestures.onPointerCancel}
             onClick={onCanvasClick}
             onDoubleClick={onCanvasDoubleClick}
             onDragOver={(e) => {
@@ -283,22 +350,37 @@ export default function DayView({
                 <span className="now-label">{minutesToLabel(nowMin)}</span>
               </div>
             )}
-            {dayEvents.map((event) => (
-              <EventBlock
-                key={event.id}
-                event={event}
-                interactive
-                dragging={drag?.id === event.id}
-                top={
-                  drag?.id === event.id
-                    ? drag.top
-                    : DAY_PAD_PX + eventTopPx(event.startMin, DAY_HOUR_PX)
-                }
-                height={eventHeightPx(event.startMin, event.endMin, DAY_HOUR_PX)}
-                onPointerDown={onEventDragStart}
-                onContextMenu={onEventContextMenu}
-              />
-            ))}
+            {dayEvents.map((event) => {
+              const height = eventHeightPx(event.startMin, event.endMin, DAY_HOUR_PX)
+              return (
+                <EventBlock
+                  key={event.id}
+                  event={event}
+                  interactive
+                  dragging={drag?.id === event.id}
+                  armed={gestures.armedId === event.id}
+                  top={DAY_PAD_PX + eventTopPx(event.startMin, DAY_HOUR_PX)}
+                  height={height}
+                  onContextMenu={onEventContextMenu}
+                  onEdit={(ev) => setForm({ kind: 'event-edit', event: ev })}
+                />
+              )
+            })}
+            {drag && drag.snapStart !== null && drag.snapStart !== drag.originStart && dragEvent && (
+              <div
+                className="day-event-ghost"
+                style={{
+                  top: DAY_PAD_PX + eventTopPx(drag.snapStart, DAY_HOUR_PX),
+                  height: drag.height,
+                  background: withAlpha(dragEvent.color, 0.22),
+                  borderColor: withAlpha(dragEvent.color, 0.9)
+                }}
+              >
+                <span className="day-event-ghost-time">
+                  {minutesToLabel(drag.snapStart)}-{minutesToLabel(drag.snapStart + drag.duration)}
+                </span>
+              </div>
+            )}
           </div>
         </div>
         <PresetPanel

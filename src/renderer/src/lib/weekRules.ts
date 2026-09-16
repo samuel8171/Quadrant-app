@@ -257,47 +257,62 @@ export function clampEndForDuration(endMin: number, durationMin: number): number
   )
 }
 
+export const SNAP_STEP_MIN = 5
+/** 落点被占用时向两侧滑动的最大搜索距离。 */
+export const SNAP_SEARCH_LIMIT_MIN = 12 * 60
+
+/** 拖动方向提示：决定落点被占用时优先向哪一侧滑动。 */
+export type SnapHint = 'earlier' | 'later'
+
+/** 把分钟数吸附到 5 分钟网格并保证整个事件落在当天范围内。 */
+function clampToGrid(min: number, duration: number): number {
+  const rounded = Math.round(min / SNAP_STEP_MIN) * SNAP_STEP_MIN
+  return Math.min(Math.max(rounded, DAY_START_MIN), DAY_END_MIN - duration)
+}
+
+function isFreeSlot(others: WeekEvent[], start: number, duration: number): boolean {
+  return !others.some((o) => overlaps(start, start + duration, o.startMin, o.endMin))
+}
+
+/**
+ * 计算拖动落点：**落点即所见**。
+ *
+ * 与旧实现（贴到最近事件的边缘，越界或重叠即整体回退）的差别：
+ * 1. 以 5 分钟网格吸附指针位置，而不是吸附到邻事件边缘——块体不再跳到与手指无关的位置；
+ * 2. 落点被占用时，先沿拖动方向以 5 分钟为步长滑动到最近的空位（上限 12 小时），
+ *    该方向确实无空位时才回退到反方向；
+ * 3. 完全没有空位时返回 `null`，由调用方保持原位（不提交）。
+ */
 export function snapEventStart(
   others: WeekEvent[],
   durationMin: number,
-  pointerMin: number
+  pointerMin: number,
+  hint?: SnapHint
 ): number | null {
-  if (others.length === 0) {
-    return clampEventStart(pointerMin, durationMin)
-  }
-
   const duration = normalizeDuration(durationMin)
-  let nearest = others[0]
-  let nearestDist = intervalDistance(pointerMin, nearest)
-  for (let i = 1; i < others.length; i++) {
-    const e = others[i]
-    const d = intervalDistance(pointerMin, e)
-    if (d < nearestDist || (d === nearestDist && e.startMin < nearest.startMin)) {
-      nearest = e
-      nearestDist = d
-    }
-  }
+  const desired = clampToGrid(pointerMin, duration)
+  if (isFreeSlot(others, desired, duration)) return desired
 
-  let start: number
-  if (pointerMin < nearest.startMin) {
-    start = nearest.startMin - duration
-  } else if (pointerMin > nearest.endMin) {
-    start = nearest.endMin
-  } else if (pointerMin - nearest.startMin <= nearest.endMin - pointerMin) {
-    start = nearest.startMin - duration
-  } else {
-    start = nearest.endMin
+  const directions: SnapHint[] = hint === 'later' ? ['later', 'earlier'] : ['earlier', 'later']
+  for (const direction of directions) {
+    const found = scanDirection(others, duration, desired, direction)
+    if (found !== null) return found
   }
-
-  if (start < DAY_START_MIN || start + duration > DAY_END_MIN) return null
-  if (others.some((o) => overlaps(start, start + duration, o.startMin, o.endMin))) return null
-  return start
+  return null
 }
 
-function intervalDistance(p: number, e: WeekEvent): number {
-  if (p < e.startMin) return e.startMin - p
-  if (p > e.endMin) return p - e.endMin
-  return 0
+function scanDirection(
+  others: WeekEvent[],
+  duration: number,
+  desired: number,
+  direction: SnapHint
+): number | null {
+  for (let d = SNAP_STEP_MIN; d <= SNAP_SEARCH_LIMIT_MIN; d += SNAP_STEP_MIN) {
+    const candidate = direction === 'later' ? desired + d : desired - d
+    if (candidate < DAY_START_MIN || candidate + duration > DAY_END_MIN) continue
+    if (isFreeSlot(others, candidate, duration)) return candidate
+  }
+  return null
 }
 
 function overlaps(s1: number, e1: number, s2: number, e2: number): boolean {

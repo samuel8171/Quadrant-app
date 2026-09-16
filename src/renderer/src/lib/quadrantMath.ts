@@ -9,7 +9,14 @@ export interface ViewState {
 export const UNIT = 20
 export const MIN_ZOOM = 0.5
 export const MAX_ZOOM = 2.5
+/** 轴距（屏幕像素），仅用于画布绘制与旧测试基准。 */
 export const AXIS_GAP_PX = 10
+/**
+ * 轴距（世界单位）。事件坐标以世界单位落库，因此约束必须用世界单位表达；
+ * 若沿用 `AXIS_GAP_PX` 直接算屏幕矩形，合法位置会随缩放漂移
+ * （zoom 2.5 时合法 → zoom 0.5 时视觉轴距只剩 2px）。
+ */
+export const AXIS_GAP_UNITS = AXIS_GAP_PX / UNIT
 export const EDGE_MARGIN_PX = 10
 export const MAX_EVENT_WIDTH_UNITS = 20
 export const MIN_EVENT_WIDTH_UNITS = 6
@@ -52,22 +59,10 @@ export function quadrantOfWorldPoint(wx: number, wy: number): Quadrant {
   return 4
 }
 
-export function shouldCaptureTouchPointer(targetIsEvent: boolean): boolean {
-  return !targetIsEvent
-}
-
-export function shouldProcessTouchMove(hasTouchPoint: boolean, hasDrag: boolean): boolean {
-  return hasTouchPoint || hasDrag
-}
-
-export function shouldCaptureEventPointer(pointerType: string): boolean {
-  return pointerType === 'touch' || pointerType === 'pen'
-}
-
+/** 鼠标离开视口时取消拖动；触屏/笔由指针捕获接管，不应因此中断。 */
 export function shouldClearDragOnPointerLeave(pointerType: string): boolean {
   return pointerType !== 'touch' && pointerType !== 'pen'
 }
-
 
 export function clampOrigin(view: ViewState, width: number, height: number): ViewState {
   return {
@@ -110,21 +105,42 @@ export function eventScreenRect(
   }
 }
 
+/**
+ * 事件所属象限，按**卡片中心**判定而非左上角锚点。
+ * 事件在世界坐标系里占据 x ∈ [x, x+width)、y ∈ [y-EVENT_HEIGHT_UNITS, y]
+ * （屏幕向下 = 世界 y 减小），因此中心为 (x+width/2, y-EVENT_HEIGHT_UNITS/2)。
+ * 用锚点判定会让贴轴卡片在拖动时反复翻转象限。
+ */
+export function quadrantOfEventCenter(
+  e: Pick<QuadrantEvent, 'x' | 'y' | 'width'>
+): Quadrant {
+  return quadrantOfWorldPoint(e.x + e.width / 2, e.y - EVENT_HEIGHT_UNITS / 2)
+}
+
+/**
+ * 把事件夹进它所属象限，并保持与坐标轴的最小间距。
+ *
+ * `view` 参数**有意不使用**：轴距现在是世界单位常量（`AXIS_GAP_UNITS`），
+ * 与缩放无关。保留形参是为了不改动既有调用点与测试基准。
+ * 旧实现按屏幕像素夹取，等价于世界间距 = AXIS_GAP_PX / (UNIT * zoom)，
+ * 于是 zoom 2.5 时合法的位置缩到 0.5 后视觉轴距只剩约 2px。
+ */
 export function clampEventToQuadrant(e: QuadrantEvent, view: ViewState): QuadrantEvent {
-  const rect = eventScreenRect(e, view)
-  let left = rect.left
-  let top = rect.top
+  void view
+  const gap = AXIS_GAP_UNITS
+  let x = e.x
+  let y = e.y
   if (e.quadrant === 1 || e.quadrant === 4) {
-    left = Math.max(left, view.panX + AXIS_GAP_PX)
+    x = Math.max(x, gap)
   } else {
-    left = Math.min(left, view.panX - AXIS_GAP_PX - rect.width)
+    x = Math.min(x + e.width, -gap) - e.width
   }
   if (e.quadrant === 1 || e.quadrant === 2) {
-    top = Math.min(top, view.panY - AXIS_GAP_PX - rect.height)
+    y = Math.max(y, gap + EVENT_HEIGHT_UNITS)
   } else {
-    top = Math.max(top, view.panY + AXIS_GAP_PX)
+    y = Math.min(y, -gap)
   }
-  return { ...e, x: screenToWorldX(left, view), y: screenToWorldY(top, view) }
+  return { ...e, x, y }
 }
 
 export function escalateEvent(e: QuadrantEvent, now: Date): QuadrantEvent {

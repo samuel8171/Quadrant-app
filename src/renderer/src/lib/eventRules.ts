@@ -3,7 +3,7 @@ import {
   autoEventWidth,
   clampEventToQuadrant,
   escalateEvent,
-  quadrantOfWorldPoint,
+  quadrantOfEventCenter,
   type ViewState
 } from './quadrantMath'
 
@@ -27,6 +27,10 @@ export function createEvent(
   return clampEventToQuadrant(e, view)
 }
 
+/**
+ * 把事件移动到新的左上角世界坐标。
+ * 象限按卡片中心判定，避免贴轴时反复翻转；`view` 仅用于夹取（夹取本身已在世界单位下进行）。
+ */
 export function moveEvent(
   events: QuadrantEvent[],
   id: string,
@@ -36,9 +40,29 @@ export function moveEvent(
 ): QuadrantEvent[] {
   return events.map((e) => {
     if (e.id !== id) return e
-    const quadrant = quadrantOfWorldPoint(worldX, worldY)
-    return clampEventToQuadrant({ ...e, quadrant, x: worldX, y: worldY }, view)
+    const moved: QuadrantEvent = { ...e, x: worldX, y: worldY }
+    return clampEventToQuadrant({ ...moved, quadrant: quadrantOfEventCenter(moved) }, view)
   })
+}
+
+/**
+ * 拖动落点的纯计算版本：给定抓取偏移与指针世界坐标，算出夹取后的最终事件。
+ * 拖动期间由页面用它渲染预览，抬起时才提交，避免逐帧写库。
+ */
+export function previewMove(
+  e: QuadrantEvent,
+  pointerWorldX: number,
+  pointerWorldY: number,
+  grabOffsetX: number,
+  grabOffsetY: number,
+  view: ViewState
+): QuadrantEvent {
+  const moved: QuadrantEvent = {
+    ...e,
+    x: pointerWorldX - grabOffsetX,
+    y: pointerWorldY - grabOffsetY
+  }
+  return clampEventToQuadrant({ ...moved, quadrant: quadrantOfEventCenter(moved) }, view)
 }
 
 export function updateEventInList(
@@ -73,18 +97,16 @@ export function pasteEvent(
   targetX?: number,
   targetY?: number
 ): QuadrantEvent[] {
-  const copy: QuadrantEvent = {
+  const hasTarget = targetX !== undefined && targetY !== undefined
+  const draft: QuadrantEvent = {
     ...source,
     id: crypto.randomUUID(),
-    x: targetX !== undefined ? targetX : source.x + 0.8,
-    y: targetY !== undefined ? targetY : source.y + 0.8,
-    width: autoEventWidth(source.text),
-    quadrant:
-      targetX !== undefined && targetY !== undefined
-        ? quadrantOfWorldPoint(targetX, targetY)
-        : source.quadrant
+    x: hasTarget ? (targetX as number) : source.x + 0.8,
+    y: hasTarget ? (targetY as number) : source.y + 0.8,
+    width: autoEventWidth(source.text)
   }
-  return [...events, clampEventToQuadrant(copy, view)]
+  const quadrant = hasTarget ? quadrantOfEventCenter(draft) : source.quadrant
+  return [...events, clampEventToQuadrant({ ...draft, quadrant }, view)]
 }
 
 export function applyEscalations(events: QuadrantEvent[], now: Date): QuadrantEvent[] {

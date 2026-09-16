@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useState } from 'react'
 import type { QuadrantEvent } from '../../../shared/types'
 import { UNIT } from '../lib/quadrantMath'
 
@@ -6,11 +6,12 @@ interface Props {
   event: QuadrantEvent
   overdue: boolean
   selected: boolean
+  /** 长按已就绪（视觉抬起），抬起手指即打开菜单。 */
+  armed: boolean
+  /** 正在拖动（预览位置已由父级传入 event）。 */
+  dragging: boolean
   onSelect: () => void
-  onDragStart: (e: React.PointerEvent, event: QuadrantEvent) => void
   onContextMenu: (e: React.MouseEvent, event: QuadrantEvent) => void
-  onLongPress: (e: React.PointerEvent, event: QuadrantEvent) => void
-  onEdit: (event: QuadrantEvent) => void
 }
 
 function formatDeadline(iso: string): string {
@@ -19,73 +20,39 @@ function formatDeadline(iso: string): string {
   return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
+/**
+ * 事件卡片。这里**不处理手势**——轻触/拖动/长按/双击统一由父级的手势内核判定，
+ * 卡片只负责渲染与"选中"这一简单交互。鼠标的拖动把手 `.event-handle` 仅作为命中区，
+ * 触屏下由 CSS 隐藏（触屏整卡可拖）。
+ */
 export default function EventCard({
   event,
   overdue,
   selected,
+  armed,
+  dragging,
   onSelect,
-  onDragStart,
-  onContextMenu,
-  onLongPress,
-  onEdit
+  onContextMenu
 }: Props): JSX.Element {
   const [hover, setHover] = useState(false)
-  const [touchDragging, setTouchDragging] = useState(false)
-  const longPressRef = useRef<number | null>(null)
-
-  const clearLongPress = (): void => {
-    if (longPressRef.current !== null) {
-      window.clearTimeout(longPressRef.current)
-      longPressRef.current = null
-    }
-  }
 
   return (
     <div
-      className={`event-card q${event.quadrant}${touchDragging ? ' touch-dragging' : ''}${overdue ? ' overdue' : ''}${
-        selected ? ' selected' : ''
-      }`}
+      data-event-id={event.id}
+      className={`event-card q${event.quadrant}${armed ? ' armed' : ''}${
+        dragging ? ' dragging' : ''
+      }${overdue ? ' overdue' : ''}${selected ? ' selected' : ''}`}
       style={{ left: event.x * UNIT, top: -event.y * UNIT, width: event.width * UNIT }}
-      onPointerDown={(e) => {
-        onSelect()
-        if (e.pointerType === 'touch') {
-          const card = e.currentTarget as HTMLElement
-          clearLongPress()
-          longPressRef.current = window.setTimeout(() => {
-            longPressRef.current = null
-            setTouchDragging(true)
-            card.setPointerCapture?.(e.pointerId)
-            onLongPress(e, event)
-          }, 550)
-        }
-      }}
-      onPointerUp={() => { clearLongPress(); setTouchDragging(false) }}
-      onPointerCancel={() => { clearLongPress(); setTouchDragging(false) }}
+      onPointerDown={onSelect}
       onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => {
-        setHover(false)
-        clearLongPress()
-      }}
-      onDoubleClick={(e) => {
-        e.stopPropagation()
-        onEdit(event)
-      }}
+      onMouseLeave={() => setHover(false)}
       onContextMenu={(e) => {
         e.preventDefault()
         e.stopPropagation()
         onContextMenu(e, event)
       }}
     >
-      {(hover || selected) && (
-        <span
-          className="event-handle"
-          onPointerDown={(e) => {
-            e.stopPropagation()
-            onSelect()
-            onDragStart(e, event)
-          }}
-        />
-      )}
+      {(hover || selected) && <span className="event-handle" />}
       <span className="event-text">{event.text}</span>
       {event.deadline && (
         <span className="event-deadline">截止：{formatDeadline(event.deadline)}</span>
