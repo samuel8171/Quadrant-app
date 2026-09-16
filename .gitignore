@@ -1,6 +1,11 @@
 node_modules/
 out/
 dist/
+# 网页端构建产物目录（vite.web.config.ts 的 outDir 是 ../../dist-web）
+dist-web/
+# 历史遗留目录：早期配置曾把产物写到这里，保留忽略以免误提交旧构建
 web-dist/
 *.log
 .worktrees/
+# QA 用的浏览器 profile（可再生产生，体积大）
+docs/.qa-*/

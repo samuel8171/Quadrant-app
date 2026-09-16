@@ -19,7 +19,7 @@ jobs:
         env:
           VITE_SUPABASE_URL: https://nktsnjbkvdyhxdjfbxkh.supabase.co
       - uses: actions/upload-pages-artifact@v3
-        with: { path: web-dist }
+        with: { path: dist-web }
   deploy:
     needs: build
     runs-on: ubuntu-latest

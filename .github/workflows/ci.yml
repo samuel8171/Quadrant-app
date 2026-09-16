@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+
+      - name: 类型检查（主进程 + 渲染进程）
+        run: npm run typecheck
+
+      - name: 单元测试
+        run: npm test
+
+      - name: 构建网页端产物
+        run: npm run build:web
+
+      - name: 构建桌面端产物
+        run: npm run build
