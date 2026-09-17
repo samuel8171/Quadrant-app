@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { defaultData } from '../src/shared/defaults'
-import { validCloudData, validSyncNotice } from '../src/renderer/src/lib/cloudSync2'
+// 从纯校验模块取：cloudSync2 顶层会 createClient()，在没有原生 WebSocket 全局的
+// 环境（Node 20）下一 import 就抛，会把整个套件带下水。
+import { validCloudData, validSyncNotice } from '../src/renderer/src/lib/cloudValidation'
 
 describe('cloud sync validation', () => {
   it('accepts complete app data', () => expect(validCloudData(defaultData())).toBe(true))

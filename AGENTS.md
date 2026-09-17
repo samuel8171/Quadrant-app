@@ -57,3 +57,18 @@ node scripts/mobile-density-probe.mjs --presets 0,12 --out docs/probes/mobile-de
   2. 单类选择器同权重时**源序在后者胜出**。写给通用类（`.icon-btn`、`.mobile-only` 等）加覆盖的规则时，必须提权到 `.父类 .目标类`，否则被文件后半段的通用类盖掉（`.goal-more { display: none }` 曾被 `theme.css:357` 的 `.icon-btn { display: inline-flex }` 盖掉，桌面端误显示「…」按钮）。**别只看选择器名字像不像覆盖，要 `grep -n` 确认两条规则的先后。**
 - 改完布局后用 `--shots` 存几张截图目视一遍：数值全对但版式崩掉（按钮被挤到换行、文字被 sticky 元素裁掉）只有截图看得见，本项目已两次靠截图发现纯读数看不见的问题。
 
+## CI 排障（「本机绿、CI 红」的成因与复现）
+
+CI 里 `node-version` **刻意锁 20**——与 Electron 31 内置的 Node 同代；本机开发跑的是 Node 22+。两代之间的差异会以「本机永远绿、CI 恒红」的形式出现，所以别急着把 CI 的 Node 往上抬，先复现。
+
+2026-09-17 定位到的真实案例：`cloudSync2.ts` 在**顶层**执行 `createClient(...)`，而 supabase 的 realtime 层要求运行环境提供原生 `WebSocket` 全局（浏览器 / Node 22+）。Node 20 没有这个全局，于是 `createClient` 在**模块加载期**抛 `Node.js detected but native WebSocket not found`；`tests/cloudSync.test.ts` 当时只为测两个纯函数却 import 了这个模块，整个套件因此加载失败、3 秒退出（表现为「单元测试」步骤 3 秒内失败，且日志里只有一句 `stderr | tests/cloudSync.test.ts`）。
+
+- **规则**：纯逻辑不要和「顶层有副作用」的模块同住一个文件。已拆出 `src/renderer/src/lib/cloudValidation.ts`。
+- **本机复现**（不用等 CI）：Node 20 便携版在 `C:/Users/Samuel/.workbuddy/binaries/node/versions/node-v20.20.2-win-x64/`，
+  ```
+  .../node-v20.20.2-win-x64/node.exe node_modules/vitest/vitest.mjs run
+  ```
+  判据很直观：`node -e "console.log(typeof WebSocket)"` 在 Node 20 是 `undefined`、Node 22 是 `function`。
+- **跨平台文件名**：`node scripts/case-audit.mjs` 按 Linux 规则检查测试与源码引用的每个路径（大小写、是否存在），专治「Windows 不区分大小写所以本机过、Linux 上 ENOENT」。
+- **读 CI 日志**：Actions 步骤日志匿名拉取会 403，但 **check-run 注解匿名可读**。入口在 `/actions/runs/<run_id>/jobs` 返回的 `check_run_url` 上追加 `/annotations`。`.github/ci-annotate.mjs` 会在测试失败时把日志揉成注解（优先 stderr/stdout 区块——vitest 把测试里的 console 输出攒到最后统一打印，未捕获的异步异常就在那里），不看网页也能定位。
+

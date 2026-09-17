@@ -1,6 +1,16 @@
 import { createClient } from '@supabase/supabase-js'
 import type { AppData, CloudMeta } from '../../../shared/types'
+import { validCloudData, validSyncNotice, type SyncNotice } from './cloudValidation'
 
+/**
+ * 注意：本模块在**顶层**就 `createClient(...)`，而 supabase 的 realtime 层需要
+ * 运行环境提供原生 `WebSocket` 全局（浏览器 / Node 22+）。所以在没有该全局的
+ * 环境（如 Node 20）下，本模块一 import 就抛。
+ *
+ * 因此**纯校验函数请从 ./cloudValidation 取**，别放这里——否则一个只想测纯函数的
+ * 单测会把整个客户端拖进模块图，在 Node 20 上直接令测试套件加载失败。
+ * `validCloudData` / `validSyncNotice` / `SyncNotice` 已经搬到那边。
+ */
 export const SUPABASE_URL = 'https://nktsnjbkvdyhxdjfbxkh.supabase.co'
 export const SUPABASE_ANON_KEY = 'sb_publishable_oPq0EiI_ofPDz2q0iy9EUQ_byXMWSk5'
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
@@ -12,10 +22,6 @@ export async function login(username: string, password: string): Promise<void> {
 export async function hasCloudSession(): Promise<boolean> {
   const { data } = await supabase.auth.getSession()
   return Boolean(data.session)
-}
-export function validCloudData(value: unknown): value is AppData {
-  const d = value as Partial<AppData> | null
-  return !!d && d.version === 2 && Array.isArray(d.goals) && Array.isArray(d.events) && Array.isArray(d.weekPresets) && Array.isArray(d.weekEvents)
 }
 
 /** 取当前会话的 user id，未登录时抛出可读错误。 */
@@ -75,18 +81,6 @@ export async function pushCloudData(data: AppData): Promise<{ revision: string }
 }
 
 // ------------------------------------------------------------ 变更广播（通知）
-
-export interface SyncNotice {
-  /** 写入方的设备标识，用于抑制回环。 */
-  deviceId: string
-  /** 写入后的云端修订号。 */
-  revision: string
-}
-
-export function validSyncNotice(value: unknown): value is SyncNotice {
-  const n = value as Partial<SyncNotice> | null
-  return !!n && typeof n.deviceId === 'string' && n.deviceId.length > 0 && typeof n.revision === 'string' && n.revision.length > 0
-}
 
 /**
  * 用 broadcast 通道取代原来的 `postgres_changes` 订阅。
