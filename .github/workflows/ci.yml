@@ -21,7 +21,15 @@ jobs:
         run: npm run typecheck
 
       - name: 单元测试
-        run: npm test
+        shell: bash
+        run: |
+          npx vitest run --reporter=verbose > /tmp/vitest.log 2>&1 && passed=1 || passed=0
+          tail -40 /tmp/vitest.log
+          # 步骤日志要登录才能下载，注解匿名可读：失败时把尾部日志揉成注解方便排障
+          if [ "$passed" = 0 ]; then
+            tail -60 /tmp/vitest.log | node .github/ci-annotate.mjs
+          fi
+          [ "$passed" = 1 ]
 
       - name: 构建网页端产物
         run: npm run build:web
