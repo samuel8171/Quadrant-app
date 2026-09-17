@@ -38,3 +38,22 @@
 - **两次独立的 `page.mouse.click` 不会让浏览器合成 `dblclick`**（clickCount 各为 1）；鼠标双击用 `page.mouse.dblclick`，触摸双击用两次 `page.touchscreen.tap`。触摸长按/拖动需走 CDP `Input.dispatchTouchEvent`。
 - `addInitScript` 执行时 `document.documentElement` 可能尚未创建，MutationObserver 要轮询挂载，否则整段注入脚本会因抛错而失效。
 - 已知时序陷阱：触屏轻触后浏览器会在 `pointerup` **之后**补发 `mousedown`（其默认动作会抢走焦点，曾导致"输入框闪现即消失"）。
+
+## 布局密度探针（量化"可操作面积"，同一个开发服务器）
+
+讨论移动端空间不足时不要靠读 CSS 估数，直接取实测像素：
+
+```
+node scripts/mobile-density-probe.mjs --presets 0,12 --out docs/probes/mobile-density.md
+```
+
+- 在 375×667 / 390×844 / 430×932 三种手机视口下，播种数据后逐页量出：四象限画布像素、周视图单屏可见天数、日视图时间轴可见小时数与预设面板占位、目标卡单屏可见张数与标题实际可用宽度、复盘各区块高度、底部导航条高。
+- 报告含「强制收起」「预设抽屉化」两个反事实场景，用于量化某次改动的收益上限。
+- `--dump-goal-card` 打印目标卡子元素明细（排查"标题被挤成竖排"这类压缩问题）。
+- `--shots <目录>` 每页存一张截图（`day-drawer-*` 含抽屉收起/展开两态），用于目视核对版式。
+- 无需真实云凭据：直接往 `localStorage['quadrant-web-data-v2']` 播种，`AppData` 形状见 `src/shared/types.ts`。
+- **写作陷阱（一族的两个实例，改样式前先查这两条）**：
+  1. 作者样式里的 `display: flex` 会盖掉 UA 样式表的 `[hidden] { display: none }`。凡是用 `hidden` 属性做显示/隐藏的组件，都要显式补 `[hidden] { display: none }`，否则属性写了等于没写（`.preset-list` 的折叠按钮曾因此整体失效）。
+  2. 单类选择器同权重时**源序在后者胜出**。写给通用类（`.icon-btn`、`.mobile-only` 等）加覆盖的规则时，必须提权到 `.父类 .目标类`，否则被文件后半段的通用类盖掉（`.goal-more { display: none }` 曾被 `theme.css:357` 的 `.icon-btn { display: inline-flex }` 盖掉，桌面端误显示「…」按钮）。**别只看选择器名字像不像覆盖，要 `grep -n` 确认两条规则的先后。**
+- 改完布局后用 `--shots` 存几张截图目视一遍：数值全对但版式崩掉（按钮被挤到换行、文字被 sticky 元素裁掉）只有截图看得见，本项目已两次靠截图发现纯读数看不见的问题。
+

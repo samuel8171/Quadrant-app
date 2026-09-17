@@ -294,6 +294,29 @@ body {
   color: var(--text-secondary);
 }
 
+/*
+ * 卡片右侧的操作区。宽屏三个图标平铺即可；窄屏放不下——曾经四个 44px 图标加勾选框
+ * 吃掉 220px，把 .goal-title 挤成 25px 宽、95px 高的竖排（实测见
+ * docs/probes/mobile-density.md），所以窄屏改由 "…" 收进底部菜单。
+ */
+.goal-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+}
+
+.goal-more {
+  /* 必须带祖先选择器：`.icon-btn` 的 display 定义在本文件更后面（第 356 行），
+     同为单类选择器时后者胜出，只写 `.goal-more { display: none }` 会被它盖掉。 */
+  display: none;
+}
+
+.goal-card .goal-more,
+.subtask-card .goal-more {
+  display: none;
+}
+
 .goal-check {
   position: relative;
   display: inline-flex;
@@ -1414,6 +1437,15 @@ body {
   padding-right: 2px;
 }
 
+/*
+ * `hidden` 属性靠 UA 样式表的 `[hidden] { display: none }` 生效，而上面这条
+ * `display: flex` 是作者样式，优先级更高——不显式补这一条，`hidden` 写了等于
+ * 没写，折叠按钮点下去面板纹丝不动（实测跨端失效，见 docs/probes/mobile-density.md）。
+ */
+.preset-list[hidden] {
+  display: none;
+}
+
 .preset-empty {
   color: var(--text-secondary);
   font-size: 12px;
@@ -2255,7 +2287,12 @@ body {
 
 @media (max-width: 767px) {
   :root {
-    --mobile-nav-height: 78px;
+    /*
+     * 78px 的导航条是纯占用：图标 20 + 文字 11，46px 的内容高已经够用，
+     * 剩下面全是圆角与内边距。收到 58px 后每个页面的内容区多出 20px
+     * （入口仍是 46px，不低于 44px 触摸下限）。
+     */
+    --mobile-nav-height: 58px;
   }
 
   body {
@@ -2281,11 +2318,11 @@ body {
     width: auto;
     min-width: 0;
     height: var(--mobile-nav-height);
-    padding: 7px 8px calc(7px + env(safe-area-inset-bottom));
+    padding: 6px 8px calc(6px + env(safe-area-inset-bottom));
     display: block;
     background: rgba(31, 34, 40, 0.78);
     border: 1px solid rgba(255, 255, 255, 0.12);
-    border-radius: 26px;
+    border-radius: 22px;
     box-shadow: 0 12px 36px rgba(0, 0, 0, 0.42), inset 0 1px 0 rgba(255,255,255,0.1);
     backdrop-filter: blur(24px) saturate(150%);
     -webkit-backdrop-filter: blur(24px) saturate(150%);
@@ -2297,7 +2334,7 @@ body {
   }
 
   .sync-button,
-  .login-button { position: absolute; right: 8px; top: 7px; height: 44px; min-width: 44px; width: 44px; padding: 4px 2px; flex-direction: column; font-size: 10px; }
+  .login-button { position: absolute; right: 8px; top: 6px; height: 46px; min-width: 44px; width: 44px; padding: 4px 2px; flex-direction: column; font-size: 10px; }
   .upload-button { display: none; }
   .sync-message { position: fixed; right: 14px; bottom: calc(var(--mobile-nav-height) + 18px); z-index: 110; }
 
@@ -2346,13 +2383,14 @@ body {
   .weekly-page,
   .review-page,
   .day-page {
-    padding: 18px 14px calc(24px + var(--mobile-nav-height) + env(safe-area-inset-bottom));
+    padding: 12px 12px calc(16px + var(--mobile-nav-height) + env(safe-area-inset-bottom));
     overflow-x: hidden;
   }
 
   .review-header {
     align-items: flex-start;
     flex-wrap: wrap;
+    gap: 6px;
   }
 
   .review-header-actions {
@@ -2426,7 +2464,6 @@ body {
 
   .review-textarea {
     min-height: 96px;
-    max-height: max(96px, calc(100dvh - 575px));
     padding: 12px;
     font-size: 16px;
     overflow-y: auto;
@@ -2457,11 +2494,42 @@ body {
 
   .page-header {
     gap: 10px;
-    margin-bottom: 16px;
+    margin-bottom: 10px;
   }
 
   .page-header h1 {
-    font-size: 23px;
+    font-size: 19px;
+  }
+
+  /*
+   * 四象限页头改为悬浮条：它本身不承载交互（只是一个标题 + 一行提示），
+   * 却在 667px 高的屏上独占 49px（页头 31 + 上内边距 18）。改成浮层后这 49px
+   * 全部还给画布（实测 500 → 549px）。整条 pointer-events: none 穿透给画布，
+   * 保证浮层覆盖区域照样能拖动、双击新建。
+   */
+  .quadrant-header {
+    position: absolute;
+    top: 12px;
+    left: 12px;
+    right: 12px;
+    z-index: 5;
+    margin-bottom: 0;
+    padding: 4px 10px;
+    border-radius: 12px;
+    background: rgba(12, 14, 18, 0.5);
+    pointer-events: none;
+    backdrop-filter: blur(10px) saturate(140%);
+    -webkit-backdrop-filter: blur(10px) saturate(140%);
+  }
+
+  /* 悬浮条需要一个定位祖先。 */
+  .quadrant-page {
+    position: relative;
+  }
+
+  /* 提示条是首次使用才需要的信息，4 秒后淡出，把标题栏也让给画布。 */
+  .hint-pill.mobile-only {
+    animation: hint-fade 0.5s ease 4s forwards;
   }
 
   .hint-pill {
@@ -2518,7 +2586,6 @@ body {
     overflow: hidden;
     padding-bottom: 4px;
   }
-
   .week-grid {
     grid-template-columns: 52px repeat(7, minmax(var(--mobile-week-day-min-width, 96px), 1fr));
     width: 100%;
@@ -2554,11 +2621,50 @@ body {
     background: rgba(12, 14, 18, 0.96);
   }
 
+  /*
+   * 预设面板在手机上改为「底部悬浮抽屉」：脱离 .day-body 的纵向流（否则它会
+   * 把时间轴挤到只剩 135px，见 docs/probes/mobile-density.md），默认只露一条
+   * 46px 把手，展开时以半透明浮层**盖**在时间轴上而不是挤压它。
+   * 与 .modal / .context-menu 同一套视觉规则，保持一致。
+   */
   .preset-panel {
-    width: 100%;
+    position: fixed;
+    left: 12px;
+    right: 12px;
+    bottom: calc(10px + var(--mobile-nav-height) + env(safe-area-inset-bottom));
+    z-index: 90;
+    width: auto;
     min-width: 0;
-    max-height: none;
-    padding: 10px 12px;
+    max-height: min(300px, 46dvh);
+    padding: 0;
+    border-radius: 20px;
+    background: rgba(31, 34, 40, 0.92);
+    box-shadow: 0 12px 36px rgba(0, 0, 0, 0.42), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+    backdrop-filter: blur(24px) saturate(150%);
+    -webkit-backdrop-filter: blur(24px) saturate(150%);
+    overflow: hidden;
+  }
+
+  .preset-head {
+    height: 46px;
+    margin-bottom: 0;
+    padding: 0 4px 0 12px;
+  }
+
+  .preset-panel.expanded .preset-head {
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  }
+
+  .preset-toggle {
+    min-height: 44px;
+  }
+
+  .preset-toggle svg {
+    transition: transform 0.15s ease;
+  }
+
+  .preset-panel.collapsed .preset-toggle svg {
+    transform: rotate(-90deg);
   }
 
   .day-body {
@@ -2566,22 +2672,74 @@ body {
     gap: 12px;
   }
 
+  /*
+   * 390px 宽时「返回 + 两个翻页 + 日期 + 添加」正好挤爆：添加按钮被压到换行，
+   * 工具条从 44px 涨到 48px。日期让出弹性宽度并省略号截断，其余按钮一律不收缩。
+   */
+  .day-topbar {
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+
+  .day-title {
+    flex: 1;
+    min-width: 0;
+    margin: 0 4px 0 2px;
+    font-size: 15px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .day-add-btn {
+    flex: none;
+    white-space: nowrap;
+    padding: 7px 10px;
+  }
+
   .day-scroll {
     min-height: 0;
     width: 100%;
+    /* 收起态的把手盖在时间轴底部之上：留出等量余量让最后几条日程能滚到把手之外。 */
+    padding-bottom: calc(46px + 10px);
   }
 
-  .preset-panel.collapsed {
-    min-height: 58px;
-  }
-
+  /* 抽屉内预设改横向滚动条：一行铺开若干张，取代原先 260px 高的纵向列表。 */
   .preset-list {
-    max-height: 260px;
+    flex: 0 0 auto;
+    flex-direction: row;
+    max-height: none;
+    overflow-x: auto;
+    overflow-y: hidden;
+    gap: 8px;
+    padding: 10px 12px 12px;
+    scroll-snap-type: x proximity;
+    overscroll-behavior-x: contain;
   }
 
   .preset-card {
-    min-height: 64px;
+    flex: 0 0 136px;
+    min-height: 0;
+    height: auto;
     cursor: pointer;
+    scroll-snap-align: start;
+  }
+
+  /*
+   * 触屏没有 hover，桌面端的「悬停才显示操作区」等于把编辑/删除彻底藏起来。
+   * 抽屉里把两个 44px 操作按钮常驻成一行（卡片宽 136 − 内边距 24 = 112 ≥ 44×2）。
+   */
+  .preset-actions {
+    position: static;
+    display: flex;
+    justify-content: flex-end;
+    gap: 0;
+    padding: 0;
+    background: none;
+  }
+
+  .preset-title {
+    padding-right: 0;
   }
 
   .goal-columns {
@@ -2604,6 +2762,16 @@ body {
   .subtask-card .icon-btn,
   .group-card-head .icon-btn {
     flex: none;
+  }
+
+  /* 窄屏：三个图标收进 "…"（点击后从底部弹出），只在卡片上留一个 44px 控件。 */
+  .goal-actions {
+    display: none;
+  }
+
+  .goal-card .goal-more,
+  .subtask-card .goal-more {
+    display: inline-flex;
   }
 
   .goal-check,
@@ -2750,6 +2918,10 @@ body {
 @keyframes page-switch-up-mobile {
   from { opacity: 0; transform: translateY(12px); }
   to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes hint-fade {
+  to { opacity: 0; visibility: hidden; }
 }
 
 @keyframes page-switch-down-mobile {

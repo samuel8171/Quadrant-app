@@ -5,6 +5,7 @@ import {
   ChevronRight,
   Info,
   Lock,
+  MoreHorizontal,
   Mountain,
   Pencil,
   Plus,
@@ -13,6 +14,7 @@ import {
 import type { Goal, Subtask } from '../../../shared/types'
 import ConfirmDialog from '../components/ConfirmDialog'
 import GoalDetailDialog from '../components/GoalDetailDialog'
+import { useClosing } from '../hooks/useClosing'
 import {
   MAX_GROUPS,
   canCheckSubtask,
@@ -62,6 +64,8 @@ function GoalColumn({
   const [editingText, setEditingText] = useState('')
   const [detailId, setDetailId] = useState<string | null>(null)
   const [deletePendingId, setDeletePendingId] = useState<string | null>(null)
+  /** 窄屏上「…」展开的目标，其操作走底部菜单。 */
+  const [moreForId, setMoreForId] = useState<string | null>(null)
 
   const submitNew = (): void => {
     if (draft.trim()) addGoal(type, draft)
@@ -78,6 +82,7 @@ function GoalColumn({
   const deletePendingGoal = deletePendingId
     ? goals.find((g) => g.id === deletePendingId)
     : undefined
+  const moreGoal = moreForId ? goals.find((g) => g.id === moreForId) : undefined
 
   return (
     <section className={`goal-column ${accentClass}`}>
@@ -116,19 +121,7 @@ function GoalColumn({
                 {progressOf(goal).done}/{progressOf(goal).total}
               </span>
             )}
-            <button className="icon-btn" title="详细信息" onClick={() => setDetailId(goal.id)}>
-              <Info size={15} />
-            </button>
-            <button
-              className="icon-btn"
-              title="编辑"
-              onClick={() => {
-                setEditingId(goal.id)
-                setEditingText(goal.title)
-              }}
-            >
-              <Pencil size={15} />
-            </button>
+            {/* 「展开子目标」是长目标的高频入口，按约定留在卡片上；其余三个收进 "…"。 */}
             {goal.type === 'long' && (
               <button
                 className="icon-btn"
@@ -138,12 +131,35 @@ function GoalColumn({
                 <ChevronRight size={16} />
               </button>
             )}
+            <span className="goal-actions">
+              <button className="icon-btn" title="详细信息" onClick={() => setDetailId(goal.id)}>
+                <Info size={15} />
+              </button>
+              <button
+                className="icon-btn"
+                title="编辑"
+                onClick={() => {
+                  setEditingId(goal.id)
+                  setEditingText(goal.title)
+                }}
+              >
+                <Pencil size={15} />
+              </button>
+              <button
+                className="icon-btn danger"
+                title="删除"
+                onClick={() => setDeletePendingId(goal.id)}
+              >
+                <Trash2 size={15} />
+              </button>
+            </span>
             <button
-              className="icon-btn danger"
-              title="删除"
-              onClick={() => setDeletePendingId(goal.id)}
+              className="icon-btn goal-more"
+              title="更多操作"
+              aria-haspopup="menu"
+              onClick={() => setMoreForId(goal.id)}
             >
-              <Trash2 size={15} />
+              <MoreHorizontal size={16} />
             </button>
           </div>
         ))}
@@ -182,7 +198,75 @@ function GoalColumn({
           onCancel={() => setDeletePendingId(null)}
         />
       )}
+      {moreGoal && (
+        <OverflowMenu
+          onClose={() => setMoreForId(null)}
+          items={[
+            { label: '详细信息', icon: Info, onSelect: () => setDetailId(moreGoal.id) },
+            {
+              label: '编辑',
+              icon: Pencil,
+              onSelect: () => {
+                setEditingId(moreGoal.id)
+                setEditingText(moreGoal.title)
+              }
+            },
+            { label: '删除', icon: Trash2, danger: true, onSelect: () => setDeletePendingId(moreGoal.id) }
+          ]}
+        />
+      )}
     </section>
+  )
+}
+
+interface OverflowItem {
+  label: string
+  icon: typeof Info
+  danger?: boolean
+  onSelect: () => void
+}
+
+/**
+ * 窄屏卡片操作的弹出菜单。刻意复用 `.context-menu` / `.context-item`：
+ * 移动端断点内这两个类本来就是"贴底弹出 + 48px 行高"的形态，与时间轴卡片菜单一致，
+ * 无需再造一套样式。宽屏不渲染它（`.goal-more` 默认 display:none）。
+ */
+function OverflowMenu({
+  items,
+  onClose
+}: {
+  items: OverflowItem[]
+  onClose: () => void
+}): JSX.Element {
+  const { closing, close } = useClosing(onClose, 140)
+
+  useEffect(() => {
+    const onDown = (e: PointerEvent): void => {
+      const target = e.target as Element | null
+      if (target && target.closest('.context-menu')) return
+      close()
+    }
+    window.addEventListener('pointerdown', onDown)
+    return () => window.removeEventListener('pointerdown', onDown)
+  }, [close])
+
+  return (
+    <div className={`context-menu${closing ? ' closing' : ''}`} role="menu">
+      {items.map(({ label, icon: Icon, danger, onSelect }) => (
+        <button
+          key={label}
+          role="menuitem"
+          className={`context-item${danger ? ' danger' : ''}`}
+          onClick={() => {
+            onSelect()
+            close()
+          }}
+        >
+          <Icon size={15} />
+          {label}
+        </button>
+      ))}
+    </div>
   )
 }
 
@@ -409,6 +493,11 @@ function GroupCard({
   const [draft, setDraft] = useState('')
   const [renaming, setRenaming] = useState(false)
   const [name, setName] = useState('')
+  const [moreSubtaskId, setMoreSubtaskId] = useState<string | null>(null)
+
+  const moreSubtask = moreSubtaskId
+    ? subtasks.find((item) => item.id === moreSubtaskId)
+    : undefined
 
   const submit = (): void => {
     if (draft.trim()) onAdd(draft)
@@ -505,14 +594,24 @@ function GroupCard({
               ) : (
                 <span className="goal-title">{subtask.title}</span>
               )}
-              <button className="icon-btn" title="详细信息" onClick={() => onDetail(subtask)}>
-                <Info size={15} />
-              </button>
-              <button className="icon-btn" title="编辑" onClick={() => onStartEdit(subtask)}>
-                <Pencil size={15} />
-              </button>
-              <button className="icon-btn danger" title="删除" onClick={() => onDelete(subtask)}>
-                <Trash2 size={15} />
+              <span className="goal-actions">
+                <button className="icon-btn" title="详细信息" onClick={() => onDetail(subtask)}>
+                  <Info size={15} />
+                </button>
+                <button className="icon-btn" title="编辑" onClick={() => onStartEdit(subtask)}>
+                  <Pencil size={15} />
+                </button>
+                <button className="icon-btn danger" title="删除" onClick={() => onDelete(subtask)}>
+                  <Trash2 size={15} />
+                </button>
+              </span>
+              <button
+                className="icon-btn goal-more"
+                title="更多操作"
+                aria-haspopup="menu"
+                onClick={() => setMoreSubtaskId(subtask.id)}
+              >
+                <MoreHorizontal size={16} />
               </button>
             </div>
           )
@@ -533,6 +632,16 @@ function GroupCard({
           添加子目标
         </button>
       </div>
+      {moreSubtask && (
+        <OverflowMenu
+          onClose={() => setMoreSubtaskId(null)}
+          items={[
+            { label: '详细信息', icon: Info, onSelect: () => onDetail(moreSubtask) },
+            { label: '编辑', icon: Pencil, onSelect: () => onStartEdit(moreSubtask) },
+            { label: '删除', icon: Trash2, danger: true, onSelect: () => onDelete(moreSubtask) }
+          ]}
+        />
+      )}
     </section>
   )
 }

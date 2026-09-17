@@ -9,3 +9,5 @@ web-dist/
 .worktrees/
 # QA 用的浏览器 profile（可再生产生，体积大）
 docs/.qa-*/
+# 会话本地的助手工作区（记忆、任务快照等），不属于产品源码
+.workbuddy/

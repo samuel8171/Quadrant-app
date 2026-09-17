@@ -22,9 +22,15 @@ export default function PresetPanel({
   onUse,
   onDelete
 }: Props): JSX.Element {
-  const [expanded, setExpanded] = useState(true)
   const [viewportWidth, setViewportWidth] = useState(() =>
     typeof window === 'undefined' ? 1024 : window.innerWidth
+  )
+  /*
+   * 窄屏默认收起。展开态的抽屉是浮层，会盖住时间轴下部约 190px（实测），
+   * 一进来就默认展开等于白送掉这些像素；桌面端面板在侧栏里不遮挡任何东西，仍默认展开。
+   */
+  const [expanded, setExpanded] = useState(
+    () => !shouldUsePresetOnTap(typeof window === 'undefined' ? 1024 : window.innerWidth)
   )
   const sorted = [...presets].sort((a, b) => a.createdAt.localeCompare(b.createdAt))
 
@@ -40,7 +46,8 @@ export default function PresetPanel({
     <aside className={`preset-panel${expanded ? ' expanded' : ' collapsed'}`}>
       <div className="preset-head">
         <button className="preset-toggle" onClick={() => setExpanded((value) => !value)} aria-expanded={expanded}>
-          <h3>事件预设</h3>
+          {/* 收起态只剩这条把手，带上条数才知道抽屉里有没有东西。 */}
+          <h3>事件预设{presets.length > 0 ? ` · ${presets.length}` : ''}</h3>
           <ChevronDown size={16} />
         </button>
         <button className="icon-btn" title="新建预设" aria-label="新建预设" onClick={onAdd}>
@@ -62,7 +69,11 @@ export default function PresetPanel({
               style={{
                 background: withAlpha(preset.color, 0.12),
                 borderColor: withAlpha(preset.color, 0.45),
-                height: Math.min(260, Math.max(56, 56 + (preset.durationMin / 60) * 24))
+                // 高度只在桌面端随预设时长伸缩；手机抽屉里的卡片是固定尺寸的横排条目，
+                // 尺寸交给 CSS（theme.css 的 .preset-card），内联高度会盖掉它。
+                height: isMobile
+                  ? undefined
+                  : Math.min(260, Math.max(56, 56 + (preset.durationMin / 60) * 24))
               }}
               onDragStart={(e) => {
                 // 时间轴在 dragover 阶段读不到 dataTransfer 内容，靠这个登记簿反查预设。
