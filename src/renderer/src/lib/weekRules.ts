@@ -114,8 +114,16 @@ export function eventTopPx(startMin: number, hourPx: number): number {
   return ((startMin - DAY_START_MIN) / 60) * hourPx
 }
 
+/**
+ * 事件块高度：**精确对应它声明的时间区间**，不留内缩。
+ *
+ * 曾经这里减 2px 当作"相邻块之间的呼吸缝"，但那样 15:00-16:00 的块会停在
+ * 15:58 而不是 16:00，块体与标尺线对不上（实测 1 小时块只有 46px，见
+ * docs/probes/axis-geometry-before.md）。分隔改由块体自身的 1px 描边与
+ * 6px 圆角承担，几何回到真实值。
+ */
 export function eventHeightPx(startMin: number, endMin: number, hourPx: number): number {
-  return Math.max(4, ((endMin - startMin) / 60) * hourPx - 2)
+  return Math.max(4, ((endMin - startMin) / 60) * hourPx)
 }
 
 export function minuteFromOffsetY(y: number, hourPx: number): number {

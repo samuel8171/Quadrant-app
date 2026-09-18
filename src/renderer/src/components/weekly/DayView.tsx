@@ -345,6 +345,8 @@ export default function DayView({
             ref={canvasRef}
             onPointerDownCapture={(e) => { lastPointerTypeRef.current = e.pointerType }}
             className={`day-canvas${dropPreview ? ' drop-active' : ''}`}
+            /* 画布总高与左侧标尺列的内容高严格相等，两者一起决定滚动高度。 */
+            style={{ height: CONTENT_H }}
             onPointerDown={gestures.onPointerDown}
             onPointerMove={gestures.onPointerMove}
             onPointerUp={gestures.onPointerUp}

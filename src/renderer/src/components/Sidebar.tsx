@@ -105,9 +105,14 @@ export default function Sidebar(): JSX.Element {
         <span className="brand-name">象限</span>
       </div>
       <nav className="nav">
+        {/*
+         * 位移量交给 CSS：同一个指示块，桌面端沿纵向滑动（46px/项），
+         * 手机端底部栏沿横向滑动（一格宽 + gap）。JS 只负责给出"第几项"，
+         * 避免把两套布局尺寸都写进组件里。
+         */}
         <span
           className="nav-indicator"
-          style={{ transform: `translateY(${activeIndex * 46}px)` }}
+          style={{ '--nav-index': activeIndex } as React.CSSProperties}
         />
         {NAV.map(({ page: p, label, icon: Icon }) => (
           <button

@@ -158,6 +158,11 @@ body {
   background: linear-gradient(135deg, #2d3748, #3a4a5a);
   border: 1px solid var(--accent);
   box-shadow: 0 0 12px rgba(77, 163, 255, 0.35);
+  /*
+   * 位移由 --nav-index 驱动，桌面端一个项 40px 高 + 6px gap = 46px。
+   * 手机端在各自的媒体查询里把同一变量解释成横向步长。
+   */
+  transform: translateY(calc(var(--nav-index, 0) * 46px));
   transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
   pointer-events: none;
 }
@@ -1315,6 +1320,13 @@ body {
 }
 
 .day-scroll {
+  /*
+   * 时间轴的两个几何常量在这里定义一次。它们必须与 src/renderer/src/lib/weekRules.ts
+   * 的 DAY_HOUR_PX / DAY_PAD_PX 保持一致，改一处就要改两处（TS 里改、这里同步）。
+   * 画布总高不在这里写死，由 DayView 用 CONTENT_H（= 2×DAY_PAD_PX + 17×DAY_HOUR_PX）内联给出。
+   */
+  --day-hour: 48px;
+  --day-pad: 10px;
   flex: 1;
   min-width: 0;
   overflow-y: auto;
@@ -1328,13 +1340,23 @@ body {
 .day-gutter {
   width: 52px;
   flex: none;
+  /*
+   * 必须显式 flex-start。默认的 stretch 会把这个「没有自身高度」的列拉伸到
+   * 容器的**内容盒高度**（= 可视高 − padding），而 .day-canvas 有确定高度、可以
+   * 溢出滚动。结果就是滚动到底部时标尺底色提前断掉：桌面 1440×900 少 25px、
+   * 手机 390×844 少 180px（缺口大小 = 内容高 − 可视内容盒高，所以两端不一样）。
+   * 改用 flex-start 后高度回归内容自身（padding-top + 17×48 + 10 = 836px），
+   * 与 .day-canvas 的 CONTENT_H 完全相等。
+   * 复现与量化：node scripts/axis-geometry-probe.mjs
+   */
+  align-self: flex-start;
   border-right: 1px solid var(--border);
   background: rgba(255, 255, 255, 0.015);
-  padding-top: 10px;
+  padding-top: var(--day-pad);
 }
 
 .day-hour-label {
-  height: 48px;
+  height: var(--day-hour);
   display: flex;
   align-items: flex-start;
   justify-content: flex-end;
@@ -1348,7 +1370,7 @@ body {
   position: relative;
   flex: 1;
   min-width: 0;
-  height: 816px;
+  /* 高度由 DayView 内联给出（CONTENT_H），不再在这里写死。 */
   touch-action: none;
 }
 
@@ -1422,9 +1444,27 @@ body {
   cursor: pointer;
 }
 
+/*
+ * 桌面端的标题是纯标题，不是折叠控件：面板在侧栏里不遮挡任何东西，列表常显。
+ * 写成 .preset-toggle.static（两个类）把优先级抬到 (0,2,0)，才能压过上面那条
+ * cursor: pointer——同一元素上的单类选择器同权重时是按源序决胜负的，
+ * 直接再写一条 .preset-toggle 会输。
+ */
+.preset-toggle.static {
+  cursor: default;
+}
+
 .preset-head h3 {
   margin: 0;
   font-size: 14px;
+}
+
+/* 折叠外层：只管高度与伸缩，排列交给里面的 .preset-list。 */
+.preset-collapse {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .preset-list {
@@ -1435,15 +1475,6 @@ body {
   flex-direction: column;
   gap: 10px;
   padding-right: 2px;
-}
-
-/*
- * `hidden` 属性靠 UA 样式表的 `[hidden] { display: none }` 生效，而上面这条
- * `display: flex` 是作者样式，优先级更高——不显式补这一条，`hidden` 写了等于
- * 没写，折叠按钮点下去面板纹丝不动（实测跨端失效，见 docs/probes/mobile-density.md）。
- */
-.preset-list[hidden] {
-  display: none;
 }
 
 .preset-empty {
@@ -2345,8 +2376,24 @@ body {
     gap: 2px;
   }
 
+  /*
+   * 底部栏沿用与左侧栏**同一个**指示块和同一条 transition，只是把滑动轴从纵向
+   * 换成横向。translateX 里的百分比相对元素自身宽度，所以「自身宽 + gap」正好
+   * 等于 grid 一格的步长，4 列等分时不需要知道任何像素值。
+   */
   .nav-indicator {
-    display: none;
+    display: block;
+    right: auto;
+    top: 0;
+    bottom: 0;
+    height: auto;
+    width: calc((100% - 6px) / 4);
+    border-radius: 20px;
+    background: rgba(77, 163, 255, 0.18);
+    background-image: none;
+    border: 1px solid rgba(77, 163, 255, 0.55);
+    box-shadow: 0 0 18px rgba(77, 163, 255, 0.14);
+    transform: translateX(calc(var(--nav-index, 0) * (100% + 2px)));
   }
 
   .nav-item {
@@ -2371,11 +2418,15 @@ body {
     height: 20px;
   }
 
+  /*
+   * 高亮完全交给指示块（与桌面端同一套逻辑），激活项本身交回透明：
+   * 否则两层高亮叠在一起，指示块滑走之后旧项还会留一圈残留底色。
+   */
   .nav-item.active {
     color: #fff;
-    background: rgba(77, 163, 255, 0.18);
-    border-color: rgba(77, 163, 255, 0.55);
-    box-shadow: 0 0 18px rgba(77, 163, 255, 0.14);
+    background: transparent;
+    border-color: transparent;
+    box-shadow: none;
   }
 
   .page,
@@ -2704,23 +2755,71 @@ body {
     padding-bottom: calc(46px + 10px);
   }
 
+  /*
+   * 展开/收起走 grid-template-rows 0fr → 1fr 的高度过渡。
+   * 为什么不用 max-height：max-height 的过渡是按"猜的那个上限"计时的，内容比上限矮
+   * 就会出现"先动完再干等"，且卡顿感随内容长度变化；fr 是在计算后的真实高度之间插值，
+   * 时长恒定、不需要 JS 量 scrollHeight。
+   * 内层 .preset-list 的 min-height: 0 是这套写法的前提，缺了它轨道压不到 0。
+   */
+  .preset-collapse {
+    display: grid;
+    grid-template-rows: 1fr;
+    flex: 0 0 auto;
+    transition: grid-template-rows 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+    /*
+     * 必须裁剪：内层 .preset-list 有 10/12px 的纵向内边距，而 border-box 下 padding
+     * 是硬性的——轨道压到 0fr 只能把元素盒高变成 0，padding 仍占位，收起后会长出
+     * 22px 的残留（实测过）。在轨道外层裁一刀才是干净的零高度。
+     */
+    overflow: hidden;
+  }
+
+  .preset-panel.collapsed .preset-collapse {
+    grid-template-rows: 0fr;
+  }
+
   /* 抽屉内预设改横向滚动条：一行铺开若干张，取代原先 260px 高的纵向列表。 */
   .preset-list {
-    flex: 0 0 auto;
+    min-height: 0;
     flex-direction: row;
     max-height: none;
     overflow-x: auto;
     overflow-y: hidden;
     gap: 8px;
-    padding: 10px 12px 12px;
+    /*
+     * 这里**不能写 padding**。padding 属于元素自身的盒子，border-box 下哪怕高度被
+     * 0fr 轨道压成 0，这 10/12px 内边距依然是硬性的最小外尺寸，收起后会残留 22px
+     * （实测过）。留白改用下面的伪元素与卡片外边距，它们属于内容，可以被裁掉。
+     */
+    padding: 0;
     scroll-snap-type: x proximity;
+    scroll-padding-left: 12px;
     overscroll-behavior-x: contain;
+  }
+
+  /* 列表首尾留白：伪元素同样是 flex item，收起时随内容一起被裁剪。 */
+  .preset-list::before,
+  .preset-list::after {
+    content: '';
+    flex: 0 0 12px;
+  }
+
+  /*
+   * 收起后列表必须脱离焦点序列，否则 Tab 会走进看不见的卡片。visibility 的切换
+   * 延到过渡结束（0.28s）才发生，动画进行期间内容仍然可见，不会出现"边收边消失"。
+   */
+  .preset-panel.collapsed .preset-list {
+    visibility: hidden;
+    transition: visibility 0s linear 0.28s;
   }
 
   .preset-card {
     flex: 0 0 136px;
     min-height: 0;
     height: auto;
+    /* 抽屉的纵向留白放在这里（而不是列表的 padding），见 .preset-list 的说明。 */
+    margin: 10px 0 12px;
     cursor: pointer;
     scroll-snap-align: start;
   }

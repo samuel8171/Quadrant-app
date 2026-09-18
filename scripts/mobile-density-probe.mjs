@@ -351,19 +351,37 @@ for (const vp of viewports) {
         return {
           collapsed: panel ? panel.className.includes('collapsed') : null,
           hasHidden: list ? list.hasAttribute('hidden') : null,
-          display: list ? getComputedStyle(list).display : ''
+          display: list ? getComputedStyle(list).display : '',
+          /* 真值判据：收起是否生效看列表**实际高度**，不看 display。
+             现在的收起是 grid 轨道归零 + 延迟 visibility，display 仍是 flex。 */
+          listHeight: list ? Math.round(list.getBoundingClientRect().height) : -1,
+          visibility: list ? getComputedStyle(list).visibility : ''
         }
       })
 
+    /* 桌面端不存在收起态（列表恒显），折叠判据只在窄屏成立。 */
+    const narrow = vp.w <= 767
+
     const initial = await panelState()
-    record(label, tag, '预设抽屉·折叠', '默认态是否收起', initial.collapsed ? 1 : 0, '（1=收起）')
-    record(label, tag, '预设抽屉·折叠', '默认态 list display', initial.display === 'none' ? 1 : 0, '（1=none）')
+    if (narrow) {
+      record(label, tag, '预设抽屉·折叠', '默认态是否收起', initial.collapsed ? 1 : 0, '（1=收起）')
+      record(label, tag, '预设抽屉·折叠', '默认态列表高', initial.listHeight)
+    } else {
+      record(label, tag, '预设抽屉·折叠', '桌面端默认列表高', initial.listHeight)
+    }
     await shot(page, `day-drawer-collapsed-${scenario}p`, vp)
 
     await page.locator('.preset-toggle').click()
     await page.waitForTimeout(420)
     const opened = await panelState()
-    record(label, tag, '预设抽屉·折叠', '第 1 次点击后已展开', !opened.collapsed && opened.display !== 'none' ? 1 : 0, '（1=展开）')
+    record(
+      label,
+      tag,
+      narrow ? '预设抽屉·折叠' : '预设抽屉·桌面端',
+      narrow ? '第 1 次点击后已展开' : '点击标题后列表是否保持',
+      !opened.collapsed && opened.listHeight > 0 ? 1 : 0,
+      narrow ? '（1=展开且列表有高）' : '（1=保持展开）'
+    )
     await shot(page, `day-drawer-expanded-${scenario}p`, vp)
     const expandMetrics = await collect(page, TARGETS.day)
     const occlOpen = await occl()
@@ -374,12 +392,25 @@ for (const vp of viewports) {
     await page.locator('.preset-toggle').click()
     await page.waitForTimeout(420)
     const closed = await panelState()
-    record(label, tag, '预设抽屉·折叠', '第 2 次点击后已收起', closed.collapsed && closed.display === 'none' ? 1 : 0, '（1=收起）')
-    const collapseMetrics = await collect(page, TARGETS.day)
-    const occlClosed = await occl()
-    record(label, tag, '周计划·日视图(收起态)', '预设面板高', collapseMetrics.panel.h)
-    record(label, tag, '周计划·日视图(收起态)', '时间轴未被遮挡高', occlClosed.clear)
-    record(label, tag, '周计划·日视图(收起态)', '未被遮挡时可点小时数', occlClosed.clear / DAY_HOUR_PX, '小时')
+    if (narrow) {
+      record(
+        label,
+        tag,
+        '预设抽屉·折叠',
+        '第 2 次点击后已收起',
+        closed.collapsed && closed.listHeight === 0 ? 1 : 0,
+        '（1=收起且列表高 0）'
+      )
+      record(label, tag, '预设抽屉·折叠', '收起后列表 visibility', closed.visibility === 'hidden' ? 1 : 0, '（1=hidden）')
+    }
+    /* 桌面端没有收起态，这三条只对窄屏有意义。 */
+    if (narrow) {
+      const collapseMetrics = await collect(page, TARGETS.day)
+      const occlClosed = await occl()
+      record(label, tag, '周计划·日视图(收起态)', '预设面板高', collapseMetrics.panel.h)
+      record(label, tag, '周计划·日视图(收起态)', '时间轴未被遮挡高', occlClosed.clear)
+      record(label, tag, '周计划·日视图(收起态)', '未被遮挡时可点小时数', occlClosed.clear / DAY_HOUR_PX, '小时')
+    }
   }
 
   /* ---------- 目标 ---------- */

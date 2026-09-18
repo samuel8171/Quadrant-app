@@ -52,10 +52,38 @@ node scripts/mobile-density-probe.mjs --presets 0,12 --out docs/probes/mobile-de
 - `--dump-goal-card` 打印目标卡子元素明细（排查"标题被挤成竖排"这类压缩问题）。
 - `--shots <目录>` 每页存一张截图（`day-drawer-*` 含抽屉收起/展开两态），用于目视核对版式。
 - 无需真实云凭据：直接往 `localStorage['quadrant-web-data-v2']` 播种，`AppData` 形状见 `src/shared/types.ts`。
-- **写作陷阱（一族的两个实例，改样式前先查这两条）**：
+- **写作陷阱（一族的三个实例，改样式前先查这三条）**：
   1. 作者样式里的 `display: flex` 会盖掉 UA 样式表的 `[hidden] { display: none }`。凡是用 `hidden` 属性做显示/隐藏的组件，都要显式补 `[hidden] { display: none }`，否则属性写了等于没写（`.preset-list` 的折叠按钮曾因此整体失效）。
   2. 单类选择器同权重时**源序在后者胜出**。写给通用类（`.icon-btn`、`.mobile-only` 等）加覆盖的规则时，必须提权到 `.父类 .目标类`，否则被文件后半段的通用类盖掉（`.goal-more { display: none }` 曾被 `theme.css:357` 的 `.icon-btn { display: inline-flex }` 盖掉，桌面端误显示「…」按钮）。**别只看选择器名字像不像覆盖，要 `grep -n` 确认两条规则的先后。**
-- 改完布局后用 `--shots` 存几张截图目视一遍：数值全对但版式崩掉（按钮被挤到换行、文字被 sticky 元素裁掉）只有截图看得见，本项目已两次靠截图发现纯读数看不见的问题。
+  3. **flex 子项默认 `align-items: stretch`，会被拉伸到容器的"内容盒高度"（可视高 − padding），而不是内容自身高度。** 同一行里若有兄弟项带确定高度（能溢出滚动），就会出现"兄弟跑到很下面、这一项提前断掉"的错位。`.day-gutter`（时间轴左侧标尺）曾因此丢底色：桌面 1440×900 少 25px、手机 390×844 少 180px，缺口大小 = 内容高 − 可视内容盒高，所以两端不一样。修法是给该子项 `align-self: flex-start`，让它回到内容高度。
+- 改完布局后用 `--shots` 存几张截图目视一遍：数值全对但版式崩掉（按钮被挤到换行、文字被 sticky 元素裁掉）只有截图看得见，本项目已三次靠截图发现纯读数看不见的问题。
+
+## 轴系几何探针（时间轴"对不对齐"用像素说话）
+
+```
+node scripts/axis-geometry-probe.mjs --viewports 1440x900,390x844 --out docs/probes/axis-geometry.md --shots docs/probes/axis-shots
+```
+
+把每个元素换算到 `.day-scroll` 的**内容坐标系**，再用 `内容坐标 → 分钟` 的逆映射把像素翻译成时刻，于是"标尺底色覆盖到几点""事件块底部差几分钟"都是可读数字。
+
+- 播种的事件刻意贴三个边界：7:00（贴 DAY_START）、15:00 与 15:30（整点与非整点）、23:00-24:00（贴 DAY_END）；对照表按 `data-event-id` 反查，不依赖 `.day-event-time` 是否渲染（时长 < 45 分钟时 EventBlock 不渲染 meta）。
+- 量小时标签要用 **Range 取文字行盒**，不能拿 `.day-hour-label` 的盒子中心当"数字中心"——label 高 48px 且 `align-items: flex-start`，文字只占顶部十几像素，用盒中心会算出 +18px 的假偏差。
+
+## 动效探针（区分"看着像在动"与"真的在动"）
+
+```
+node scripts/motion-probe.mjs --viewports 1440x900,390x844 --out docs/probes/motion.md --shots docs/probes/motion-shots
+```
+
+- **点击与采样必须在同一次 `page.evaluate` 里**，用 `requestAnimationFrame` 连续记录尺寸序列。分成"先点、再量"两次往返会丢掉整个过渡，只看到终态，也就分不清瞬变和渐变。判据是**不同高度值的个数 ≥ 3**（去掉起点与终点两个必然值）。
+- 同时验证：指示块中心与激活项中心的偏差（应为 0）、抽屉收起后是否真的归零、收起后列表是否脱离焦点序列（`visibility: hidden`）、卡片与操作按钮是否被裁掉。
+- 卡片尺寸必须在**展开态**量：收起时列表高 0，卡片会被一起压扁，那时读到的是它的外边距。
+- 桌面端"抽屉是否压住底栏"这类判据要么不适用、要么必须同时要求横向重叠：桌面端面板与左侧栏是**并排**的，纵向区间天然完全重叠（同 2026-09-17 那次"时间轴被遮 803px"的荒唐结论）。
+
+### 改这块代码时的两个必知陷阱
+
+1. **`grid-template-rows: 0fr` 压不掉 padding。** 用 grid 行做高度过渡时，内层元素若带纵向 padding，收起后会长出与 padding 等高的残留（本项目实测 22px）。padding 属于元素自身盒子，border-box 下即使高度被压成 0，它仍是硬性最小外尺寸，`min-height: 0` 和父级 `overflow: hidden` 都救不了。**留白要改用伪元素 + 子元素 margin**（它们属于内容，会被一起裁掉）。相关实现见 `theme.css` 的 `.preset-collapse` / `.preset-list::before` / `.preset-card`。
+2. **探针播种数据少一个字段，整份数据会被静默丢弃**：`platformApi.ts` 的归一化要求 `Number.isFinite(weekCounterOffset)`，缺了它 `AppData` 直接回退默认值，症状是「localStorage 里有数据、DOM 里一个事件都没有」。写 seed 时照 `src/shared/types.ts` 的 `AppData` 逐字段对齐。
 
 ## CI 排障（「本机绿、CI 红」的成因与复现）
 

@@ -42,20 +42,56 @@ export default function PresetPanel({
 
   const isMobile = shouldUsePresetOnTap(viewportWidth)
 
+  /*
+   * 跨过断点时重置展开态：面板从侧栏变成底部抽屉（或反过来）时，
+   * 沿用上一次的展开状态没有意义——手机端一进来就展开会盖掉约 190px 时间轴。
+   */
+  useEffect(() => {
+    setExpanded(!isMobile)
+  }, [isMobile])
+
+  /*
+   * 桌面端没有"收起"这个概念：面板在侧栏里不遮挡任何东西，列表恒显、标题不可点。
+   * 只有窄屏（抽屉形态）才需要折叠，所以这里把「是否渲染折叠控件」与「列表是否显示」
+   * 分开表达，而不是共用一个 expanded。
+   */
+  const collapsible = isMobile
+  const listOpen = !collapsible || expanded
+
+  const headContent = (
+    <>
+      <h3>事件预设{presets.length > 0 ? ` · ${presets.length}` : ''}</h3>
+      {collapsible && <ChevronDown size={16} />}
+    </>
+  )
+
   return (
-    <aside className={`preset-panel${expanded ? ' expanded' : ' collapsed'}`}>
+    <aside className={`preset-panel${listOpen ? ' expanded' : ' collapsed'}`}>
       <div className="preset-head">
-        <button className="preset-toggle" onClick={() => setExpanded((value) => !value)} aria-expanded={expanded}>
-          {/* 收起态只剩这条把手，带上条数才知道抽屉里有没有东西。 */}
-          <h3>事件预设{presets.length > 0 ? ` · ${presets.length}` : ''}</h3>
-          <ChevronDown size={16} />
-        </button>
+        {collapsible ? (
+          <button
+            className="preset-toggle"
+            onClick={() => setExpanded((value) => !value)}
+            aria-expanded={expanded}
+          >
+            {headContent}
+          </button>
+        ) : (
+          <div className="preset-toggle static">{headContent}</div>
+        )}
         <button className="icon-btn" title="新建预设" aria-label="新建预设" onClick={onAdd}>
           <Plus size={16} />
         </button>
       </div>
-      <div className="preset-list" hidden={!expanded}>
-        {sorted.length === 0 && <div className="preset-empty">暂无预设，点击 ＋ 新建</div>}
+      {/*
+       * 外层只负责高度过渡，内层负责排列与滚动。
+       * 用 grid-template-rows 0fr → 1fr 而不是 max-height：fr 是数值，浏览器可插值，
+       * 于是"高度自适应内容"也能有过渡，且时长恒定（max-height 会因猜不准而忽快忽慢）。
+       * 内层的 min-height: 0 必须写，否则轨道不会被压到 0，收起等于没反应。
+       */}
+      <div className="preset-collapse">
+        <div className="preset-list">
+          {sorted.length === 0 && <div className="preset-empty">暂无预设，点击 ＋ 新建</div>}
         {sorted.map((preset) => {
           const quadrant = QUADRANT_META[preset.quadrant]
           const showMeta = preset.durationMin >= 45
@@ -112,6 +148,7 @@ export default function PresetPanel({
             </div>
           )
         })}
+        </div>
       </div>
     </aside>
   )
