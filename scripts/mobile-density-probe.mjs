@@ -69,6 +69,21 @@ function iso(dayOffset = 0) {
   return d.toISOString()
 }
 
+/**
+ * 本周周一的日期键。
+ *
+ * 必须动态算：日视图默认打开「今天」那一列。种子数据曾写死在 9/14 那周，
+ * 而运行日是 9/23（周四=9/24），于是画布上一个事件块都没有——
+ * 「预设面板/时间轴比」这类指标看着正常，实际量的是空画布。
+ */
+function mondayKey() {
+  const d = new Date()
+  const dow = (d.getDay() + 6) % 7
+  const monday = new Date(d.getFullYear(), d.getMonth(), d.getDate() - dow)
+  const p = (n) => String(n).padStart(2, '0')
+  return `${monday.getFullYear()}-${p(monday.getMonth() + 1)}-${p(monday.getDate())}`
+}
+
 function seedData(presetCount) {
   const colors = ['#8AB4F8', '#8CD9C1', '#F8B18C', '#B4A7E6', '#E8A0A0', '#DBC8A8', '#A9C49C', '#C2C8D0']
   const presets = Array.from({ length: presetCount }, (_, i) => ({
@@ -81,11 +96,13 @@ function seedData(presetCount) {
     createdAt: iso(i)
   }))
 
-  const monday = new Date(Date.UTC(2026, 8, 14, 12, 0, 0))
+  const [my, mm, md] = mondayKey().split('-').map(Number)
+  const monday = new Date(my, mm - 1, md, 12, 0, 0)
+  const p2 = (n) => String(n).padStart(2, '0')
   const weekEvents = []
   for (let d = 0; d < 7; d++) {
-    const date = new Date(monday.getTime() + d * 86400000)
-    const key = `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')}`
+    const date = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + d, 12, 0, 0)
+    const key = `${date.getFullYear()}-${p2(date.getMonth() + 1)}-${p2(date.getDate())}`
     for (let k = 0; k < 4; k++) {
       const startMin = 480 + k * 150
       weekEvents.push({

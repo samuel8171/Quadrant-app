@@ -48,6 +48,53 @@
 - `addInitScript` 执行时 `document.documentElement` 可能尚未创建，MutationObserver 要轮询挂载，否则整段注入脚本会因抛错而失效。
 - 已知时序陷阱：触屏轻触后浏览器会在 `pointerup` **之后**补发 `mousedown`（其默认动作会抢走焦点，曾导致"输入框闪现即消失"）。
 
+## 触摸手势的三个硬约束（改移动端手势前必读）
+
+这三条都是实测结论，不是推断。违反任意一条都会写出"看起来对、真机上不对"的代码。
+
+### 1. `touch-action` 在 `pointerdown` 时**锁存**，整段手势期间改无效
+
+想让"未解锁时能滚动、解锁后能拖动"，靠 `.armed` 类把 `touch-action` 从 `pan-y` 切到 `none`
+**行不通**。隔离实验（`scripts/` 下曾放过临时脚本，结论已固化在此）：
+
+```
+按下时 touch-action=pan-y → 中途加类改成 none → 再移动
+结果：仍然滚动（scrollTop=22）并派发 pointercancel
+```
+
+同一实验里全程 `pan-y` 的对照组也是 `scrollTop=23`。两者行为一致 ⇒ 中途改值没被采纳。
+
+**因此二选一，没有中间态**：
+- 想要浏览器原生滚动 → `touch-action: pan-y`，但要接受"浏览器在第一次 `touchmove`
+  就启动滚动并派发 `pointercancel`，**状态机永远起不了拖**"。
+- 想要状态机完全掌控 → `touch-action: none`，滚动要**自己实现**。
+
+本项目选了后者：移动端 `.day-event { touch-action: none }`，
+未解锁的纵向位移由 `hooks/useEventBlockScroll.ts` 手写进 `.day-scroll` 的 `scrollTop`；
+解锁后该 hook 立即让位给状态机做拖动。实测双向都成立（上移 90px → +90，下移 80px → −80）。
+
+### 2. `pointercancel` 一旦到达，这次手势就废了
+
+`touch-action: pan-y` 下浏览器会在 `pointermove` 之后立刻发 `pointercancel`：
+
+```
+scroll  type=pointerdown    pt=touch
+scroll  type=pointermove    pt=touch
+scroll  type=pointercancel  pt=touch      ← 到这里状态机只能复位
+scroll  type=lostpointercapture
+>>> ACTUAL SCROLL scrollTop=25
+```
+
+所以"长按解锁后拖动"在 `pan-y` 下**永远不可能成功**，哪怕 `armed` 已经亮起。
+看到"长按有反应但拖不动"就查这条。
+
+### 3. 探针的场景之间必须复位滚动位置
+
+上一个场景把页面滚下去后，下一个场景按"块在视口内"算出的坐标会落到视口外，
+触摸点打在空白处 → 状态机收不到 `item` hit → 表现为"长按解锁失效"这种假缺陷。
+同理：**不要写 `scrollTop = 300` 这种超过上限的值**（内容 892 − 视口 694 = 最大 198），
+浏览器会静默钳回 198，此时再想向下滚已无余量，测出来必是 Δ=0。
+
 ## 布局密度探针（量化"可操作面积"，同一个开发服务器）
 
 讨论移动端空间不足时不要靠读 CSS 估数，直接取实测像素：
@@ -61,11 +108,49 @@ node scripts/mobile-density-probe.mjs --presets 0,12 --out docs/probes/mobile-de
 - `--dump-goal-card` 打印目标卡子元素明细（排查"标题被挤成竖排"这类压缩问题）。
 - `--shots <目录>` 每页存一张截图（`day-drawer-*` 含抽屉收起/展开两态），用于目视核对版式。
 - 无需真实云凭据：直接往 `localStorage['quadrant-web-data-v2']` 播种，`AppData` 形状见 `src/shared/types.ts`。
+- **播种的事件日期必须按「本周」动态算**（`mondayKey()`），不能写死某天：日视图默认打开
+  "今天"那一列，写死 9/14 那周而运行日是 9/23 时，画布上一个块都没有，
+  指标看着正常、量的却是空画布。三个探针都已改为动态播种。
 - **写作陷阱（一族的三个实例，改样式前先查这三条）**：
   1. 作者样式里的 `display: flex` 会盖掉 UA 样式表的 `[hidden] { display: none }`。凡是用 `hidden` 属性做显示/隐藏的组件，都要显式补 `[hidden] { display: none }`，否则属性写了等于没写（`.preset-list` 的折叠按钮曾因此整体失效）。
   2. 单类选择器同权重时**源序在后者胜出**。写给通用类（`.icon-btn`、`.mobile-only` 等）加覆盖的规则时，必须提权到 `.父类 .目标类`，否则被文件后半段的通用类盖掉（`.goal-more { display: none }` 曾被 `theme.css:357` 的 `.icon-btn { display: inline-flex }` 盖掉，桌面端误显示「…」按钮）。**别只看选择器名字像不像覆盖，要 `grep -n` 确认两条规则的先后。**
   3. **flex 子项默认 `align-items: stretch`，会被拉伸到容器的"内容盒高度"（可视高 − padding），而不是内容自身高度。** 同一行里若有兄弟项带确定高度（能溢出滚动），就会出现"兄弟跑到很下面、这一项提前断掉"的错位。`.day-gutter`（时间轴左侧标尺）曾因此丢底色：桌面 1440×900 少 25px、手机 390×844 少 180px，缺口大小 = 内容高 − 可视内容盒高，所以两端不一样。修法是给该子项 `align-self: flex-start`，让它回到内容高度。
 - 改完布局后用 `--shots` 存几张截图目视一遍：数值全对但版式崩掉（按钮被挤到换行、文字被 sticky 元素裁掉）只有截图看得见，本项目已三次靠截图发现纯读数看不见的问题。
+
+## 手势与滚动的实测探针（同一个开发服务器）
+
+「想滚时间轴却把事件块拖走了」这类争议不能靠读代码裁决，三个脚本给数字：
+
+```
+node scripts/event-gesture-probe.mjs --out docs/probes/event-gesture.md
+node scripts/day-scroll-regression-probe.mjs --out docs/probes/day-scroll-regression.md
+node scripts/navheight-delta-probe.mjs --out docs/probes/navheight-delta.md
+```
+
+- `event-gesture-probe.mjs`：在 390×844 触摸视口下跑三个场景——块上纵滑（**不该**移动块）、
+  长按解锁后拖动（**应该**移动块）、短促轻触（**不该**移动块）。
+  **判据不能只看块的 `top` 变化**：滚动同样会改变 `top`。正确判据是
+  "块是否**跟随**滚动量移动"（`top` 位移 ≈ −scrollΔ 即跟随=未被拖动），
+  再配合 `.dragging` 类与 `armed` 类的采样作为旁证。报告里直接打印当前生效的
+  `touch-action` 值，用来排除"改了源码、跑的是旧包"。
+- `day-scroll-regression-probe.mjs`：确认改动没破坏其它路径——鼠标即时拖块、
+  画布空白处上滑/下滑的原生滚动、滚轮滚动，共 4 项。
+- `navheight-delta-probe.mjs`：底部导航 58→66px 的代价。做法是在**同一页面内**
+  先后量"当前构建"与"注回改动前尺寸"（`addStyleTag` 注入覆盖 CSS），
+  避免为拿一个对比数字回滚代码。结论：导航 +8px，内容净高 −8px，
+  单个入口触控高 44px → **54px**（iOS HIG 下限是 44px）。
+
+安全区与投影的取证（问题 2 / 问题 4）：
+
+```
+node scripts/safearea-slider-probe.mjs --out docs/probes/safearea-slider.md --shots docs/probes/shots-after5
+```
+
+- 桌面浏览器里 `env(safe-area-inset-*)` 恒为 0，**直接量永远量不出修复**。
+  本脚本用 `addStyleTag` 把 `--safe-top` 钉成 47px（灵动岛机型状态栏典型值），
+  再量各页顶部元素位置：修复到位时位移应**恰好等于 47px**（实测四页全部 47）。
+- 同时打印 `.review-slider-thumb` 的 `box-shadow` / `border` / `border-radius` 计算值，
+  用来判定滑块投影是否真的去掉（灰影来源就是这个 `box-shadow`，不是背景色）。
 
 ## 轴系几何探针（时间轴"对不对齐"用像素说话）
 

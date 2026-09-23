@@ -7,11 +7,12 @@
  * （旧代码把长按与拖动混在同一个 `setTimeout` 里，无法测，也就无法发现语义冲突）。
  */
 import {
-  DRAG_SLOP_PX,
   exceedsSlop,
   isDoubleTap,
   isLongPress,
   isTap,
+  requiresLongPressToDrag,
+  slopFor,
   type Point,
   type PointerPhase,
   type TimedPoint
@@ -32,6 +33,11 @@ export interface MachinePointer {
   startedAt: number
   moved: boolean
   dragging: boolean
+  /**
+   * 长按已解锁（触摸设备上"允许拖动"的通行证）。
+   * 一旦为真即保持到指针抬起——用户可能长按后又小幅调整位置。
+   */
+  longPressed: boolean
   hit: GestureHit
 }
 
@@ -101,7 +107,15 @@ function phaseOf(pointer: MachinePointer): PointerPhase {
   }
 }
 
-export function reduce(state: MachineState, input: MachineInput, slop = DRAG_SLOP_PX): MachineResult {
+/**
+ * @param slopOverride 显式覆盖拖动阈值（供单测直接指定）。传 undefined 时
+ *   按指针类型自动选取（鼠标 8px / 触摸 16px，见 gestures.slopFor）。
+ */
+export function reduce(
+  state: MachineState,
+  input: MachineInput,
+  slopOverride?: number
+): MachineResult {
   switch (input.type) {
     case 'down': {
       // 已有活动指针时（例如第二根手指落下），先取消它并忽略本次按下——
@@ -123,6 +137,7 @@ export function reduce(state: MachineState, input: MachineInput, slop = DRAG_SLO
         startedAt: input.t,
         moved: false,
         dragging: false,
+        longPressed: false,
         hit: input.hit
       }
       const effects: MachineEffect[] = [{ kind: 'clearTimer' }]
@@ -134,7 +149,23 @@ export function reduce(state: MachineState, input: MachineInput, slop = DRAG_SLO
       const pointer = state.pointer
       if (!pointer || pointer.id !== input.id) return { state, effects: [] }
       const moved: MachinePointer = { ...pointer, current: { x: input.x, y: input.y } }
+      const slop = slopOverride ?? slopFor(pointer.pointerType)
       if (!pointer.moved && exceedsSlop(pointer.start, moved.current, slop)) {
+        /*
+         * 触摸设备：未经过长按解锁不得进入拖动。
+         *
+         * 此时只标记 moved（用于"这已不是轻触/长按"的判定），但不设 dragging、
+         * 不发 dragStart。位移转交给 `useEventBlockScroll` 做手动滚动——
+         * 因为移动端 .day-event 的 touch-action 是 none（见 theme.css 的长注释），
+         * 浏览器不会自己滚，也不会派发 pointercancel，这条分支是唯一的兜底。
+         */
+        if (requiresLongPressToDrag(pointer.pointerType) && !pointer.longPressed) {
+          moved.moved = true
+          return {
+            state: { ...state, pointer: moved, armedId: null },
+            effects: [{ kind: 'clearTimer' }]
+          }
+        }
         moved.moved = true
         moved.dragging = true
         return {
@@ -189,7 +220,15 @@ export function reduce(state: MachineState, input: MachineInput, slop = DRAG_SLO
       const pointer = state.pointer
       if (!pointer || pointer.id !== input.id) return { state, effects: [] }
       if (pointer.moved || pointer.dragging || pointer.hit.kind !== 'item') return { state, effects: [] }
-      return { state: { ...state, armedId: pointer.hit.id ?? null }, effects: [] }
+      /*
+       * longPressed 是触摸设备解锁拖动的开关（见 requiresLongPressToDrag）。
+       * 注意 moved 为真的指针不在此列：它已经越过阈值，不再是"静止长按"，
+       * 对触摸而言那意味着用户想滚动，手势即将被浏览器的 pointercancel 收走。
+       */
+      return {
+        state: { ...state, pointer: { ...pointer, longPressed: true }, armedId: pointer.hit.id ?? null },
+        effects: []
+      }
     }
   }
 }

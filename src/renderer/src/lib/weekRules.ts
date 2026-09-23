@@ -269,6 +269,34 @@ export const SNAP_STEP_MIN = 5
 /** 落点被占用时向两侧滑动的最大搜索距离。 */
 export const SNAP_SEARCH_LIMIT_MIN = 12 * 60
 
+/**
+ * 触摸拖动提交所需的最小位移（分钟）。
+ *
+ * 为什么需要：触摸阈值 16px 只是"挡掉大多数抖动"，仍会有恰好凑够阈值的
+ * 残余情况。此刻若立刻按吸附结果提交，块体会真的被挪走一格（5 分钟）。
+ * 引入这条门槛后，位移不足 10 分钟（= 2 格）的拖动视为误触，不提交、
+ * 块体回原位。鼠标不受限——精确设备上拖 5 分钟是明确的意图。
+ */
+export const MIN_TOUCH_MOVE_MIN = 10
+
+/**
+ * 判断一次拖动是否值得提交。
+ *
+ * @param originStart 拖动开始时的开始分钟
+ * @param snapStart   吸附后的落点分钟
+ * @param pointerType 指针类型；触摸设备要求位移达到 MIN_TOUCH_MOVE_MIN
+ */
+export function shouldCommitMove(
+  originStart: number,
+  snapStart: number,
+  pointerType: string
+): boolean {
+  const delta = Math.abs(snapStart - originStart)
+  if (delta === 0) return false
+  if (pointerType === 'mouse') return true
+  return delta >= MIN_TOUCH_MOVE_MIN
+}
+
 /** 拖动方向提示：决定落点被占用时优先向哪一侧滑动。 */
 export type SnapHint = 'earlier' | 'later'
 

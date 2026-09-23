@@ -4,6 +4,7 @@ import {
   DOUBLE_TAP_DIST_PX,
   DOUBLE_TAP_MS,
   DRAG_SLOP_PX,
+  DRAG_SLOP_TOUCH_PX,
   LONG_PRESS_MS,
   TAP_MAX_MS,
   distance,
@@ -12,6 +13,8 @@ import {
   isDoubleTap,
   isLongPress,
   isTap,
+  requiresLongPressToDrag,
+  slopFor,
   type PointerPhase
 } from '../src/renderer/src/lib/gestures'
 import {
@@ -33,6 +36,30 @@ describe('gestures', () => {
     expect(exceedsSlop({ x: 0, y: 0 }, { x: 8, y: 0 })).toBe(false)
     expect(exceedsSlop({ x: 0, y: 0 }, { x: 8.01, y: 0 })).toBe(true)
     expect(exceedsSlop({ x: 0, y: 0 }, { x: 2, y: 0 }, 1)).toBe(true)
+  })
+
+  /*
+   * 触摸阈值必须明显大于鼠标：手指按压时接触点会漂移，8px 几乎必然被越过，
+   * 那会让"点一下事件块"变成"挪动事件块"。
+   */
+  it('uses a wider slop for touch than for mouse', () => {
+    expect(slopFor('mouse')).toBe(DRAG_SLOP_PX)
+    expect(slopFor('touch')).toBe(DRAG_SLOP_TOUCH_PX)
+    expect(slopFor('pen')).toBe(DRAG_SLOP_TOUCH_PX)
+    expect(DRAG_SLOP_TOUCH_PX).toBeGreaterThan(DRAG_SLOP_PX)
+    // 10px 对鼠标已成拖动，对触摸仍属"抖动"。
+    expect(exceedsSlop({ x: 0, y: 0 }, { x: 10, y: 0 }, slopFor('mouse'))).toBe(true)
+    expect(exceedsSlop({ x: 0, y: 0 }, { x: 10, y: 0 }, slopFor('touch'))).toBe(false)
+  })
+
+  /*
+   * 触摸设备上"拖动"必须先长按解锁——否则手指落在事件块上想滚动时间轴时，
+   * 会变成把事件块挪走。鼠标没有这个冲突（滚轮负责滚动），保持即点即拖。
+   */
+  it('requires a long press before dragging on touch, but not on mouse', () => {
+    expect(requiresLongPressToDrag('touch')).toBe(true)
+    expect(requiresLongPressToDrag('pen')).toBe(true)
+    expect(requiresLongPressToDrag('mouse')).toBe(false)
   })
 
   it('treats a still hold past the threshold as a long press', () => {
@@ -128,8 +155,9 @@ function down(over: Partial<Extract<MachineInput, { type: 'down' }>> = {}): Mach
 
 describe('gesture machine', () => {
   it('starts a drag on the first move beyond the slop, without waiting for a timer', () => {
+    // 用鼠标：桌面端没有"滚动与拖动争抢"的问题，保持即点即拖。
     const { kinds, state } = feed([
-      down({ hit: ITEM }),
+      down({ hit: ITEM, pointerType: 'mouse' }),
       { type: 'move', id: 1, x: 104, y: 104, t: 1050 },
       { type: 'move', id: 1, x: 140, y: 130, t: 1100 },
       { type: 'move', id: 1, x: 150, y: 140, t: 1150 },
@@ -143,6 +171,34 @@ describe('gesture machine', () => {
     expect(kinds[3]).toEqual(['dragMove'])
     expect(kinds[4]).toEqual(['clearTimer', 'release', 'dragEnd'])
     expect(state.pointer).toBeNull()
+  })
+
+  /*
+   * 这是本次修复的核心：触摸时在事件块上滑动必须是滚时间轴，不是挪块。
+   * 未长按解锁就位移 → 不进拖动、不发 dragStart，只清计时器，
+   * 位移转交 useEventBlockScroll 手动滚动（移动端块体是 touch-action: none，
+   * 浏览器不会自己滚，也不会派发 pointercancel）。
+   */
+  it('does NOT start a drag on touch movement before the long press unlocks it', () => {
+    const { kinds, state } = feed([
+      down({ hit: ITEM, pointerType: 'touch' }),
+      { type: 'move', id: 1, x: 140, y: 100, t: 1100 },
+      { type: 'move', id: 1, x: 160, y: 100, t: 1150 }
+    ])
+    expect(kinds[1]).toEqual(['clearTimer'])
+    expect(kinds[2]).toEqual([])
+    expect(kinds.flat()).not.toContain('dragStart')
+    expect(state.pointer?.dragging).toBe(false)
+  })
+
+  /* 触摸的抖动容差比鼠标宽：同样的位移量在触摸下不算拖动。 */
+  it('tolerates a larger wobble on touch before considering it movement', () => {
+    const { kinds, state } = feed([
+      down({ hit: ITEM, pointerType: 'touch' }),
+      { type: 'move', id: 1, x: 110, y: 100, t: 1100 } // 10px，鼠标会起拖，触摸不会
+    ])
+    expect(kinds[1]).toEqual([])
+    expect(state.pointer?.moved).toBe(false)
   })
 
   it('opens the menu when a still hold is released after the long-press threshold', () => {
@@ -159,7 +215,7 @@ describe('gesture machine', () => {
 
   it('turns an armed long press into a drag as soon as the finger moves', () => {
     const { kinds, state } = feed([
-      down({ hit: ITEM }),
+      down({ hit: ITEM, pointerType: 'touch' }),
       { type: 'arm', id: 1 },
       { type: 'move', id: 1, x: 130, y: 100, t: 1600 }
     ])
@@ -167,9 +223,26 @@ describe('gesture machine', () => {
     expect(state.armedId).toBeNull()
   })
 
+  /* 长按解锁后即使位移很小也应起拖：解锁本身已是明确意图，不该再等阈值。 */
+  it('drags on touch after unlock even for a sub-threshold move', () => {
+    const { kinds } = feed([
+      down({ hit: ITEM, pointerType: 'touch' }),
+      { type: 'arm', id: 1 },
+      { type: 'move', id: 1, x: 108, y: 100, t: 1600 }
+    ])
+    expect(kinds.flat()).not.toContain('dragStart')
+    // 8px 未过触摸阈值 16px：仍需超过阈值才真正起拖。
+    const wider = feed([
+      down({ hit: ITEM, pointerType: 'touch' }),
+      { type: 'arm', id: 1 },
+      { type: 'move', id: 1, x: 120, y: 100, t: 1600 }
+    ])
+    expect(wider.kinds[2]).toEqual(['clearTimer', 'capture', 'dragStart'])
+  })
+
   it('ignores an arm timeout that arrives after movement already started', () => {
     const { kinds } = feed([
-      down({ hit: ITEM }),
+      down({ hit: ITEM, pointerType: 'mouse' }),
       { type: 'move', id: 1, x: 140, y: 100, t: 1100 },
       { type: 'arm', id: 1 }
     ])
@@ -196,8 +269,9 @@ describe('gesture machine', () => {
   })
 
   it('clears drag state on pointercancel without committing', () => {
+    // 鼠标：位移即起拖，随后的 pointercancel 必须原样丢弃、不得提交。
     const { kinds, state } = feed([
-      down({ hit: ITEM }),
+      down({ hit: ITEM, pointerType: 'mouse' }),
       { type: 'move', id: 1, x: 140, y: 100, t: 1100 },
       { type: 'cancel', id: 1 }
     ])
@@ -206,10 +280,32 @@ describe('gesture machine', () => {
     expect(kinds.flat()).not.toContain('dragEnd')
   })
 
+  /*
+   * 触摸未解锁时在事件块上滑动：状态机全程未进拖动，cancel 只负责收尾
+   * （外部 cancel()、双指接管等路径仍会走到这里）。
+   */
+  it('accepts a pointercancel for a touch scroll that never became a drag', () => {
+    const { kinds, state } = feed([
+      down({ hit: ITEM, pointerType: 'touch' }),
+      { type: 'move', id: 1, x: 140, y: 100, t: 1100 },
+      { type: 'cancel', id: 1 }
+    ])
+    expect(kinds[1]).toEqual(['clearTimer'])
+    expect(kinds[2]).toEqual(['clearTimer', 'release', 'cancel'])
+    expect(state.pointer).toBeNull()
+    expect(kinds.flat()).not.toContain('dragStart')
+    expect(kinds.flat()).not.toContain('dragEnd')
+  })
+
   it('hands over to the new pointer when a second finger arrives', () => {
-    const { kinds, state } = feed([down({ hit: ITEM }), down({ id: 2, x: 160, y: 100, t: 1050 })])
+    // 用鼠标指针：确保第一指此刻已处于拖动中，第二指落下必须打断它（双指缩放优先）。
+    const { kinds, state } = feed([
+      down({ hit: ITEM, pointerType: 'mouse' }),
+      { type: 'move', id: 1, x: 140, y: 100, t: 1050 },
+      down({ id: 2, x: 160, y: 100, t: 1050 })
+    ])
     // 第二指落下：取消第一指的拖动并忽略本次按下（由页面启动双指缩放）。
-    expect(kinds[1]).toEqual(['clearTimer', 'release', 'cancel'])
+    expect(kinds[2]).toEqual(['clearTimer', 'release', 'cancel'])
     expect(state.pointer).toBeNull()
   })
 

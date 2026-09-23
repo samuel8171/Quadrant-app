@@ -15,6 +15,22 @@
   --mobile-nav-height: 78px;
 
   /*
+   * 顶部安全区（状态栏 / 灵动岛）。
+   *
+   * 为什么必须有：viewport-fit=cover 让内容延伸到状态栏下方（这是 iOS
+   * 全屏的前提），代价是页面自己要把内容避让出来——否则标题会被状态栏
+   * 盖住。实测 iPhone 14 Pro 的 inset-top 是 59px（灵动岛高度），
+   * 不避让时「长期目标」这类页头会被吃掉上半截。
+   *
+   * Safari 标签页里该值为 0（不侵入安全区），所以这条对非全屏场景无影响，
+   * 不需要额外判据去区分标签页与 standalone。
+   *
+   * 抽成变量是为了集中管理：页面容器、四象限悬浮页头、日视图顶栏
+   * 三处都要用它，各写一遍 env() 容易漏。
+   */
+  --safe-top: env(safe-area-inset-top, 0px);
+
+  /*
    * 应用视口高度。默认 100dvh（Safari 标签页里它是唯一正确的「可视区」单位）。
    *
    * 但 PWA standalone 模式下 100dvh 是错的：iOS 会在冷启动时把
@@ -1197,6 +1213,20 @@ body {
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
 }
 
+/*
+ * 移动端：armed 意为「已长按解锁，可以拖动」。
+ * 缩放+投影在深色小屏上不够醒目，补一圈高亮描边，让"按住 0.4 秒"
+ * 这个动作有明确的成功反馈——否则用户不知道何时可以松手拖。
+ */
+@media (max-width: 767px) {
+  .day-event.armed {
+    transform: scale(1.04);
+    outline: 2px solid rgba(77, 163, 255, 0.9);
+    outline-offset: 1px;
+    box-shadow: 0 8px 22px rgba(0, 0, 0, 0.55);
+  }
+}
+
 /* 落点预览：显示吸附后的位置与时间区间。 */
 .day-event-ghost {
   position: absolute;
@@ -1894,7 +1924,18 @@ body {
   border-radius: 50%;
   background: #ffffff;
   border: 2px solid #0f1115;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
+  /*
+   * 不再使用投影。
+   *
+   * 原值 box-shadow: 0 1px 4px rgba(0,0,0,0.6) —— 0.6 的黑叠在行背景
+   * (33,36,42) 上约等于 (13,14,17)，实测球正下方 2px 处就是 (15,17,21)，
+   * 与页面底色 #0f1115 几乎一致。因为球只有 14px 而扩散 4px，
+   * 视觉上就是一圈硬边灰影挂在每个滑块下方，读起来像"滑动条有阴影"。
+   *
+   * 球本身已有 2px 的 #0f1115 描边，与轨道（var(--border) 灰）的分离度
+   * 由描边提供，投影是冗余的。去掉后白点依然清晰，但没有灰影。
+   */
+  box-shadow: none;
   transform: translate(-50%, -50%);
   transition: left 0.15s ease;
   pointer-events: none;
@@ -2273,7 +2314,8 @@ body {
   .weekly-page,
   .review-page,
   .day-page {
-    padding: 22px 20px;
+    /* 平板横竖屏同样避让顶部安全区（iPad 无灵动岛时该值为 0，无副作用）。 */
+    padding: calc(22px + var(--safe-top)) 20px 22px;
   }
 
   .goal-columns {
@@ -2332,11 +2374,17 @@ body {
 @media (max-width: 767px) {
   :root {
     /*
-     * 78px 的导航条是纯占用：图标 20 + 文字 11，46px 的内容高已经够用，
-     * 剩下面全是圆角与内边距。收到 58px 后每个页面的内容区多出 20px
-     * （入口仍是 46px，不低于 44px 触摸下限）。
+     * 底部导航条高。
+     *
+     * 高度沿革 78 → 58 → 66。78px 时圆角与内边距吃掉太多，收到 58px 是为
+     * 给内容区省 20px；但 58 减去内边距 6×2 与边框 1×2 后内容高只剩 44px，
+     * 而「图标 20 + 间距 3 + 文字 11」实需 34px，上下仅余 5px，视觉上很局促。
+     *
+     * 定 66px：内容高 = 66 − 5×2(内边距) − 1×2(边框) = 54px，
+     * 图标+文字 34px 居中后上下各留 10px 呼吸；单个入口高 54px，
+     * 远高于 44px 触摸下限。代价是内容区少 8px。
      */
-    --mobile-nav-height: 58px;
+    --mobile-nav-height: 66px;
   }
 
   body {
@@ -2359,26 +2407,25 @@ body {
     left: 12px;
     right: 12px;
     /*
-     * 安全区只在这里避让一次。
+     * 安全区只在 bottom 这里避让一次。
      *
      * 曾经在 padding-bottom 里又叠了一遍 env(safe-area-inset-bottom)，
      * 属双重计算：bottom 已经把整条导航抬到安全区之上，padding 再加一次
      * 纯属白挤内容。Safari 标签页下 inset-bottom 只有 ~8px 不易察觉，
-     * 但 PWA standalone 下是 34px —— 固定高 58 减去 padding 后内容只剩
-     * 12px，而图标+文字实需 46px，会被压到几乎看不见。
-     *
-     * 原注释说「46px 内容高已经够用」，那是在 padding 为 6/6 的前提下算的，
-     * 与叠了安全区的实际值自相矛盾，一并纠正。
+     * 但 PWA standalone 下是 34px，会把本来就紧的内容区再削掉一层。
+     * 规则：定位负责避让，padding 不叠加。
      */
     bottom: max(10px, env(safe-area-inset-bottom));
     width: auto;
     min-width: 0;
     height: var(--mobile-nav-height);
-    padding: 6px 8px;
+    /* 内边距收到 5px，把省下的 2px 让给内容（见 --mobile-nav-height 的推导）。 */
+    padding: 5px 8px;
     display: block;
     background: rgba(31, 34, 40, 0.78);
     border: 1px solid rgba(255, 255, 255, 0.12);
-    border-radius: 22px;
+    /* 圆角随高度同步：22 是配 58px 的，抬到 66px 后保持胶囊感需要 24。 */
+    border-radius: 24px;
     box-shadow: 0 12px 36px rgba(0, 0, 0, 0.42), inset 0 1px 0 rgba(255,255,255,0.1);
     backdrop-filter: blur(24px) saturate(150%);
     -webkit-backdrop-filter: blur(24px) saturate(150%);
@@ -2389,8 +2436,10 @@ body {
     display: none;
   }
 
+  /* 这两个按钮只在桌面外壳（window.quadrantApi）下渲染，此处为触屏外壳兜底。
+     内边距收到 5px 后 top 同步下移，保证与导航项垂直居中对齐。 */
   .sync-button,
-  .login-button { position: absolute; right: 8px; top: 6px; height: 46px; min-width: 44px; width: 44px; padding: 4px 2px; flex-direction: column; font-size: 10px; }
+  .login-button { position: absolute; right: 8px; top: 5px; height: 54px; min-width: 44px; width: 44px; padding: 4px 2px; flex-direction: column; font-size: 10px; }
   .upload-button { display: none; }
   .sync-message { position: fixed; right: 14px; bottom: calc(var(--mobile-nav-height) + 18px); z-index: 110; }
 
@@ -2413,7 +2462,8 @@ body {
     bottom: 0;
     height: auto;
     width: calc((100% - 6px) / 4);
-    border-radius: 20px;
+    /* 与容器圆角同步：容器 24px 减去内边距 5px ≈ 19px，取 21px 让内层更柔和。 */
+    border-radius: 21px;
     background: rgba(77, 163, 255, 0.18);
     background-image: none;
     border: 1px solid rgba(77, 163, 255, 0.55);
@@ -2431,7 +2481,7 @@ body {
     justify-content: center;
     align-items: center;
     border: 1px solid transparent;
-    border-radius: 20px;
+    border-radius: 21px;
     font-size: 11px;
     line-height: 1.15;
     text-align: center;
@@ -2459,7 +2509,18 @@ body {
   .weekly-page,
   .review-page,
   .day-page {
-    padding: 12px 12px calc(16px + var(--mobile-nav-height) + env(safe-area-inset-bottom));
+    /*
+     * 上内边距必须叠加顶部安全区。
+     *
+     * 原先只写了底部避让，顶部一次都没避让，于是 viewport-fit=cover
+     * 生效后（iOS 全屏/standalone）内容从 y=0 开始渲染，页头被状态栏
+     * 与灵动岛盖掉——实测「周日复盘」那排 tab 几乎整条不可见。
+     *
+     * 避让只做一次：这里负责把内容推到安全区之下，页面内部不再叠加
+     * env(safe-area-inset-top)。左右不涉及安全区（竖屏不裁切），
+     * 横屏的左右安全区由 .app 的溢出裁切兜住，本项目只支持竖屏。
+     */
+    padding: calc(12px + var(--safe-top)) 12px calc(16px + var(--mobile-nav-height) + env(safe-area-inset-bottom));
     overflow-x: hidden;
   }
 
@@ -2585,7 +2646,11 @@ body {
    */
   .quadrant-header {
     position: absolute;
-    top: 12px;
+    /*
+     * 悬浮页头是绝对定位的，不随页面容器的 padding 走，必须自己避让
+     * 顶部安全区，否则只有它一条压到状态栏下面。
+     */
+    top: calc(12px + var(--safe-top));
     left: 12px;
     right: 12px;
     z-index: 5;
@@ -2918,6 +2983,13 @@ body {
   .add-subtask-row input {
     min-width: 0;
     min-height: 44px;
+    /*
+     * 16px 是 iOS 的分水岭：聚焦时如果输入框计算字号 < 16px，
+     * Safari/standalone 会自动把页面放大到一眼能看清的程度，
+     * 而 blur 之后**不会**自动缩回去——表现为"点一下输入框，整页就变大了"。
+     * 桌面端该行是 14px，移动端必须抬到 16px 才能挡住这个自动缩放。
+     */
+    font-size: 16px;
   }
 
   .subtask-topbar {
@@ -3033,6 +3105,45 @@ body {
   .day-canvas {
     touch-action: pan-y;
     min-height: 370px;
+  }
+
+  /*
+   * 事件块的手势分配（移动端）。
+   *
+   * 目标两个，且互斥：
+   *   ① 未长按解锁时，块上的纵向滑动必须是**滚动时间轴**；
+   *   ② 长按 0.4 秒解锁后，块上的移动必须是**拖动块体**。
+   *
+   * 为什么这里是 none 而不是 pan-y（实测结论，别改回去）：
+   * touch-action 在 `pointerdown` 那一刻就**锁存**了，整段手势期间改类无效。
+   * 实测隔离实验：按下时 pan-y、中途把类改成 none，移动仍照样触发原生滚动
+   * 并派发 pointercancel（记录为 `pointermove → pointercancel → SCROLL`）。
+   * 所以想靠 ".armed 时切 none" 来区分两种手势是行不通的。
+   *
+   * 既然 CSS 无法中途切换，就必须**从一开始就拿走浏览器的默认滚动**
+   * （none = 浏览器完全不介入），改用 JS 自己实现滚动：
+   * 未解锁的纵向位移由 useEventBlockScroll 手动写进 .day-scroll 的 scrollTop，
+   * 解锁后的位移交给状态机做拖动。实测确认这条路径两端都成立：
+   * 手指上移 90px → scrollTop +90；下移 80px → scrollTop -80。
+   *
+   * 代价是必须自己维护滚动，收益是两种手势的判定权完全归我们，
+   * 不再有"浏览器先抢走、状态机只能等 pointercancel"的竞态。
+   */
+  .day-event {
+    touch-action: none;
+  }
+
+  /*
+   * 兜底：移动端所有可输入控件一律不低于 16px。
+   * 单条规则写在各组件里容易被后续改动漏掉（本文件里就有 14px/15px 的多处
+   * 输入框），这条放在媒体查询最末尾，用属性选择器一次盖住全部，
+   * 免去每加一个输入框都要记得加字号。
+   * 只影响字体渲染尺寸，不改布局高度（min-height 已单独给到 44px）。
+   */
+  input,
+  textarea,
+  select {
+    font-size: 16px;
   }
 
   .desktop-only { display: none !important; }

@@ -20,11 +20,13 @@ import {
   minutesToLabel,
   snapEventStart,
   snapToHour,
+  shouldCommitMove,
   type SnapHint
 } from '../../lib/weekRules'
 import { shouldCreateOnCanvasClick } from '../../lib/weeklyMobileLayout'
 import { PRESET_DRAG_MIME, carriesPresetDrag, endPresetDrag, getDraggingPresetId } from '../../lib/presetDrag'
 import { useCanvasGestures } from '../../hooks/useCanvasGestures'
+import { useEventBlockScroll } from '../../hooks/useEventBlockScroll'
 
 interface Props {
   date: Date
@@ -195,14 +197,20 @@ export default function DayView({
       }
       updateDrag({ ...current, hint, lastDesired: desired, snapStart })
     },
-    onDragEnd: () => {
+    onDragEnd: (ctx) => {
       const current = dragRef.current
       updateDrag(null)
       // 指针抬起后浏览器还会补一个 click：用短时间窗拦掉，避免它被当成"点击空白新建"。
       suppressCanvasClickUntilRef.current = performance.now() + CLICK_SUPPRESS_MS
       if (!current || current.snapStart === null) return
       const event = weekEvents.find((ev) => ev.id === current.id)
-      if (!event || event.startMin === current.snapStart) return
+      if (!event) return
+      /*
+       * 触摸设备上要求位移达到 MIN_TOUCH_MOVE_MIN（10 分钟 / 2 格）才提交。
+       * 阈值 16px 已挡掉大多数抖动，但仍会有恰好凑够的残余——那时若照常提交，
+       * 块体会被挪走一格，用户看到的就是"没碰它自己动了"。鼠标不设此限。
+       */
+      if (!shouldCommitMove(current.originStart, current.snapStart, ctx.pointerType)) return
       moveWeekEvent(current.id, current.snapStart)
     },
     onLongPress: (ctx) => {
@@ -227,6 +235,17 @@ export default function DayView({
 
   const gesturesRef = useRef(gestures)
   gesturesRef.current = gestures
+
+  /**
+   * 移动端在事件块上的纵向滑动 = 滚动时间轴。
+   *
+   * 必须自己滚动：移动端 `.day-event` 是 `touch-action: none`（理由见 theme.css），
+   * 浏览器不会介入，也就不会自己滚。解锁后（armed）本 hook 立即让位给拖动。
+   */
+  const blockScroll = useEventBlockScroll({
+    getScroller: () => scrollRef.current,
+    isArmed: () => gesturesRef.current.armedId !== null
+  })
 
   // Esc 回滚正在进行的拖动（不提交）。
   useEffect(() => {
@@ -343,7 +362,13 @@ export default function DayView({
           </div>
           <div
             ref={canvasRef}
-            onPointerDownCapture={(e) => { lastPointerTypeRef.current = e.pointerType }}
+            onPointerDownCapture={(e) => {
+              lastPointerTypeRef.current = e.pointerType
+              blockScroll.onPointerDown(e)
+            }}
+            onPointerMoveCapture={blockScroll.onPointerMove}
+            onPointerUpCapture={blockScroll.onPointerUp}
+            onPointerCancelCapture={blockScroll.onPointerCancel}
             className={`day-canvas${dropPreview ? ' drop-active' : ''}`}
             /* 画布总高与左侧标尺列的内容高严格相等，两者一起决定滚动高度。 */
             style={{ height: CONTENT_H }}

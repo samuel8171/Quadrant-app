@@ -16,8 +16,17 @@ export interface TimedPoint extends Point {
   t: number
 }
 
-/** 位移超过该值即判定为拖动，不再可能是轻触/长按。 */
+/** 位移超过该值即判定为拖动，不再可能是轻触/长按。鼠标用：精确设备，保持灵敏。 */
 export const DRAG_SLOP_PX = 8
+/**
+ * 触摸专用的拖动阈值。
+ *
+ * 手指在玻璃上轻点时的自然抖动远超直觉——指尖接触面积约 8-10mm，
+ * 按压过程中接触点本身就会漂移，加上滚动容器的轻微惯性，8px 的圆
+ * 几乎必然被越过。桌面鼠标是精确设备，8px 合理；手指不是。
+ * 取 16px（≈ 4mm 物理位移）作为分界。
+ */
+export const DRAG_SLOP_TOUCH_PX = 16
 /** 轻触的最长按住时间：超过它仍未位移，就不再算轻触。 */
 export const TAP_MAX_MS = 320
 /** 静止按住该时长后进入"长按已就绪"（视觉抬起）。 */
@@ -26,6 +35,27 @@ export const LONG_PRESS_MS = 380
 export const DOUBLE_TAP_MS = 280
 /** 两次轻触的位置容差。 */
 export const DOUBLE_TAP_DIST_PX = 28
+
+/**
+ * 触摸设备上，"拖动"是否需要一个前置的长按解锁。
+ *
+ * 起因：事件块占据时间轴的大部分面积。若手指落在块上纵向滑动就直接拖动块，
+ * 用户就再也无法在块上滚动时间轴——两个手势争抢同一个动作，必须定序。
+ * 规则改为：触摸设备先按住 LONG_PRESS_MS 进入 armed（视觉抬起），
+ * 之后的位移才算拖动；未 armed 时的位移交还给浏览器做滚动，
+ * 浏览器随即派发 pointercancel，状态机收到即中止。
+ *
+ * 鼠标不受此限：桌面没有"滚动与拖动争抢"的问题（滚轮负责滚动），
+ * 保持即点即拖。
+ */
+export function requiresLongPressToDrag(pointerType: string): boolean {
+  return pointerType !== 'mouse'
+}
+
+/** 按指针类型选取拖动阈值。 */
+export function slopFor(pointerType: string): number {
+  return pointerType === 'mouse' ? DRAG_SLOP_PX : DRAG_SLOP_TOUCH_PX
+}
 
 /**
  * 触屏/笔的轻触之后，浏览器会补发一串兼容性鼠标事件，且**时序在 `pointerup` 之后**

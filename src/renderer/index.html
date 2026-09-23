@@ -6,10 +6,20 @@
       viewport-fit=cover 是 iOS 全屏（添加到主屏幕）的硬性前提：
       不加的话内容在安全区边界就停住，Safari 会在内容与工具栏之间
       渲染一条实心色条，底部玻璃也透不出来。
+
+      user-scalable=no / maximum-scale=1 禁用浏览器的页面缩放：
+      时间轴上拖动事件块、四象限里拖拽卡片都是精细操作，页面的
+      捏合缩放会让手指位移被放大成视口平移，操作几乎不可用。
+      注意 iOS 从 10 起在** Safari 标签页**里忽略这两个值（可访问性
+      考量），只有在 PWA standalone（添加到主屏幕）下才真正生效——
+      也正好是移动端的主要使用形态。
+
+      这不影响四象限自身的双指缩放：那套缩放走 QuadrantPage 自己的
+      ViewState{zoom,panX,panY} + CSS transform，与视口缩放无关。
     -->
     <meta
       name="viewport"
-      content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no, viewport-fit=cover"
     />
     <title>象限</title>
     <meta name="description" content="面向大学生的时间管理：目标拆解、四象限、周计划与周日复盘" />

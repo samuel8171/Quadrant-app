@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { WeekEvent, WeekPreset } from '../src/shared/types'
 import {
+  MIN_TOUCH_MOVE_MIN,
   clampEndForDuration,
   clampEventStart,
   clampEventTimes,
@@ -16,6 +17,7 @@ import {
   minutesToLabel,
   mondayOf,
   moveWeekEventInList,
+  shouldCommitMove,
   snapEventStart,
   snapToHour,
   streakNumber,
@@ -83,6 +85,29 @@ describe('weekRules', () => {
     expect(snapToHour(449)).toBe(420)
     expect(snapToHour(450)).toBe(480)
     expect(snapToHour(1410)).toBe(1440)
+  })
+
+  /*
+   * 触摸拖动的"值得提交"门槛：过阈值起拖后，落点若只挪了一格（5 分钟）仍算误触，
+   * 不写库、块体回原位。鼠标不受限——精确设备上挪 5 分钟是明确意图。
+   */
+  it('requires a meaningfully larger move to commit on touch than on mouse', () => {
+    expect(MIN_TOUCH_MOVE_MIN).toBe(10)
+    // 未位移：任何指针都不提交。
+    expect(shouldCommitMove(480, 480, 'mouse')).toBe(false)
+    expect(shouldCommitMove(480, 480, 'touch')).toBe(false)
+    // 一格（5 分钟）：鼠标提交，触摸拒绝。
+    expect(shouldCommitMove(480, 485, 'mouse')).toBe(true)
+    expect(shouldCommitMove(480, 485, 'touch')).toBe(false)
+    // 两格（10 分钟）：两者都提交。
+    expect(shouldCommitMove(480, 490, 'mouse')).toBe(true)
+    expect(shouldCommitMove(480, 490, 'touch')).toBe(true)
+    // 向前拖同样按绝对位移判定。
+    expect(shouldCommitMove(480, 470, 'touch')).toBe(true)
+    expect(shouldCommitMove(480, 475, 'touch')).toBe(false)
+    // 笔与未知指针类型（空字符串）按触摸处理，偏保守。
+    expect(shouldCommitMove(480, 485, 'pen')).toBe(false)
+    expect(shouldCommitMove(480, 485, '')).toBe(false)
   })
 
   it('converts timeline offsets to minutes from midnight', () => {
