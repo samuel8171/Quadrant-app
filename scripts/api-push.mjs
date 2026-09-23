@@ -144,9 +144,8 @@ if (remoteIsAncestor && remoteSha !== headParent) {
  * 确实共享同一份历史"的探针。
  *
  * 但一次推多个提交时，headParent 是上一个**尚未推送**的本地提交，远端
- * 当然查不到（404）——这不是错误：它会在下面的"补齐缺失对象"环节被一起
- * 推上去，随后才作为新提交的 parent 生效。因此这里只做提示性检查，
- * 404 走告警分支而非中断。
+ * 当然查不到（404）——这不是错误：下面的「创建提交链」环节会**按序**把它
+ * 先建出来，再建 HEAD。这里只做提示性检查，404 走告警分支而非中断。
  */
 try {
   const remoteParent = await api(`/repos/${OWNER}/${REPO}/git/commits/${headParent}`)
@@ -155,7 +154,7 @@ try {
   if (!remoteIsAncestor) throw error
   console.log(
     `远端尚无 parent(${headParent.slice(0, 7)})：本次是「一次推多个提交」，\n` +
-    `  它会随本批对象一起补到远端。`
+    `  提交链创建环节会按序先把它建出来。`
   )
 }
 
@@ -238,23 +237,37 @@ const trees = entries.filter((e) => e.type === 'tree')
 
 /*
  * 根树必须显式补进来。
- * `git ls-tree -r -t HEAD` 只列「有路径的条目」，根树自身没有路径，
+ * `git ls-tree -r -t <commit>` 只列「有路径的条目」，根树自身没有路径，
  * 因此永远不会出现在输出里。漏掉它 → 建提交时 422 "Tree SHA does not exist"。
- * shell 侧已把根树 sha 通过 HEAD_TREE 传入。
+ *
+ * 一次推多个提交时，链上**每个**提交的根树都不同（内容不同），所以 shell 侧
+ * 把整条链的根树逐个写进了 roots.txt。逐个补进来，缺一个就会有对应提交建不出来。
  */
-if (!trees.some((t) => t.sha === headTree)) {
-  trees.push({ mode: '040000', type: 'tree', sha: headTree, path: '' })
+const rootsFile = process.env.ROOTS_FILE
+const rootTrees = rootsFile && existsSync(rootsFile)
+  ? readFileSync(rootsFile, 'utf8').split('\n').map((s) => s.trim()).filter(Boolean)
+  : [headTree]
+for (const sha of rootTrees) {
+  if (!trees.some((t) => t.sha === sha)) {
+    trees.push({ mode: '040000', type: 'tree', sha, path: '' })
+  }
 }
-console.log(`\n本地对象：${blobs.length} 个 blob、${trees.length} 个子树（含根树）`)
+console.log(`\n本地对象：${blobs.length} 个 blob、${trees.length} 个子树（含 ${rootTrees.length} 个根树）`)
 
 /*
  * 先探一个「parent 版本已有」的文件，确认远端对象库确实共享同一份历史对象，
  * 据此可以跳过大量未改动的 blob。
+ *
+ * 按 sha 去重：多提交合并后同一 blob 会出现多次（内容相同 → sha 相同），
+ * 只需上传一次。
  */
 let needUpload = 0
 const missingBlobs = []
+const seenBlobShas = new Set()
 console.log('对照远端，筛选缺失的 blob…')
 for (const b of blobs) {
+  if (seenBlobShas.has(b.sha)) continue
+  seenBlobShas.add(b.sha)
   if (await objectExists(b.sha, 'blob')) continue
   missingBlobs.push(b)
   needUpload++
@@ -276,10 +289,17 @@ for (const b of missingBlobs) {
 /*
  * 子树也必须存在。叶子子树的 blob 已上传，父级子树即可创建；
  * 按路径深度从深到浅创建，保证子引用先就位。
+ *
+ * **按 sha 去重**：同一棵子树可能以不同路径出现在清单里（多提交合并后尤其常见），
+ * 但 tree 对象由 sha 唯一标识，只需上传一次。同一路径的两个不同版本 sha 不同，
+ * 会各自保留——这正是需要的。
  */
 const missingTrees = []
+const seenTreeShas = new Set()
 for (const t of trees) {
+  if (seenTreeShas.has(t.sha)) continue
   if (await objectExists(t.sha, 'tree')) continue
+  seenTreeShas.add(t.sha)
   missingTrees.push(t)
 }
 /*
@@ -292,26 +312,53 @@ console.log(`需上传子树：${missingTrees.length} 个`)
 
 /*
  * 用本地 git 的 tree 内容构造远端 tree。
- * shell 只给了扁平清单，这里从扁平清单重建目录结构：
- * 对每个缺失子树，取它的直接子项（path 前缀匹配且只多一层）。
- * 根树（path === ''）的直接子项就是所有不含 '/' 的条目。
+ *
+ * **核心：按 sha 查，不按路径查。** tree 对象由 sha 唯一标识；同一路径在不同
+ * 提交下内容不同 → sha 不同 → 必须各自重建。若按路径取"直接子项"，两棵同名树
+ * 的孩子会混在一起（本次实测 `src/renderer/src` 同时有 7ffd9b5 与 0ed08e6
+ * 两个 sha），重建出的内容错误 → 报「子树上传后 sha 不匹配」。
+ *
+ * shell 侧已按 sha 导出了完整的「树 → 直接子项」映射（trees.tsv）。
  */
-function directChildren(treePath) {
-  if (treePath === '') {
-    return gitTreeSort(entries.filter((e) => !e.path.includes('/')))
+const treesTsv = process.env.TREES_TSV
+let treeChildren = new Map()
+if (treesTsv && existsSync(treesTsv)) {
+  for (const line of readFileSync(treesTsv, 'utf8').split('\n')) {
+    if (!line) continue
+    const parts = line.split('\t')
+    const sha = parts[0]
+    const kids = []
+    /* 行格式：<treeSha> \t <meta> \t <name> \t <meta> \t <name> … */
+    for (let i = 1; i + 1 < parts.length; i += 2) {
+      const meta = parts[i].split(/\s+/)
+      kids.push({ mode: meta[0], type: meta[1], sha: meta[2], path: parts[i + 1] })
+    }
+    treeChildren.set(sha, kids)
   }
-  const prefix = treePath + '/'
-  return gitTreeSort(entries.filter((e) => {
-    if (!e.path.startsWith(prefix)) return false
-    const rest = e.path.slice(prefix.length)
-    return rest.length > 0 && !rest.includes('/')
-  }))
 }
 
 /* 单棵树上传：返回 API 生成的 sha（用于和本地比对） */
 async function uploadTree(t) {
-  const body = directChildren(t.path).map((c) => ({
-    path: t.path === '' ? c.path : c.path.slice(t.path.length + 1),
+  const cached = treeChildren.get(t.sha)
+  if (!cached) {
+    throw new Error(
+      `缺少树 ${t.sha.slice(0, 7)}（${t.path || '<root>'}）的直接子项映射。\n` +
+      `  trees.tsv 应由 scripts/api-push.sh 生成并通过 TREES_TSV 传入。`
+    )
+  }
+  const body = gitTreeSort(cached).map((c) => ({
+    /*
+     * 条目名直接用 `c.path`——它是 shell 从 `ls-tree <treeSha>`（非 -r）导出的
+     * **直接子名**（裸名，不含目录前缀），正是 API 需要的格式。
+     *
+     * 早期版本在这里做过 `c.path.slice(t.path.length + 1)`，那是错的：
+     * 该切法只适用于"清单里存的是完整路径"的旧数据源。对裸名再切一刀会把
+     * 名字本身切掉开头——`tests` 树切 6 个字符，于是 `reviewDoc.test.ts` 变成
+     * `Doc.test.ts`，远端算出的 tree sha 与本地不符。
+     *
+     * 这里**绝不能**按 t.path 做任何前缀运算。
+     */
+    path: c.path,
     /* 保留 git 的 6 位写法：API 自身也用 "040000" 表示子树，直传即可 */
     mode: c.mode,
     type: c.type,
@@ -362,31 +409,97 @@ while (pending.length > 0) {
   pending = stillMissing.map((x) => x.t)
 }
 
-/* ---------- 创建提交 ---------- */
-console.log('\n创建提交对象…')
-const newCommit = await api(`/repos/${OWNER}/${REPO}/git/commits`, {
-  method: 'POST',
-  body: JSON.stringify({
-    message: headMsgExact,
-    tree: headTree,
-    parents: [headParent],
-    /* 显式带上身份与时间，否则 API 用 token 持有者 + 当前时间，sha 必不同 */
-    author: { name: authorName, email: authorEmail, date: authorDate },
-    committer: { name: committerName, email: committerEmail, date: committerDate }
+/* ---------- 创建提交 ----------
+ *
+ * 读取待创建的提交链（TSV，由老到新）。shell 侧导出，因为 Node 不能 spawn git。
+ *
+ * 单提交情形下这条链只有 HEAD 一个；本地攒了多个未推提交时会有多个——
+ * 那种情况下**必须按序创建**：Git Data API 建提交时 parents 必须已在远端
+ * 对象库中，否则报 `422 Parent SHA does not exist or is not a commit object`。
+ */
+function readCommitsChain() {
+  const tsvPath = process.env.COMMITS_TSV
+  if (!tsvPath || !existsSync(tsvPath)) {
+    /* 回退：只有 HEAD 一个（例如手工直接调本脚本的场景） */
+    return [
+      {
+        sha: headSha,
+        tree: headTree,
+        parent: headParent,
+        authorName,
+        authorEmail,
+        authorDate,
+        committerName,
+        committerEmail,
+        committerDate,
+        message: headMsgExact
+      }
+    ]
+  }
+  return readFileSync(tsvPath, 'utf8')
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => {
+      const [
+        sha, tree, parent, cAuthorName, cAuthorEmail, cAuthorDate,
+        cCommitterName, cCommitterEmail, cCommitterDate, msgB64
+      ] = line.split('\t')
+      return {
+        sha,
+        tree,
+        parent: parent || '',
+        authorName: cAuthorName,
+        authorEmail: cAuthorEmail,
+        authorDate: cAuthorDate,
+        committerName: cCommitterName,
+        committerEmail: cCommitterEmail,
+        committerDate: cCommitterDate,
+        message: Buffer.from(msgB64 ?? '', 'base64').toString('utf8')
+      }
+    })
+}
+
+const chain = readCommitsChain()
+console.log(`\n创建提交对象（${chain.length} 个）…`)
+
+let tipSha = null
+for (const commit of chain) {
+  const created = await api(`/repos/${OWNER}/${REPO}/git/commits`, {
+    method: 'POST',
+    body: JSON.stringify({
+      message: commit.message,
+      tree: commit.tree,
+      parents: commit.parent ? [commit.parent] : [],
+      /* 显式带上身份与时间，否则 API 用 token 持有者 + 当前时间，sha 必不同 */
+      author: { name: commit.authorName, email: commit.authorEmail, date: commit.authorDate },
+      committer: {
+        name: commit.committerName,
+        email: commit.committerEmail,
+        date: commit.committerDate
+      }
+    })
   })
-})
 
-console.log(`新提交: ${newCommit.sha}`)
+  /* sha 必须逐字节复刻；不同说明身份/时间/message/tree 有一处没对齐。 */
+  if (created.sha !== commit.sha) {
+    console.log(
+      `\n⚠️ 远端生成的 commit sha(${created.sha.slice(0, 7)}) 与本地(${commit.sha.slice(0, 7)}) 不同。\n` +
+      `   远端 tree: ${created.tree?.sha ?? '(未知)'}\n` +
+      `   远端 message 字节数: ${Buffer.byteLength(created.message ?? '', 'utf8')}\n` +
+      `   已放弃更新 ref，请人工核查。`
+    )
+    process.exit(1)
+  }
+  console.log(`  ${commit.sha.slice(0, 7)}  ✓`)
+  tipSha = created.sha
+}
 
-if (newCommit.sha !== headSha) {
-  console.log(
-    `\n⚠️ 远端生成的 commit sha(${newCommit.sha.slice(0, 7)}) 与本地(${headSha.slice(0, 7)}) 不同。\n` +
-    `   远端 tree: ${newCommit.tree?.sha ?? '(未知)'}\n` +
-    `   远端 message 字节数: ${Buffer.byteLength(newCommit.message ?? '', 'utf8')}\n` +
-    `   已放弃更新 ref，请人工核查。`
-  )
+if (!tipSha) {
+  console.error('❌ 提交链为空，没有可推送的提交。')
   process.exit(1)
 }
+
+const newCommit = { sha: tipSha }
 
 console.log(`更新 refs/heads/${BRANCH} …`)
 await api(`/repos/${OWNER}/${REPO}/git/refs/heads/${BRANCH}`, {
