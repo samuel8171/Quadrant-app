@@ -13,6 +13,19 @@
   --radius-md: 10px;
   --radius-lg: 12px;
   --mobile-nav-height: 78px;
+
+  /*
+   * 应用视口高度。默认 100dvh（Safari 标签页里它是唯一正确的「可视区」单位）。
+   *
+   * 但 PWA standalone 模式下 100dvh 是错的：iOS 会在冷启动时把
+   * env(safe-area-inset-top) 从 dvh/svh 里减掉（实测 iPhone 14 Pro
+   * 报 793px，真实屏高 852px，差 59px，正好等于灵动岛高度），
+   * 于是布局比屏幕矮一截，底部露出一条缝。此时正确单位是 100lvh/100vh——
+   * standalone 下没有地址栏，「大视口」就等于全屏。
+   *
+   * 覆盖规则见文件末尾的 @media (display-mode: standalone)。
+   */
+  --app-height: 100dvh;
 }
 
 * {
@@ -61,7 +74,7 @@ body {
 
 .app {
   display: flex;
-  height: 100dvh;
+  height: var(--app-height);
   min-height: 0;
   overflow: hidden;
 }
@@ -2333,7 +2346,7 @@ body {
   .app {
     display: block;
     position: relative;
-    height: 100dvh;
+    height: var(--app-height);
   }
 
   .content {
@@ -2345,11 +2358,23 @@ body {
     z-index: 100;
     left: 12px;
     right: 12px;
+    /*
+     * 安全区只在这里避让一次。
+     *
+     * 曾经在 padding-bottom 里又叠了一遍 env(safe-area-inset-bottom)，
+     * 属双重计算：bottom 已经把整条导航抬到安全区之上，padding 再加一次
+     * 纯属白挤内容。Safari 标签页下 inset-bottom 只有 ~8px 不易察觉，
+     * 但 PWA standalone 下是 34px —— 固定高 58 减去 padding 后内容只剩
+     * 12px，而图标+文字实需 46px，会被压到几乎看不见。
+     *
+     * 原注释说「46px 内容高已经够用」，那是在 padding 为 6/6 的前提下算的，
+     * 与叠了安全区的实际值自相矛盾，一并纠正。
+     */
     bottom: max(10px, env(safe-area-inset-bottom));
     width: auto;
     min-width: 0;
     height: var(--mobile-nav-height);
-    padding: 6px 8px calc(6px + env(safe-area-inset-bottom));
+    padding: 6px 8px;
     display: block;
     background: rgba(31, 34, 40, 0.78);
     border: 1px solid rgba(255, 255, 255, 0.12);
@@ -3038,5 +3063,46 @@ body {
     animation-iteration-count: 1 !important;
     scroll-behavior: auto !important;
     transition-duration: 0.01ms !important;
+  }
+}
+
+/*
+ * PWA standalone（添加到主屏幕后全屏打开）的高度修正。
+ *
+ * 成因：iOS 在 standalone 冷启动时把 env(safe-area-inset-top) 从
+ * dvh/svh 里减掉了。实测 iPhone 14 Pro：100dvh 报 793px、真实屏高
+ * 852px、差 59px（= 灵动岛高度），于是布局比屏幕矮一截，底部露缝。
+ * standalone 下没有地址栏，「大视口」就等于全屏，所以 100lvh 才对；
+ * 100lvh 不被支持的旧引擎回落到 100vh（同一语义）。
+ *
+ * 注意：iOS 有个未公开的「docking」行为——滚动/旋转/切后台之后它会
+ * 自行重算成正确值，所以这个缺陷表现为「老安装正常、新安装露缝」，
+ * 靠现象很难复现。这里显式兜住，不依赖那次重算。
+ *
+ * 用 display-mode 与 navigator.standalone 双判据：Safari 对
+ * display-mode: standalone 的支持曾出现过与实际状态不一致的情况，
+ * 故 JS 侧（main.tsx）也会补一个 class，两者取或。
+ */
+@media (display-mode: standalone) {
+  :root {
+    --app-height: 100lvh;
+  }
+}
+
+/* JS 兜底：命中 navigator.standalone === true 时挂上 */
+html[data-standalone='true'] {
+  --app-height: 100lvh;
+}
+
+/*
+ * 兜底顺序说明：100lvh 若不被解析，上面两条声明会整条失效、回落到
+ * :root 的 100dvh。所以此处再补一层 vh 声明，保证至少等于全屏高。
+ */
+@supports not (height: 100lvh) {
+  @media (display-mode: standalone) {
+    :root { --app-height: 100vh; }
+  }
+  html[data-standalone='true'] {
+    --app-height: 100vh;
   }
 }

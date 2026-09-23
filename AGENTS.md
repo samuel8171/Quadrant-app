@@ -100,3 +100,42 @@ CI 里 `node-version` **刻意锁 20**——与 Electron 31 内置的 Node 同�
 - **跨平台文件名**：`node scripts/case-audit.mjs` 按 Linux 规则检查测试与源码引用的每个路径（大小写、是否存在），专治「Windows 不区分大小写所以本机过、Linux 上 ENOENT」。
 - **读 CI 日志**：Actions 步骤日志匿名拉取会 403，但 **check-run 注解匿名可读**。入口在 `/actions/runs/<run_id>/jobs` 返回的 `check_run_url` 上追加 `/annotations`。`.github/ci-annotate.mjs` 会在测试失败时把日志揉成注解（优先 stderr/stdout 区块——vitest 把测试里的 console 输出攒到最后统一打印，未捕获的异步异常就在那里），不看网页也能定位。
 
+## PWA / iOS 全屏（网页端）
+
+网页端支持「添加到主屏幕」后以 standalone 全屏打开。三处关键配置：
+
+- `src/renderer/public/manifest.webmanifest` —— 图标、`start_url`、`scope` 均为 `./` 相对路径。**manifest 内的相对路径以 manifest 自身的 URL 为基准**（不是页面 URL），所以部署在 `/Quadrant-app/` 子路径下依然正确解析。
+- `src/renderer/index.html` —— `viewport-fit=cover` 是 iOS 全屏的硬性前提（不加则内容停在安全区边界、Safari 渲染一条实心色条）；`apple-touch-icon` 优先级高于 manifest 图标，**缺失时 iOS 会用页面截图当图标**；`apple-mobile-web-app-capable` 仅为兼容 iOS 26 之前的旧系统，26+ 已默认全屏。
+- `src/renderer/src/main.tsx` —— 在 React 挂载前同步打 `html[data-standalone]`。
+
+### 视口高度：`--app-height` 变量
+
+`.app` 的高度统一走 `var(--app-height)`，**不要再写死 `100dvh`**。
+
+原因是 PWA standalone 下 `100dvh` 是错的：iOS 在冷启动时把 `env(safe-area-inset-top)` 从 dvh/svh 里减掉了（实测 iPhone 14 Pro 报 793px、真实屏高 852px、差 59px = 灵动岛高度），布局比屏幕矮一截、底部露缝；而 standalone 下没有地址栏，`100lvh`（「大视口」）才等于全屏。覆盖规则在 `theme.css` 末尾，用 `@media (display-mode: standalone)` 与 `html[data-standalone='true']` **双判据取或**（WebKit 对 `display-mode` 的支持历史上与实际状态不一致过，`navigator.standalone` 更可靠）。
+
+iOS 另有个未公开的「docking」行为——滚动/旋转/切后台后会自行重算成正确值，所以该缺陷表现为**「老安装正常、新安装露缝」**，靠现象几乎无法复现。
+
+### 安全区只避让一次（曾踩坑）
+
+`.sidebar` 一度写成 `bottom: max(10px, env(safe-area-inset-bottom))` **同时**在 `padding-bottom` 里再叠一次 `env(safe-area-inset-bottom)`，属双重计算。Safari 标签页下 `inset-bottom ≈ 8px` 不易察觉，但 **standalone 下是 34px**：固定高 58 减去 padding 后内容只剩 12px，而按钮实需 44px，会被压到几乎看不见。
+
+规则：**定位（`bottom`/`top`）负责避让安全区，padding 就不要再叠一次**。其余用到 `env(safe-area-inset-bottom)` 的地方都是与 `--mobile-nav-height` 相加（把浮层抬到导航条之上），语义正确，不要一并乱改。
+
+### 探针 `scripts/pwa-height-probe.mjs` 的两条验证边界
+
+```
+node scripts/pwa-height-probe.mjs --out docs/probes/pwa-height.md
+```
+
+必须知道它**测不出什么**，否则会把「全绿」误当成「验证过」：
+
+1. **桌面 `env(safe-area-inset-*)` 恒为 0**，无法通过 viewport 设置模拟 iOS 安全区。探针靠注入样式伪造（否则「导航条是否被挤扁」在 PC 上永远假通过）。
+2. **高度修正本身无法被它证伪**。把 `theme.css` 还原到修复前（`.app` 为 `height: 100dvh`、无 `--app-height`），探针照样报全绿——因为 PC 上 `100dvh` 就等于视口高。iOS 少算 `safe-area-inset-top` 是 WebKit 特有行为，桌面 Chromium 不重现。
+
+所以判定 1 只能证明「变量被正确应用且等于全屏高」，**真机验收不可替代**。
+
+### 探测页入口
+
+探针须走 `/probe.html?page=weekly&sidebar=1`，**不要用 `/`**：`/` 是登录页（`.app` 与 `.sidebar` 都不存在，测量会拿到 null），而探测页会直接挂载真实组件并绕开登录门禁。另外探测页要先 `await init()`，`waitForSelector('.app')` 等到才说明挂载完成（期间渲染的是 `loading…`）。
+

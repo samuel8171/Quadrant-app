@@ -2,8 +2,36 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      viewport-fit=cover 是 iOS 全屏（添加到主屏幕）的硬性前提：
+      不加的话内容在安全区边界就停住，Safari 会在内容与工具栏之间
+      渲染一条实心色条，底部玻璃也透不出来。
+    -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+    />
     <title>象限</title>
+    <meta name="description" content="面向大学生的时间管理：目标拆解、四象限、周计划与周日复盘" />
+
+    <link rel="icon" type="image/png" sizes="64x64" href="./icons/favicon-64.png" />
+
+    <!-- PWA：iOS 26 起「添加到主屏幕」默认以 web app 打开，manifest 非必需，
+         但提供了它，图标与名称才会被采用。 -->
+    <link rel="manifest" href="./manifest.webmanifest" />
+
+    <!-- iOS 主屏幕图标：apple-touch-icon 优先级高于 manifest.icons，
+         缺失时 iOS 会用页面截图当图标（糊）。180x180 是 WebKit 采用的尺寸。 -->
+    <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png" />
+
+    <!-- 旧版 iOS（< 26）需要该 meta 才会以全屏打开；iOS 26+ 已默认如此。
+         保留是为了兼容仍在用旧系统的设备。 -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="象限" />
+    <!-- black-translucent 让内容延伸到状态栏下方，配合 viewport-fit=cover
+         由 env(safe-area-inset-*) 自行避让。 -->
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   </head>
   <body>
     <div id="root"></div>
