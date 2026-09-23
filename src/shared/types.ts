@@ -2,6 +2,15 @@ export type Quadrant = 1 | 2 | 3 | 4
 
 export type GoalType = 'long' | 'short'
 
+/**
+ * 单个事件的照片上限。
+ *
+ * 取 3 是**版式与存储的双重约束**：事件块本身只有 `EVENT_HEIGHT_UNITS`（1.6 单位）
+ * 高，缩略图条再多就会把卡片撑到覆盖相邻事件；而按 pica 压完约 100 kB/张计，
+ * 一个事件 3 张也只有 300 kB 量级，IndexedDB 完全没有压力。
+ */
+export const MAX_EVENT_PHOTOS = 3
+
 export interface QuadrantEvent {
   id: string
   text: string
@@ -13,6 +22,14 @@ export interface QuadrantEvent {
   deadline?: string
   escalateAt?: string
   createdAt: string
+  /**
+   * 照片实体 id 列表（上限 3 张，见 `MAX_EVENT_PHOTOS`）。
+   *
+   * **这里只存 id，不存图片本身**：整份 `AppData` 会被 JSON 进 localStorage 且
+   * 整行 upsert 到云端，内嵌 base64 必然撑爆两者。实体走 IndexedDB / 桌面端文件，
+   * 读取见 `lib/photoStore.ts`。
+   */
+  photos?: string[]
 }
 
 export interface Subtask {

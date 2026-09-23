@@ -18,6 +18,17 @@ export function validCloudData(value: unknown): value is AppData {
   return !!d && d.version === 2 && Array.isArray(d.goals) && Array.isArray(d.events) && Array.isArray(d.weekPresets) && Array.isArray(d.weekEvents)
 }
 
+/**
+ * 事件块的照片 id 列表。
+ *
+ * 与 `platformApi.validAppData` 里的同名判据保持一致的宽严程度：
+ * 只要求"是字符串数组"，不强制 `ph-` 前缀——前缀是实现细节，
+ * 云端若混入了别的来源（未来换存储后端）不该整份数据被拒。
+ */
+export function eventPhotos(event: { photos?: unknown }): string[] {
+  return Array.isArray(event.photos) ? event.photos.filter((id): id is string => typeof id === 'string') : []
+}
+
 export interface SyncNotice {
   /** 写入方的设备标识，用于抑制回环。 */
   deviceId: string

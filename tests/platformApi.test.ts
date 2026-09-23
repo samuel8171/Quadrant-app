@@ -61,4 +61,59 @@ describe('web platform API', () => {
     ;(globalThis as any).Blob = oldBlob
     ;(globalThis as any).URL = oldURL
   })
+
+  it('keeps events that carry photo ids', async () => {
+    const storage = memoryStorage()
+    const api = createWebPlatformApi(storage)
+    const data = {
+      ...defaultData(),
+      events: [
+        {
+          id: 'e1',
+          text: '带照片',
+          remark: '',
+          quadrant: 1 as const,
+          x: 0,
+          y: 0,
+          width: 6,
+          createdAt: 'now',
+          photos: ['ph-1', 'ph-2']
+        }
+      ]
+    }
+    await api.saveData(data)
+    expect((await api.loadData()).events[0].photos).toEqual(['ph-1', 'ph-2'])
+  })
+
+  it('rejects data whose photos field is not a string array', async () => {
+    const storage = memoryStorage()
+    const api = createWebPlatformApi(storage)
+    const base = {
+      id: 'e1',
+      text: 't',
+      remark: '',
+      quadrant: 1,
+      x: 0,
+      y: 0,
+      width: 6,
+      createdAt: 'now'
+    }
+    // 校验器对白名单外的字段整体放行，photos 必须显式校验——
+    // 否则一个数字混进来，渲染层的 .map 会直接抛错、整个页面白屏。
+    for (const bad of [123, 'ph-1', [1, 2], null]) {
+      storage.setItem(
+        'quadrant-web-data-v2',
+        JSON.stringify({ ...defaultData(), events: [{ ...base, photos: bad }] })
+      )
+      expect(await api.loadData()).toEqual(defaultData())
+    }
+    // 缺字段（老数据）与空数组都必须继续被接受。
+    storage.setItem('quadrant-web-data-v2', JSON.stringify({ ...defaultData(), events: [base] }))
+    expect((await api.loadData()).events).toHaveLength(1)
+    storage.setItem(
+      'quadrant-web-data-v2',
+      JSON.stringify({ ...defaultData(), events: [{ ...base, photos: [] }] })
+    )
+    expect((await api.loadData()).events).toHaveLength(1)
+  })
 })

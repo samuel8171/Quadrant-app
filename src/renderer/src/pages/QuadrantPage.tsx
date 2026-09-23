@@ -1,10 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Quadrant, QuadrantEvent } from '../../../shared/types'
+import { MAX_EVENT_PHOTOS } from '../../../shared/types'
 import ConfirmDialog from '../components/ConfirmDialog'
 import ContextMenu, { type ContextMenuState } from '../components/ContextMenu'
 import EventCard from '../components/EventCard'
 import EventDetailDialog from '../components/EventDetailDialog'
+import ImageViewer from '../components/ImageViewer'
 import { previewMove } from '../lib/eventRules'
+import { compressPhoto } from '../lib/photoCompress'
+import { newPhotoId, putPhoto, removePhoto } from '../lib/photoStore'
 import {
   AXIS_GAP_PX,
   QUADRANT_META,
@@ -89,6 +93,14 @@ export default function QuadrantPage(): JSX.Element {
   const [deletePendingId, setDeletePendingId] = useState<string | null>(null)
   const [dragPreview, setDragPreview] = useState<PreviewState | null>(null)
   const [tick, setTick] = useState(0)
+  /** 已展开缩略图条的事件 id 集合（短按切换，可多个同时展开）。 */
+  const [photosOpen, setPhotosOpen] = useState<Set<string>>(() => new Set())
+  /** 图片查看器：{ 事件 id, 初始下标 }。 */
+  const [viewer, setViewer] = useState<{ eventId: string; index: number } | null>(null)
+  const [photoBusy, setPhotoBusy] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
+  /** 正在为哪个事件加照片（文件选择器是异步的，须记住发起方）。 */
+  const photoTargetRef = useRef<string | null>(null)
 
   viewRef.current = view
 
@@ -518,7 +530,19 @@ export default function QuadrantPage(): JSX.Element {
       // 桌面沿用原生 click / dblclick，避免两条判定路径互相打架。
       if (ctx.pointerType === 'mouse') return
       if (ctx.hit.kind === 'item') {
-        if (isDouble && ctx.hit.id) openEditById(ctx.hit.id)
+        if (isDouble && ctx.hit.id) {
+          openEditById(ctx.hit.id)
+          return
+        }
+        // 短按**带照片**的事件块 → 展开/收起缩略图；无照片时保持原语义（仅选中）。
+        // 这样不改变任何既有事件的短按行为，只有真的加了照片才多出一个动作。
+        if (ctx.hit.id) {
+          const target = eventsRef.current.find((e) => e.id === ctx.hit.id)
+          if (target && (target.photos?.length ?? 0) > 0) {
+            togglePhotos(ctx.hit.id)
+            setSelectedId(ctx.hit.id)
+          }
+        }
         return
       }
       if (!isDouble) {
@@ -661,6 +685,83 @@ export default function QuadrantPage(): JSX.Element {
     setMenu({ x: e.clientX, y: e.clientY, eventId: event.id })
   }
 
+  /**
+   * 打开文件选择器。`accept="image/*"` 之外**不设 `capture`**——
+   * 用户的照片既可能来自相册也可能来自当场拍摄，交给系统选择器决定。
+   */
+  const startAddPhoto = (eventId: string): void => {
+    photoTargetRef.current = eventId
+    const input = fileInputRef.current
+    if (!input) return
+    input.value = ''
+    input.click()
+  }
+
+  /**
+   * 处理选中的文件：压缩 → 存实体 → 把 id 挂到事件上。
+   *
+   * 顺序很关键：**先存实体再改事件**。反过来的话，若存实体失败，事件上就有了
+   * 一个指向不存在照片的 id，渲染时是一块空白缩略图，且用户无从修复。
+   */
+  const onPickPhotos = async (fileList: FileList | null): Promise<void> => {
+    const eventId = photoTargetRef.current
+    photoTargetRef.current = null
+    if (!eventId || !fileList || fileList.length === 0) return
+
+    const event = eventsRef.current.find((e) => e.id === eventId)
+    if (!event) return
+    const existing = event.photos ?? []
+    const room = MAX_EVENT_PHOTOS - existing.length
+    if (room <= 0) return
+
+    setPhotoBusy(true)
+    const added: string[] = []
+    try {
+      // 多选时按剩余额度截断：宁可少加，也不要静默丢弃用户已经压好的图。
+      for (const file of Array.from(fileList).slice(0, room)) {
+        if (!file.type.startsWith('image/')) continue
+        const { blob } = await compressPhoto(file)
+        const id = newPhotoId()
+        await putPhoto(id, blob)
+        added.push(id)
+      }
+      if (added.length === 0) return
+      const target = eventsRef.current.find((e) => e.id === eventId)
+      if (!target) {
+        // 压缩期间事件被删了：把刚存进去的实体回收掉，别留孤儿。
+        await Promise.all(added.map((id) => removePhoto(id)))
+        return
+      }
+      updateEvent(eventId, { photos: [...(target.photos ?? []), ...added] }, viewRef.current)
+      // 加完直接展开，否则用户看不到刚加的照片，会以为没成功。
+      setPhotosOpen((prev) => new Set(prev).add(eventId))
+      setSelectedId(eventId)
+    } catch {
+      // 压缩/落盘失败时清掉半成品，保持"要么成功要么无事发生"。
+      await Promise.all(added.map((id) => removePhoto(id)))
+    } finally {
+      setPhotoBusy(false)
+    }
+  }
+
+  const removeEventPhoto = async (eventId: string, index: number): Promise<void> => {
+    const event = eventsRef.current.find((e) => e.id === eventId)
+    const photos = event?.photos ?? []
+    const id = photos[index]
+    if (!id) return
+    updateEvent(eventId, { photos: photos.filter((_, i) => i !== index) }, viewRef.current)
+    await removePhoto(id)
+  }
+
+  const togglePhotos = (eventId: string): void => {
+    setPhotosOpen((prev) => {
+      const next = new Set(prev)
+      if (next.has(eventId)) next.delete(eventId)
+      else next.add(eventId)
+      return next
+    })
+  }
+
   const commitEditing = (): void => {
     if (!editing) return
     if (editing.mode === 'create') {
@@ -673,8 +774,17 @@ export default function QuadrantPage(): JSX.Element {
   }
 
   const detailEvent = detailId ? events.find((e) => e.id === detailId) : undefined
+  const viewerEvent = viewer ? events.find((e) => e.id === viewer.eventId) : undefined
   const overdue = (e: QuadrantEvent): boolean =>
     !!e.deadline && new Date(e.deadline).getTime() < Date.now()
+
+  /** 该事件是否还能再加照片。未达上限才在菜单里显示「添加照片」。 */
+  const canAddPhotoTo = (eventId?: string): boolean => {
+    if (!eventId) return false
+    const target = events.find((e) => e.id === eventId)
+    if (!target) return false
+    return (target.photos?.length ?? 0) < MAX_EVENT_PHOTOS
+  }
 
   return (
     <div className="quadrant-page">
@@ -716,7 +826,9 @@ export default function QuadrantPage(): JSX.Element {
                 selected={selectedId === e.id}
                 armed={gestures.armedId === e.id}
                 dragging={dragPreview?.id === e.id}
+                photosOpen={photosOpen.has(e.id)}
                 onSelect={() => setSelectedId(e.id)}
+                onOpenPhoto={(index) => setViewer({ eventId: e.id, index })}
                 onContextMenu={onEventContextMenu}
               />
             )
@@ -754,6 +866,7 @@ export default function QuadrantPage(): JSX.Element {
         <ContextMenu
           menu={menu}
           canPaste={hasClipboardEvent()}
+          canAddPhoto={canAddPhotoTo(menu.eventId)}
           onAction={(action) => {
             if (action === 'cut') {
               cutEvent(menu.eventId!)
@@ -764,6 +877,7 @@ export default function QuadrantPage(): JSX.Element {
               setSelectedId(menu.eventId!)
             }
             if (action === 'paste') pasteEvent(view, menu.worldX, menu.worldY)
+            if (action === 'photo' && menu.eventId) startAddPhoto(menu.eventId)
             if (action === 'delete') {
               setDeletePendingId(menu.eventId!)
             }
@@ -784,12 +898,37 @@ export default function QuadrantPage(): JSX.Element {
         <ConfirmDialog
           message="确定删除该事件？"
           onConfirm={() => {
+            // 事件连同照片一起删：先摘实体再删事件，避免照片文件成为孤儿。
+            const target = events.find((e) => e.id === deletePendingId)
+            const ids = target?.photos ?? []
             deleteEvent(deletePendingId)
+            void Promise.all(ids.map((id) => removePhoto(id)))
             if (selectedId === deletePendingId) setSelectedId(null)
           }}
           onCancel={() => setDeletePendingId(null)}
         />
       )}
+      {viewer && viewerEvent && (viewerEvent.photos?.length ?? 0) > 0 && (
+        <ImageViewer
+          photoIds={viewerEvent.photos ?? []}
+          initialIndex={viewer.index}
+          caption={viewerEvent.text}
+          onClose={() => setViewer(null)}
+        />
+      )}
+      {/*
+        隐藏的文件选择器：常驻 DOM（而不是点菜单时才创建）。
+        iOS 要求 `input.click()` 发生在用户手势的同一个任务里，
+        动态挂载再点会被当成"非用户触发"而静默忽略。
+      */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        multiple
+        hidden
+        onChange={(e) => void onPickPhotos(e.target.files)}
+      />
       <span className="tick-sink">{tick}</span>
     </div>
   )

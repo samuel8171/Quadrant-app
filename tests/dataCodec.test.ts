@@ -81,4 +81,61 @@ describe('dataCodec', () => {
     expect(() => parseData('not json')).toThrow()
     expect(parseData('{"version":2}')).toEqual(defaultData())
   })
+
+  it('preserves event photo ids across a round trip', () => {
+    // normalizeEvent 是逐字段重建的，漏掉 photos 就会静默擦掉照片——
+    // 桌面端每次读写都走这条路径，所以这个回归必须有测试兜住。
+    const data = defaultData()
+    data.events = [
+      {
+        id: 'e1',
+        text: '带照片的事件',
+        remark: '',
+        quadrant: 1,
+        x: 0,
+        y: 0,
+        width: 6,
+        createdAt: 'x',
+        photos: ['ph-a', 'ph-b']
+      }
+    ]
+    const parsed = parseData(serializeData(data))
+    expect(parsed.events[0].photos).toEqual(['ph-a', 'ph-b'])
+  })
+
+  it('drops non-string photo ids and enforces the cap', () => {
+    const raw = JSON.stringify({
+      version: 2,
+      goals: [],
+      events: [
+        {
+          id: 'e1',
+          text: 't',
+          remark: '',
+          quadrant: 1,
+          x: 0,
+          y: 0,
+          width: 6,
+          createdAt: 'x',
+          // 混入非法项 + 超过上限，两者都该被规整掉而不是让渲染层炸掉。
+          photos: ['ok', 42, null, 'a', 'b', 'c', 'd']
+        }
+      ],
+      weekPresets: [],
+      weekEvents: [],
+      weekCounterOffset: 0
+    })
+    const parsed = parseData(raw)
+    expect(parsed.events[0].photos).toEqual(['ok', 'a', 'b'])
+  })
+
+  it('omits photos entirely when absent or empty', () => {
+    const data = defaultData()
+    data.events = [
+      { id: 'e1', text: 't', remark: '', quadrant: 1, x: 0, y: 0, width: 6, createdAt: 'x', photos: [] }
+    ]
+    const parsed = parseData(serializeData(data))
+    // 空数组统一收敛成 undefined，避免"有字段但无内容"的两种等价形态同时存在。
+    expect(parsed.events[0].photos).toBeUndefined()
+  })
 })

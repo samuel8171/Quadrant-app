@@ -33,6 +33,17 @@ function hasStringFields(value: unknown, fields: string[]): boolean {
   return isRecord(value) && fields.every((field) => typeof value[field] === 'string')
 }
 
+/**
+ * `photos` 是**可选**字段（老数据没有），但一旦存在就必须是字符串数组。
+ *
+ * 关键在于校验器对未知字段是"整体放行"的——`validAppData` 只检查白名单字段的
+ * 类型，多余字段不校验也不剔除。所以这里必须显式校验，否则一个 `photos: 123`
+ * 会被当合法数据收进来，随后渲染层 `.map` 直接抛错。
+ */
+function validPhotos(value: unknown): boolean {
+  return value === undefined || (Array.isArray(value) && value.every((id) => typeof id === 'string'))
+}
+
 function validAppData(value: unknown): value is AppData {
   if (!isRecord(value)) return false
   const data = value as Partial<AppData>
@@ -47,7 +58,7 @@ function validAppData(value: unknown): value is AppData {
       hasStringFields(subtask, ['id', 'title', 'remark']) && typeof subtask.done === 'boolean' &&
       typeof subtask.group === 'number' && Number.isFinite(subtask.group) && typeof subtask.order === 'number' && Number.isFinite(subtask.order))) &&
     data.events.every((event) => isRecord(event) && hasStringFields(event, ['id', 'text', 'remark', 'createdAt']) &&
-      [1, 2, 3, 4].includes(event.quadrant as number) &&
+      [1, 2, 3, 4].includes(event.quadrant as number) && validPhotos(event.photos) &&
       ['x', 'y', 'width'].every((field) => typeof event[field] === 'number' && Number.isFinite(event[field] as number))) &&
     data.weekPresets.every((preset) => isRecord(preset) && hasStringFields(preset, ['id', 'title', 'color', 'remark', 'createdAt']) &&
       [1, 2, 3, 4].includes(preset.quadrant as number) && typeof preset.durationMin === 'number' && Number.isFinite(preset.durationMin)) &&

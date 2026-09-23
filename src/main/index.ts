@@ -4,6 +4,7 @@ import type { AppData, ReviewExport, SyncMeta } from '../shared/types'
 import { flushPendingWrites, loadData, saveData } from './dataStore'
 import { loadSyncMeta, saveSyncMeta } from './syncStore'
 import { listReviews, openReview, saveReview } from './review'
+import { deletePhoto, loadPhoto, savePhoto } from './photoStore'
 
 /** 退出前等待最后一批写入的上限；超过则直接退出，不能卡住用户关窗口。 */
 const QUIT_FLUSH_TIMEOUT_MS = 3000
@@ -39,6 +40,9 @@ app.whenReady().then(() => {
   ipcMain.handle('review:save', (_event, payload: ReviewExport) => saveReview(payload))
   ipcMain.handle('review:list', () => listReviews())
   ipcMain.handle('review:open', (_event, filePath: string) => openReview(filePath))
+  ipcMain.handle('photo:save', (_event, id: string, dataUrl: string) => savePhoto(id, dataUrl))
+  ipcMain.handle('photo:load', (_event, id: string) => loadPhoto(id))
+  ipcMain.handle('photo:delete', (_event, id: string) => deletePhoto(id))
   createWindow()
 
   app.on('activate', () => {

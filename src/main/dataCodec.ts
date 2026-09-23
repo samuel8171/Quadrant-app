@@ -1,4 +1,5 @@
 import {
+  MAX_EVENT_PHOTOS,
   WEEK_COLORS,
   type AppData,
   type Goal,
@@ -136,6 +137,11 @@ function normalizeGoal(raw: Record<string, unknown>): Goal {
 }
 
 function normalizeEvent(raw: Record<string, unknown>): QuadrantEvent {
+  // `photos` 走显式白名单：本函数是**逐字段重建**（不是展开原对象），
+  // 漏掉这里的话，桌面端每次读写都会把照片 id 静默擦掉。
+  const photos = Array.isArray(raw.photos)
+    ? raw.photos.filter((id): id is string => typeof id === 'string').slice(0, MAX_EVENT_PHOTOS)
+    : undefined
   return {
     id: String(raw.id ?? ''),
     text: String(raw.text ?? ''),
@@ -146,6 +152,7 @@ function normalizeEvent(raw: Record<string, unknown>): QuadrantEvent {
     width: typeof raw.width === 'number' ? raw.width : 6,
     deadline: typeof raw.deadline === 'string' ? raw.deadline : undefined,
     escalateAt: typeof raw.escalateAt === 'string' ? raw.escalateAt : undefined,
-    createdAt: typeof raw.createdAt === 'string' ? raw.createdAt : new Date().toISOString()
+    createdAt: typeof raw.createdAt === 'string' ? raw.createdAt : new Date().toISOString(),
+    photos: photos && photos.length > 0 ? photos : undefined
   }
 }

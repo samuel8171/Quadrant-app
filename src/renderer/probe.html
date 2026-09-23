@@ -4,6 +4,13 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>象限 · 开发期探测页</title>
+    <!--
+      与 index.html 一致地显式声明图标。
+      缺了它浏览器会去请求 /favicon.ico，而 Vite 开发服务器对该路径返回 404——
+      探针脚本在断言"无 console error"时会被这条噪音误伤（本文件是唯一没有
+      icon 声明的入口页）。
+    -->
+    <link rel="icon" type="image/png" sizes="64x64" href="./icons/favicon-64.png" />
   </head>
   <body>
     <div id="root"></div>

@@ -823,6 +823,216 @@ body {
   opacity: 0.75;
 }
 
+/* ------------------------------------------------------------ 事件照片 */
+
+/*
+ * 缩略图角标：不展开时也能一眼看出"这个块上有照片"。
+ * 用绝对定位压在右上角，不参与卡片的纵向排版——事件块只有 1.6 单位高，
+ * 任何进入文档流的元素都会改变卡片高度、进而与相邻事件重叠。
+ */
+.event-photo-badge {
+  position: absolute;
+  right: 3px;
+  top: 3px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 4px;
+  border-radius: 7px;
+  background: var(--accent);
+  color: #0f1115;
+  font-size: 10px;
+  line-height: 14px;
+  font-weight: 600;
+  text-align: center;
+  pointer-events: none;
+}
+
+/*
+ * 缩略图条。**故意溢出卡片下沿**（卡片有固定几何，不能撑高），
+ * 因此需要 overflow: visible 与足够高的 z-index——它必须盖在相邻事件之上。
+ */
+.event-photos {
+  position: absolute;
+  left: 0;
+  top: 100%;
+  margin-top: 5px;
+  /* 堆叠叠进量：由 EventCard 以内联 marginLeft 引用，便于按断点调整。 */
+  --photo-overlap: -14px;
+  display: flex;
+  align-items: flex-start;
+  padding: 4px 6px;
+  border-radius: var(--radius-sm);
+  background: rgba(0, 0, 0, 0.72);
+  border: 1px solid var(--border);
+  z-index: 6;
+  animation: photo-strip-in 0.16s ease-out;
+}
+
+@keyframes photo-strip-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* 堆叠感靠负 margin 与递减 z-index 做出来（见 EventCard 的内联样式）。 */
+.event-photo {
+  position: relative;
+  width: 46px;
+  height: 46px;
+  padding: 0;
+  border: 1.5px solid rgba(255, 255, 255, 0.55);
+  border-radius: 6px;
+  background: #1a1d23;
+  overflow: hidden;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+  transition: transform 0.14s ease-out;
+}
+
+.event-photo:hover {
+  transform: translateY(-3px);
+}
+
+.event-photo img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* 实体尚未就绪（IndexedDB 读取中）时的占位。 */
+.event-photo-empty {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: repeating-linear-gradient(
+    45deg,
+    rgba(255, 255, 255, 0.06) 0px,
+    rgba(255, 255, 255, 0.06) 4px,
+    transparent 4px,
+    transparent 8px
+  );
+}
+
+/* ------------------------------------------------------------ 大图查看器 */
+
+.image-viewer {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  background: rgba(0, 0, 0, 0.94);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: fade-in 0.16s ease-out;
+  /* 触屏自己处理缩放与平移，别让浏览器抢走手势去滚页面。 */
+  touch-action: none;
+  overscroll-behavior: contain;
+}
+
+.image-viewer.closing {
+  animation: fade-out 0.16s ease-in forwards;
+}
+
+/*
+ * 右上角退出按钮。
+ * 位置必须走 `calc(12px + var(--safe-top))`：PWA standalone 下状态栏会向下
+ * 虚化约 8-14px，贴边放置会让按钮落进毛玻璃带里被糊掉（项目里踩过一次）。
+ */
+.image-viewer-close {
+  position: absolute;
+  top: calc(12px + var(--safe-top));
+  right: 12px;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+  transition: background 0.15s;
+}
+
+.image-viewer-close:hover {
+  background: rgba(255, 255, 255, 0.26);
+}
+
+.image-viewer-counter {
+  position: absolute;
+  top: calc(20px + var(--safe-top));
+  left: 50%;
+  transform: translateX(-50%);
+  color: rgba(255, 255, 255, 0.8);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+.image-viewer-stage {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.image-viewer-stage img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  transform-origin: center center;
+  will-change: transform;
+  /* 缩放由我们自己用 transform 驱动，禁用浏览器的过渡以免拖影。 */
+  transition: none;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.image-viewer-missing {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: center;
+  color: rgba(255, 255, 255, 0.75);
+  font-size: 14px;
+}
+
+.image-viewer-missing span {
+  font-size: 12px;
+  opacity: 0.6;
+}
+
+.image-viewer-dots {
+  position: absolute;
+  bottom: calc(18px + env(safe-area-inset-bottom));
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(8px);
+}
+
+.image-viewer-dot {
+  width: 7px;
+  height: 7px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.35);
+  cursor: pointer;
+}
+
+.image-viewer-dot.active {
+  background: #fff;
+}
+
 .event-input {
   position: absolute;
   background: #000000cc;
@@ -1934,22 +2144,6 @@ body {
   transition: background-color 0.18s ease;
 }
 
-/*
- * 未填充区的轮廓线。
- *
- * 未填充段与卡片同色之后，轨道范围就看不见了——需要一条 1px 的内描边
- * 把"可拖动的范围"标出来。它必须画在滑块**之上**（DOM 里排在 thumb 之前
- * 但 z-index 更高会盖住 thumb，所以刻意不设 z-index，靠绝对定位叠在
- * segments 之上、thumb 之下）。
- */
-.review-slider-baseline {
-  position: absolute;
-  inset: 0;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  pointer-events: none;
-}
-
 .review-slider-thumb {
   position: absolute;
   top: 50%;
@@ -2594,10 +2788,6 @@ body {
    * 标签与轨道同行（原先标签独占一行，行内容高约 76px 而 flex:1 只给到 44px，
    * 每行溢出约 43px，导致标签被轨道压住、第三条轨道压到文本框）。
    * 标签定宽 → 三条轨道必然等长。
-   *
-   * 注意这里**不要**再加浅色底（曾用 rgba(255,255,255,0.03)）：它会在
-   * 卡片之上再垫一层，叠出第三种色阶，正是"颜色与背景块不统一"的第二处来源。
-   * 行底色保持透明，与 .review-sliders 卡片同面。
    */
   .review-slider-row {
     display: flex;
@@ -2605,7 +2795,7 @@ body {
     gap: 8px;
     padding: 0 8px;
     border-radius: 12px;
-    background: transparent;
+    background: rgba(255,255,255,0.03);
   }
 
   .review-slider-label {
@@ -2731,6 +2921,25 @@ body {
     height: 14px;
     left: 4px;
     border-width: 2px;
+  }
+
+  /*
+   * 手机端缩略图放大到 56px：46px 在这个尺寸下比指尖（约 8-10mm ≈ 40px）
+   * 还小，加上堆叠时的负 margin，实际可点面积只剩 ~32px，很容易点错张数。
+   * 堆叠间距同步收到 -18px，保持总宽不至于溢出卡片太多。
+   */
+  .event-photos {
+    --photo-overlap: -18px;
+  }
+
+  .event-photo {
+    width: 56px;
+    height: 56px;
+  }
+
+  .image-viewer-close {
+    width: 44px;
+    height: 44px;
   }
 
   .page-switch-up,
