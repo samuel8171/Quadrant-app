@@ -10,6 +10,15 @@
 
 ## git 操作（沙箱限制）
 
+- **推送必须走 `bash scripts/api-push.sh`，不要用 `git push`。** 本机 git-over-HTTPS 通道已废：直连 `github.com:443` 不通，配置代理 `127.0.0.1:7897` 是死端口，环境变量代理 `127.0.0.1:14829` 只扛得住 `ls-remote`（小请求 200 / 0.6s），push 几 MB 会 `schannel: server closed abruptly` 或 `CONNECT tunnel failed, response 502`。`api.github.com` 直连稳定，故改用 Git Data API。
+  - 用法：`bash scripts/api-push.sh --dry-run` 校验条件，`bash scripts/api-push.sh` 实推。**约 3 分 40 秒**（逐个探测约 213 个 blob 的存在性），必须用后台方式跑，前台会超时。
+  - 脚本保证远端 commit sha 与本地**逐字节一致**，不做本地改写；推前会校验「远端顶点 == 本地 HEAD 的 parent」，不一致就拒绝（防误覆盖）。
+  - **坑 1 · 根树要显式补**：`git ls-tree -r -t HEAD` 不列根树（它没有 path），漏掉就 `422 Tree SHA does not exist`。
+  - **坑 2 · tree 条目顺序**：git 按路径**原始字节**升序写 tree，且子树按「路径 + `/`」参与比较（`build/` 与 `build.sh` 的先后由此决定）。顺序错 → sha 不符。
+  - **坑 3 · 中文路径**：不加 `-z` 时 git 会把含非 ASCII 的路径 C 风格引用（实际得到 `"ChatGPT Image 2026\345\271\2648..."`）。必须 `git ls-tree -r -t -z` 取原样字节。
+  - **坑 4 · message 尾部换行**：`$(git log --format=%B)` 吃掉全部行尾换行，而 commit 对象要求末尾恰有一个 `\n`（本地 3487 B vs 远端 3486 B）。改走 base64 传递。
+  - **坑 5 · author/committer**：API 默认用 token 持有者 + 当前时间，sha 必不同。要显式传 `{name, email, date}` 复刻本地身份（当前提交者是 `Codex <codex@local>`）。
+  - **沙箱拦子进程**：Node 里 `execFileSync('git', …)` 报 `EBUSY (-4082)`，绝对路径也一样。所以 git 操作全在 `.sh` 侧完成，结果经环境变量传给 `.mjs`。
 - **带斜杠的标签名会静默失败**：`git tag -a "archive/xxx" ...` 返回退出码 0，但不会在 `.git/refs/tags/` 下创建子目录，标签实际不存在。改用扁平命名（如 `archive-xxx`），或先创建再 `git verify-tag` 确认。
 - 验收标签必须按 ref 全路径查询：`git rev-parse refs/tags/<name>`，`git tag -l` 的输出偶尔滞后。
 - **切换分支后必须核验工作区完整性**：曾出现 `git checkout -b` 只更新索引、约 30 个文件未写入磁盘的情况（`git status` 显示大批 ` D`）。核验方法：`git diff HEAD --stat` 应为空；修复用 `git restore --worktree --source=HEAD .`。

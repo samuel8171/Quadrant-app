@@ -1,0 +1,29 @@
+# 统一换行符策略。
+#
+# 背景：本机 core.autocrlf=true（Windows），提交时 LF→CRLF、检出时反向转换。
+# 这对 .ts/.tsx 之类的源码无害，但对 shell 脚本是致命的——CRLF 的 .sh 在
+# Linux（含 GitHub Actions 的 ubuntu-latest）上会报
+# `/usr/bin/env: 'bash\r': No such file or directory`。
+#
+# 所以这里把必须保持 LF 的类型显式钉死，其余交给 autocrlf。
+
+# shell 脚本与 CI 用到的脚本：必须 LF
+*.sh          text eol=lf
+*.bash        text eol=lf
+
+# Node 脚本：入口是 `node xxx.mjs`，CRLF 不影响解析，但保持 LF 更一致
+*.mjs         text eol=lf
+*.js          text eol=lf
+
+# Windows 批处理：必须 CRLF，否则 cmd 解析错乱
+*.bat         text eol=crlf
+*.cmd         text eol=crlf
+
+# 二进制资源不做任何转换
+*.png         binary
+*.jpg         binary
+*.jpeg        binary
+*.ico         binary
+*.exe         binary
+*.asar        binary
+*.tar.gz      binary
