@@ -259,9 +259,17 @@ body {
   font-size: 26px;
 }
 
+/*
+ * 标题旁的强调条。必须 `align-self: center` 而不是随容器 align-items 走：
+ * 移动端 `.review-header` 是 flex-start（为了让操作按钮换行后靠上），
+ * 这时 3px 高的强调条会贴到标题**上沿**，实测垂直中心比标题低 11.5px，
+ * 看着就是"没对齐"。固定自居中后，无论容器怎么设都跟标题中线齐平。
+ */
 .title-underline {
   width: 44px;
   height: 3px;
+  flex: none;
+  align-self: center;
   border-radius: 2px;
   background: var(--accent);
 }
@@ -367,18 +375,28 @@ body {
   height: 0;
 }
 
+/*
+ * 勾选框：圆形「实心核 + 浅色间隙 + 细环」。
+ *
+ * 几何取自设计参考图（@3x 量测）：实心核 r=22.5、间隙 4px、环厚 6px、
+ * 外径 r=32.5 → 换算 CSS 为 外径 21.7px / 核 15px / 间隙 1.3px / 环 2px。
+ * 落到 20px 的盒子里就是：border 撑起圆环，inset 阴影撑起间隙+实心核。
+ * 未勾选时只有一圈细描边（环），勾选后填满。
+ */
 .checkmark {
   width: 20px;
   height: 20px;
-  border: 1px solid var(--text-secondary);
-  border-radius: 4px;
+  box-sizing: border-box;
+  border: 2px solid var(--text-secondary);
+  border-radius: 50%;
   background: transparent;
 }
 
 .goal-check input:checked + .checkmark {
   background: var(--accent);
   border-color: var(--accent);
-  box-shadow: inset 0 0 0 3px rgba(255, 255, 255, 0.9);
+  /* 间隙用页面底色而非白色：参考图的间隙是"透出背景"，不是白圈。 */
+  box-shadow: inset 0 0 0 1.5px #0f1115;
 }
 
 .goal-title {
@@ -1916,6 +1934,22 @@ body {
   transition: background-color 0.18s ease;
 }
 
+/*
+ * 未填充区的轮廓线。
+ *
+ * 未填充段与卡片同色之后，轨道范围就看不见了——需要一条 1px 的内描边
+ * 把"可拖动的范围"标出来。它必须画在滑块**之上**（DOM 里排在 thumb 之前
+ * 但 z-index 更高会盖住 thumb，所以刻意不设 z-index，靠绝对定位叠在
+ * segments 之上、thumb 之下）。
+ */
+.review-slider-baseline {
+  position: absolute;
+  inset: 0;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  pointer-events: none;
+}
+
 .review-slider-thumb {
   position: absolute;
   top: 50%;
@@ -2510,17 +2544,22 @@ body {
   .review-page,
   .day-page {
     /*
-     * 上内边距必须叠加顶部安全区。
+     * 上内边距必须叠加顶部安全区，并且要**多留 12px 余量**。
      *
-     * 原先只写了底部避让，顶部一次都没避让，于是 viewport-fit=cover
-     * 生效后（iOS 全屏/standalone）内容从 y=0 开始渲染，页头被状态栏
-     * 与灵动岛盖掉——实测「周日复盘」那排 tab 几乎整条不可见。
+     * 第一轮只写到 `calc(12px + var(--safe-top))`，探针量「盒顶 top」达标
+     * （恰好 = safe-top），但真机上标题仍被状态栏虚化一部分。原因是
+     * `env(safe-area-inset-top)` 给的是**安全区的硬边界**，而 iOS 状态栏那层
+     * 毛玻璃在边界之下还有 8~14px 的渐变羽化带。盒顶贴在边界上，标题墨迹
+     * （实测从盒顶再往下 12px 才开始）正好落进羽化区。
+     *
+     * 所以这里写成 12 + safe-top + 12：第一个 12px 是原有的版式留白，
+     * 后面独立的 12px 专门用来把墨迹推出羽化带。实测墨迹余量 12.3 → 24.3px。
      *
      * 避让只做一次：这里负责把内容推到安全区之下，页面内部不再叠加
      * env(safe-area-inset-top)。左右不涉及安全区（竖屏不裁切），
      * 横屏的左右安全区由 .app 的溢出裁切兜住，本项目只支持竖屏。
      */
-    padding: calc(12px + var(--safe-top)) 12px calc(16px + var(--mobile-nav-height) + env(safe-area-inset-bottom));
+    padding: calc(24px + var(--safe-top)) 12px calc(16px + var(--mobile-nav-height) + env(safe-area-inset-bottom));
     overflow-x: hidden;
   }
 
@@ -2555,6 +2594,10 @@ body {
    * 标签与轨道同行（原先标签独占一行，行内容高约 76px 而 flex:1 只给到 44px，
    * 每行溢出约 43px，导致标签被轨道压住、第三条轨道压到文本框）。
    * 标签定宽 → 三条轨道必然等长。
+   *
+   * 注意这里**不要**再加浅色底（曾用 rgba(255,255,255,0.03)）：它会在
+   * 卡片之上再垫一层，叠出第三种色阶，正是"颜色与背景块不统一"的第二处来源。
+   * 行底色保持透明，与 .review-sliders 卡片同面。
    */
   .review-slider-row {
     display: flex;
@@ -2562,7 +2605,7 @@ body {
     gap: 8px;
     padding: 0 8px;
     border-radius: 12px;
-    background: rgba(255,255,255,0.03);
+    background: transparent;
   }
 
   .review-slider-label {
@@ -2649,8 +2692,11 @@ body {
     /*
      * 悬浮页头是绝对定位的，不随页面容器的 padding 走，必须自己避让
      * 顶部安全区，否则只有它一条压到状态栏下面。
+     *
+     * 与页面容器同口径多留 12px：状态栏毛玻璃的羽化带会往下延伸
+     * 8~14px，贴着安全区边界放仍会被虚化一部分。
      */
-    top: calc(12px + var(--safe-top));
+    top: calc(24px + var(--safe-top));
     left: 12px;
     right: 12px;
     z-index: 5;
@@ -2963,13 +3009,13 @@ body {
     display: inline-flex;
   }
 
-  .goal-check,
-  .goal-check .checkmark {
+  /*
+   * 只给外层触摸区 44px。可见圆环的尺寸由后面的规则单独给定，
+   * 不跟着放大——否则描边会被撑到 44px 粗得离谱。
+   */
+  .goal-check {
     width: 44px;
     height: 44px;
-  }
-
-  .goal-check {
     align-items: center;
     justify-content: center;
   }
@@ -3033,7 +3079,11 @@ body {
   }
 
   .goal-check { width: 44px; height: 44px; align-items: center; justify-content: center; }
-  .goal-check .checkmark { width: 10px; height: 10px; border-radius: 2px; }
+  /*
+   * 可见尺寸由 10px 提到 20px：10px 的圆放不下「环 2px + 间隙 1.5px」这层细节，
+   * 会糊成一坨。触摸区仍是外层 .goal-check 的 44px，不受影响。
+   */
+  .goal-check .checkmark { width: 20px; height: 20px; border-radius: 50%; }
   .goal-title { flex: 1; min-width: 0; text-align: left; }
   .review-sliders { flex: 0 0 auto; }
   .review-sliders { height: 150px; box-sizing: border-box; gap: 0; }
