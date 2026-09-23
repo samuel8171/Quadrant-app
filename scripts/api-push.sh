@@ -27,9 +27,38 @@ MODE="${1:-}"
 # 避免 bash 处理非 ASCII 路径时踩编码坑。
 PYTHON_BIN="${PYTHON_BIN:-C:/Users/Samuel/.workbuddy/binaries/python/versions/3.13.12/python.exe}"
 
+# 凭据：从 Windows 凭据管理器取（系统的 helper-selector 是交互式的，
+# 叠加 GIT_TERMINAL_PROMPT=0 会让非交互调用直接失败，故指名 manager）。
+# 提前到这里取，因为下面算远端祖先关系时就要用 token 调 API。
+GH_TOKEN=$(printf 'protocol=https\nhost=github.com\n\n' \
+  | git -c credential.helper=manager credential fill 2>/dev/null \
+  | sed -n 's/^password=//p')
+if [ -z "$GH_TOKEN" ]; then
+  echo "❌ 未能从凭据管理器取出 token" >&2
+  exit 1
+fi
+export GH_TOKEN
+
 HEAD_SHA=$(git rev-parse HEAD)
 HEAD_TREE=$(git rev-parse 'HEAD^{tree}')
 HEAD_PARENT=$(git rev-parse 'HEAD^')
+
+# 远端顶点是否为本地 HEAD 的祖先。
+#
+# 本地一次可能攒了多个未推提交（本脚本一次只推一个），此时 HEAD^ 是上一个
+# **本地**提交而非远端顶点，光靠等值比较会被误判成"远端有新提交"。
+# 远端顶点先经 API 取回来（shell 里没有远程跟踪引用可用），再在本地算祖先关系。
+# 取不到远端 sha 时留空，Node 侧会退回严格的等值判断——宁可保守也不要漏掉真分叉。
+REMOTE_SHA=$(curl -s --noproxy '*' \
+  -H "Authorization: Bearer $GH_TOKEN" \
+  -H "Accept: application/vnd.github+json" \
+  "https://api.github.com/repos/samuel8171/Quadrant-app/git/ref/heads/$BRANCH" 2>/dev/null \
+  | "$PYTHON_BIN" -c "import sys,json;print(json.load(sys.stdin).get('object',{}).get('sha',''))" 2>/dev/null || echo "")
+
+REMOTE_IS_ANCESTOR=0
+if [ -n "$REMOTE_SHA" ] && git merge-base --is-ancestor "$REMOTE_SHA" "$HEAD_SHA" 2>/dev/null; then
+  REMOTE_IS_ANCESTOR=1
+fi
 
 # commit message 必须与本地逐字节一致，否则远端算出的 commit sha 会不同。
 # 坑 1：`$(git log --format=%B)` 的命令替换会吃掉**所有**行尾换行，而 git 的
@@ -58,15 +87,7 @@ export HEAD_SHA HEAD_TREE HEAD_PARENT HEAD_MSG GH_TOKEN
 export HEAD_AUTHOR_NAME HEAD_AUTHOR_EMAIL HEAD_AUTHOR_DATE
 export HEAD_COMMITTER_NAME HEAD_COMMITTER_EMAIL HEAD_COMMITTER_DATE
 export HEAD_MSG_B64
-
-GH_TOKEN=$(printf 'protocol=https\nhost=github.com\n\n' \
-  | git -c credential.helper=manager credential fill 2>/dev/null \
-  | sed -n 's/^password=//p')
-if [ -z "$GH_TOKEN" ]; then
-  echo "❌ 未能从凭据管理器取出 token" >&2
-  exit 1
-fi
-export GH_TOKEN
+export REMOTE_IS_ANCESTOR
 
 if [ "$MODE" = "--dry-run" ]; then
   node scripts/api-push.mjs --branch "$BRANCH" --dry-run

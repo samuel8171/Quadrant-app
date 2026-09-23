@@ -113,20 +113,51 @@ if (remoteSha === headSha) {
 }
 
 /*
- * 安全检查：本地 HEAD 的 parent 必须等于远端当前顶点，
- * 否则说明远端有本地没有的提交（会变成强推覆盖），必须停下。
+ * 安全检查：远端顶点必须是**本地 HEAD 的祖先**，否则说明远端有本地没有的
+ * 提交（会变成强推覆盖），必须停下。
+ *
+ * 注意这里不能写成 `remoteSha === headParent`。本脚本一次只推一个提交，
+ * 但本地「攒了多个未推提交」是常态（本次就攒了两个）。那种情况下
+ * headParent 是**上一个本地提交**、而不是远端顶点，等值判断会误报
+ * 「远端有本地没有的提交」并拒绝推送——而实际是干净的快进。
+ *
+ * 因此改为判定祖先关系：由 shell 侧用 `git merge-base --is-ancestor` 算好
+ * （Node 侧不能 spawn git），把结论经 `REMOTE_IS_ANCESTOR=1` 传进来。
+ * 取不到该变量时退回等值判断——宁可保守，也不要漏掉真的分叉。
  */
-if (remoteSha !== headParent) {
+const remoteIsAncestor = process.env.REMOTE_IS_ANCESTOR === '1'
+if (!remoteIsAncestor && remoteSha !== headParent) {
   console.error(
-    `\n❌ 拒绝推送：本地 HEAD 的 parent(${headParent}) 与远端(${remoteSha}) 不一致。\n` +
+    `\n❌ 拒绝推送：远端 ${BRANCH}(${remoteSha.slice(0, 7)}) 不是本地 HEAD 的祖先，\n` +
+    `   且它也不等于本地 HEAD 的 parent(${headParent.slice(0, 7)})。\n` +
     `   这说明远端有本地没有的提交，直接推会覆盖掉它们。请先 fetch 合并。`
   )
   process.exit(1)
 }
+if (remoteIsAncestor && remoteSha !== headParent) {
+  console.log(`远端顶点是本地 HEAD 的祖先（领先 ${headParent.slice(0, 7)}…）：按快进推送。`)
+}
 
-/* ---------- 检查远端是否已有这些对象（parent 应该已存在并在远端可解析） ---------- */
-const remoteParent = await api(`/repos/${OWNER}/${REPO}/git/commits/${headParent}`)
-console.log(`远端 parent 可解析: ${remoteParent.sha.slice(0, 7)} ✓`)
+/* ---------- 检查远端是否已有这些对象 ----------
+ *
+ * 单提交情形下 headParent 就是远端顶点，必然可解析，这是一个"远端对象库
+ * 确实共享同一份历史"的探针。
+ *
+ * 但一次推多个提交时，headParent 是上一个**尚未推送**的本地提交，远端
+ * 当然查不到（404）——这不是错误：它会在下面的"补齐缺失对象"环节被一起
+ * 推上去，随后才作为新提交的 parent 生效。因此这里只做提示性检查，
+ * 404 走告警分支而非中断。
+ */
+try {
+  const remoteParent = await api(`/repos/${OWNER}/${REPO}/git/commits/${headParent}`)
+  console.log(`远端 parent 可解析: ${remoteParent.sha.slice(0, 7)} ✓`)
+} catch (error) {
+  if (!remoteIsAncestor) throw error
+  console.log(
+    `远端尚无 parent(${headParent.slice(0, 7)})：本次是「一次推多个提交」，\n` +
+    `  它会随本批对象一起补到远端。`
+  )
+}
 
 if (dryRun) {
   console.log('\n[dry-run] 条件满足，可安全推送。未做任何修改。')
