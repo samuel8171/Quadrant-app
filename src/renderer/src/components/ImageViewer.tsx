@@ -68,6 +68,18 @@ export default function ImageViewer({ photoIds, initialIndex, caption, onClose }
     setOffset({ x: 0, y: 0 })
   }, [currentId])
 
+  /*
+   * 照片列表被外部删短时把下标夹回有效范围。
+   *
+   * 父级在删除时已经会修正传入的 `initialIndex`，但那是一次性的 props 快照；
+   * 查看器自己的 `index` 是内部状态，若列表从 3 张变成 1 张而当时停在
+   * 第 3 张，`photoIds[index]` 就是 undefined → `currentId` 为空 → 渲染
+   * "图片不可用"。这里兜住这条路径。
+   */
+  useEffect(() => {
+    setIndex((prev) => clampIndex(prev, photoIds.length))
+  }, [photoIds.length])
+
   const resetZoom = useCallback((): void => {
     setScale(MIN_SCALE)
     setOffset({ x: 0, y: 0 })

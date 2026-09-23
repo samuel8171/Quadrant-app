@@ -33,6 +33,18 @@ export interface CanvasGestureOptions {
   resolveHit: (e: React.PointerEvent) => GestureHit
   /** 返回 false 时忽略该指针（例如双指缩放已接管）。 */
   isEnabled?: (e: React.PointerEvent) => boolean
+  /**
+   * 触摸设备上"拖动"是否必须先长按解锁。
+   *
+   * 默认 `true`（见 `gestures.requiresLongPressToDrag`）——时间轴那类**可滚动**
+   * 的容器必须如此，否则手指落在事件块上滑动会拖动块而不是滚动，用户无法看别处。
+   *
+   * 四象限画布**没有滚动**，不存在这个争抢，长按闸门只剩下纯损耗：
+   * 单指平移画布要"先按住 380ms 再动"，几乎无人能猜到；而且在此之前
+   * `panRef` 根本不会被设置，单指平移等于完全不可用。
+   * 因此画布传 `false`，让单指位移直接进入拖动（平移）。
+   */
+  requiresLongPress?: boolean
   /** 位移越过阈值，拖动成立。 */
   onDragStart?: (ctx: GestureContext) => void
   onDragMove?: (ctx: GestureContext) => void
@@ -215,7 +227,9 @@ export function useCanvasGestures(options: CanvasGestureOptions): CanvasGestures
           y: e.clientY,
           t: performance.now(),
           hit: opts.resolveHit(e),
-          trackable
+          trackable,
+          // 省略时状态机按指针类型取默认值（触摸需要长按、鼠标不需要）。
+          needsLongPress: opts.requiresLongPress
         },
         e.currentTarget as Element | null
       )

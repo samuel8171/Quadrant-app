@@ -874,6 +874,12 @@ body {
 }
 
 /* 堆叠感靠负 margin 与递减 z-index 做出来（见 EventCard 的内联样式）。 */
+.event-photo-slot {
+  position: relative;
+  display: block;
+  flex: none;
+}
+
 .event-photo {
   position: relative;
   width: 46px;
@@ -886,10 +892,76 @@ body {
   cursor: pointer;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
   transition: transform 0.14s ease-out;
+  /* 缩略图自身的指针事件全部自己管（见 EventCard 的 stopPropagation），
+     别让画布把它当成拖动起点。 */
+  touch-action: none;
 }
 
 .event-photo:hover {
   transform: translateY(-3px);
+}
+
+/*
+ * 单张照片的删除按钮。
+ *
+ * 定位在缩略图右上角、**稍微外溢**——缩略图本身只有 46px（手机 56px），
+ * 把 16px 的叉完全放在内部会盖住画面中心，看起来像"图的一部分"。
+ *
+ * 平时 `pointer-events: none` 且半透明不可见：它和"点缩略图看大图"抢同一个
+ * 区域，如果常驻可点，用户在手机上想放大会频繁误删。
+ * 露出条件有两条，分别对应两种输入设备：
+ *   · 桌面 → `.event-photo-slot:hover`
+ *   · 触屏 → 在缩略图条上长按（父级加 `.delete-revealed`，见 EventCard）
+ */
+.event-photo-delete {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 50%;
+  background: rgba(24, 26, 32, 0.92);
+  color: #e6e8ec;
+  cursor: pointer;
+  z-index: 3;
+  opacity: 0;
+  transform: scale(0.7);
+  pointer-events: none;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
+  transition: opacity 0.14s ease-out, transform 0.14s ease-out, background 0.14s ease-out;
+}
+
+.event-photo-slot:hover .event-photo-delete,
+.event-photos.delete-revealed .event-photo-delete {
+  opacity: 1;
+  transform: scale(1);
+  pointer-events: auto;
+}
+
+/*
+ * 触屏下把命中区放大到 28px：16px 的圆点比指尖（约 40px）小太多，
+ * 用户会点空。用伪元素撑开热区而不改视觉尺寸——视觉上仍是一个小叉。
+ */
+@media (hover: none) {
+  .event-photo-delete::before {
+    content: '';
+    position: absolute;
+    inset: -6px;
+  }
+}
+
+/* 第一下点击进入"确认删除"态：变红、放大，明确提示"再点一下就真删"。 */
+.event-photo-delete.armed {
+  opacity: 1;
+  transform: scale(1.25);
+  pointer-events: auto;
+  background: var(--danger);
+  color: #fff;
 }
 
 .event-photo img {
@@ -2935,6 +3007,20 @@ body {
   .event-photo {
     width: 56px;
     height: 56px;
+  }
+
+  /*
+   * 手机端删除按钮放大到 20px（桌面 16px）。
+   *
+   * 热区靠 `.event-photo-delete::before` 的 inset 撑开，所以视觉尺寸不必大；
+   * 但 16px 的圆点在 56px 的缩略图上比例偏低，加上"确认删除"那一下需要
+   * 明确的视觉变化，放大一点更容易命中。
+   */
+  .event-photo-delete {
+    width: 20px;
+    height: 20px;
+    top: -6px;
+    right: -6px;
   }
 
   .image-viewer-close {

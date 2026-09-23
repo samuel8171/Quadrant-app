@@ -38,6 +38,14 @@ export interface MachinePointer {
    * 一旦为真即保持到指针抬起——用户可能长按后又小幅调整位置。
    */
   longPressed: boolean
+  /**
+   * 本次手势是否要求"长按解锁后才能拖动"。
+   *
+   * 由调用方在 `down` 时按容器性质决定（默认取 `requiresLongPressToDrag`）：
+   * 可滚动容器（时间轴）为 true，无滚动的画布（四象限）为 false。
+   * 存在指针上而非全局，是为了让一次手势的判定在整段生命周期内保持一致。
+   */
+  needsLongPress: boolean
   hit: GestureHit
 }
 
@@ -62,6 +70,11 @@ export type MachineInput =
       hit: GestureHit
       /** 调用方的前置筛选（鼠标按键、双指接管等）是否允许跟踪本指针。 */
       trackable: boolean
+      /**
+       * 本次手势是否需要长按解锁才能拖动。省略时按指针类型取默认值
+       * （触摸/笔需要，鼠标不需要）。
+       */
+      needsLongPress?: boolean
     }
   | { type: 'move'; id: number; x: number; y: number; t: number }
   | { type: 'up'; id: number; x: number; y: number; t: number }
@@ -138,6 +151,7 @@ export function reduce(
         moved: false,
         dragging: false,
         longPressed: false,
+        needsLongPress: input.needsLongPress ?? requiresLongPressToDrag(input.pointerType),
         hit: input.hit
       }
       const effects: MachineEffect[] = [{ kind: 'clearTimer' }]
@@ -152,14 +166,16 @@ export function reduce(
       const slop = slopOverride ?? slopFor(pointer.pointerType)
       if (!pointer.moved && exceedsSlop(pointer.start, moved.current, slop)) {
         /*
-         * 触摸设备：未经过长按解锁不得进入拖动。
+         * 需要长按解锁的容器（时间轴）：未解锁不得进入拖动。
          *
          * 此时只标记 moved（用于"这已不是轻触/长按"的判定），但不设 dragging、
          * 不发 dragStart。位移转交给 `useEventBlockScroll` 做手动滚动——
          * 因为移动端 .day-event 的 touch-action 是 none（见 theme.css 的长注释），
          * 浏览器不会自己滚，也不会派发 pointercancel，这条分支是唯一的兜底。
+         *
+         * 不需要解锁的容器（四象限画布）跳过这道闸门，位移即拖动。
          */
-        if (requiresLongPressToDrag(pointer.pointerType) && !pointer.longPressed) {
+        if (pointer.needsLongPress && !pointer.longPressed) {
           moved.moved = true
           return {
             state: { ...state, pointer: moved, armedId: null },

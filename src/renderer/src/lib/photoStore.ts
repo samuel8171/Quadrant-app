@@ -9,12 +9,19 @@
  *
  * 因此照片只以 **id** 的形式记在 `QuadrantEvent.photos` 上，实体走这里：
  * - 网页端 → IndexedDB（配额通常几百 MB，且以 Blob 存，base64 膨胀问题一并消失）
+ *   **并同时上传一份到 Supabase Storage**（见 `lib/cloudPhotos.ts`），
+ *   这样换设备/重装后照片能跟着回来——此前照片是纯本地的，换设备只有一堆空缩略图。
  * - 桌面端 → 主进程写文件（见 `src/main/photoStore.ts`）
+ *
+ * 读取顺序是**本地优先、云端兜底**：本地命中就是零延迟；本地没有（换设备、
+ * 清了浏览器数据）才去云端拉，拉回来顺手写回本地缓存，避免同一张图反复下载。
  *
  * 读取接口一律返回 object URL，调用方负责在不用时 `releasePhotoUrl`。
  * 这里带一层引用计数缓存：同一张照片会被缩略图条与大图查看器同时用，
  * 用引用计数避免"一方释放、另一方变成死链接"。
  */
+
+import { uploadPhoto, downloadPhoto, deleteCloudPhoto } from './cloudPhotos'
 
 const DB_NAME = 'quadrant-photos'
 const DB_VERSION = 1
@@ -154,26 +161,65 @@ export async function putPhoto(id: string, blob: Blob): Promise<void> {
     return
   }
   await idbPut(id, blob)
+  /*
+   * 本机存好之后再把同一份上传到云端。
+   *
+   * 顺序刻意如此：本地是**必成的**那份（否则用户当场看不到自己的图），
+   * 云端是**增强**。若反过来先等云端，网络差时"加照片"这个动作会卡住数秒，
+   * 而失败的话照片就彻底没了。上传失败不抛——`uploadPhoto` 内部已吞掉异常，
+   * 只是返回 false，此时照片仅存在于本机（换设备不可见，但功能可用）。
+   */
+  void uploadPhoto(id, blob)
 }
 
-/** 取照片实体；不存在返回 null（例如换了设备、云端只同步了 id）。 */
+/**
+ * 取照片实体；不存在返回 null。
+ *
+ * 顺序是**本地优先、云端兜底**：
+ * ① 本机有（IndexedDB / 桌面端文件）→ 直接返回，零网络开销；
+ * ② 本机没有 → 去 Supabase Storage 拉。命中后**回写本地**，这样同一张图
+ *    在本次会话的后续读取（缩略图条 + 大图查看器会各取一次）不再走网络，
+ *    下次打开也直接命中本地。
+ *
+ * 回写用 `void` 触发、不 await：它是纯粹的缓存优化，失败不影响本次返回。
+ */
 export async function getPhotoBlob(id: string): Promise<Blob | null> {
   const bridge = photoBridge()
   if (bridge?.loadPhoto) {
     const dataUrl = await bridge.loadPhoto(id)
-    return dataUrl ? dataUrlToBlob(dataUrl) : null
+    if (dataUrl) return dataUrlToBlob(dataUrl)
+    // 桌面端没存过这张（例如照片是在网页端加的）→ 走云端。
+    return downloadPhoto(id)
   }
+
+  let local: Blob | null = null
   try {
-    return await idbGet(id)
+    local = await idbGet(id)
   } catch {
-    return null
+    local = null
   }
+  if (local) return local
+
+  const remote = await downloadPhoto(id)
+  if (remote) void idbPut(id, remote).catch(() => undefined)
+  return remote
 }
 
+/**
+ * 删除一张照片实体。
+ *
+ * 本地与云端**都删**：只删本地的话，换个设备登录会把已删除的照片又拉回来。
+ * 两边失败都不抛：照片已经从事件上摘掉，剩下的只是孤儿字节。
+ */
 export async function removePhoto(id: string): Promise<void> {
   const bridge = photoBridge()
   if (bridge?.deletePhoto) {
-    await bridge.deletePhoto(id)
+    try {
+      await bridge.deletePhoto(id)
+    } catch {
+      /* 见函数注释 */
+    }
+    void deleteCloudPhoto(id)
     return
   }
   try {
@@ -181,6 +227,7 @@ export async function removePhoto(id: string): Promise<void> {
   } catch {
     /* 删除失败不该阻塞业务（照片已从事件上摘掉，剩下的只是垃圾字节） */
   }
+  void deleteCloudPhoto(id)
 }
 
 // --------------------------------------------------------- object URL 缓存

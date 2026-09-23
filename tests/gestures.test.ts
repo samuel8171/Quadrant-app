@@ -201,6 +201,47 @@ describe('gesture machine', () => {
     expect(state.pointer?.moved).toBe(false)
   })
 
+  /*
+   * 四象限画布没有滚动，"拖动与滚动争抢"这个前提根本不存在，
+   * 因此它传 `needsLongPress: false` 关掉解锁闸门。
+   *
+   * 这条测试守的是那个 bug：闸门开着时触摸位移只会标记 moved、
+   * 永不发 dragStart，于是 `panRef` 从不被设置，单指平移彻底失效
+   * （真机上表现为"只能双指缩放"）。
+   */
+  it('starts a drag on touch immediately when the container opts out of long press', () => {
+    const { kinds, state } = feed([
+      down({ hit: CANVAS, pointerType: 'touch', needsLongPress: false }),
+      { type: 'move', id: 1, x: 140, y: 140, t: 1100 },
+      { type: 'move', id: 1, x: 180, y: 180, t: 1150 },
+      { type: 'up', id: 1, x: 180, y: 180, t: 1200 }
+    ])
+    expect(kinds[1]).toEqual(['clearTimer', 'capture', 'dragStart'])
+    expect(kinds[2]).toEqual(['dragMove'])
+    expect(kinds[3]).toEqual(['clearTimer', 'release', 'dragEnd'])
+  })
+
+  /*
+   * 同一次手势的判定必须一致：`needsLongPress` 存在指针上而不是每帧重算，
+   * 所以一旦按下时定了"要长按"，后续 move 不会因为别的原因改变行为。
+   */
+  it('keeps the long-press requirement fixed for the lifetime of a gesture', () => {
+    const { state } = feed([
+      down({ hit: ITEM, pointerType: 'touch', needsLongPress: true }),
+      { type: 'move', id: 1, x: 140, y: 100, t: 1100 }
+    ])
+    expect(state.pointer?.needsLongPress).toBe(true)
+    expect(state.pointer?.dragging).toBe(false)
+  })
+
+  /* 默认值仍按指针类型取：触摸要长按、鼠标不要。 */
+  it('defaults the long-press requirement by pointer type when not specified', () => {
+    const touch = feed([down({ hit: ITEM, pointerType: 'touch' })])
+    expect(touch.state.pointer?.needsLongPress).toBe(true)
+    const mouse = feed([down({ hit: ITEM, pointerType: 'mouse' })])
+    expect(mouse.state.pointer?.needsLongPress).toBe(false)
+  })
+
   it('opens the menu when a still hold is released after the long-press threshold', () => {
     const { kinds, states } = feed([
       down({ hit: ITEM }),

@@ -8,7 +8,8 @@ import EventDetailDialog from '../components/EventDetailDialog'
 import ImageViewer from '../components/ImageViewer'
 import { previewMove } from '../lib/eventRules'
 import { compressPhoto } from '../lib/photoCompress'
-import { newPhotoId, putPhoto, removePhoto } from '../lib/photoStore'
+import { forgetPhotoUrl, newPhotoId, putPhoto, removePhoto } from '../lib/photoStore'
+import { DOUBLE_TAP_MS } from '../lib/gestures'
 import {
   AXIS_GAP_PX,
   QUADRANT_META,
@@ -101,6 +102,12 @@ export default function QuadrantPage(): JSX.Element {
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   /** 正在为哪个事件加照片（文件选择器是异步的，须记住发起方）。 */
   const photoTargetRef = useRef<string | null>(null)
+  /**
+   * 鼠标单击中"开合缩略图条"的延迟定时器。
+   *
+   * 见 `onViewportClick` 的注释：必须等过双击窗口才能确认这次点击不是双击的开头。
+   */
+  const clickTimerRef = useRef<number | null>(null)
 
   viewRef.current = view
 
@@ -202,6 +209,7 @@ export default function QuadrantPage(): JSX.Element {
     return () => {
       if (zoomAnimRef.current !== null) cancelAnimationFrame(zoomAnimRef.current)
       if (panAnimRef.current !== null) cancelAnimationFrame(panAnimRef.current)
+      if (clickTimerRef.current !== null) window.clearTimeout(clickTimerRef.current)
     }
   }, [])
 
@@ -426,6 +434,15 @@ export default function QuadrantPage(): JSX.Element {
   // 手势内核：位移 > 8px 才算拖动，长按满阈值抬起手指才开菜单，
   // 双击由自研判定给出（原生 dblclick 在触屏上不可靠）。
   const gestures = useCanvasGestures({
+    /*
+     * 四象限画布**不走长按解锁**。
+     *
+     * `requiresLongPress` 默认是 true，为时间轴那种"拖动与滚动争抢同一个手指动作"
+     * 的容器准备。画布没有滚动，长按闸门只会让"单指平移"变成必须"先按住 380ms
+     * 再动"——没人能猜到，且在此之前 `panRef` 根本不会被设置，等于单指平移
+     * 完全不可用（只能双指缩放）。关掉它，单指位移直接平移画布。
+     */
+    requiresLongPress: false,
     resolveHit: (e) => {
       const target = e.target as Element | null
       const card = target?.closest('.event-card') as HTMLElement | null
@@ -527,7 +544,10 @@ export default function QuadrantPage(): JSX.Element {
       })
     },
     onTap: (ctx: GestureContext, isDouble: boolean) => {
-      // 桌面沿用原生 click / dblclick，避免两条判定路径互相打架。
+      /*
+       * 桌面（鼠标）不走这条路径，改由原生 click / dblclick 处理——
+       * 两条判定路径同时生效会互相打架（同一个动作被处理两次）。
+       */
       if (ctx.pointerType === 'mouse') return
       if (ctx.hit.kind === 'item') {
         if (isDouble && ctx.hit.id) {
@@ -649,9 +669,50 @@ export default function QuadrantPage(): JSX.Element {
     gestures.onPointerCancel(e)
   }
 
+  /**
+   * 鼠标单击：**带照片的事件块 → 展开/收起缩略图条**。
+   *
+   * 触屏路径在 `gestures.onTap` 里已经处理了这件事，鼠标此前完全没有——
+   * 桌面靠原生 `click`，而这里原先只绑了 `dblclick`，于是"点击事件块照片展开"
+   * 在电脑版上从来没生效过（用户报告的第一条）。
+   *
+   * 单击空白处仍然只是取消选中，保持既有语义。缩略图条自己的点击已在
+   * `EventCard` 里 `stopPropagation`，不会走到这里被当成"点卡片"而反复开合。
+   */
+  const onViewportClick = (e: React.MouseEvent): void => {
+    if (lastPointerTypeRef.current !== 'mouse') return
+    const target = e.target as Element | null
+    const card = target?.closest('.event-card') as HTMLElement | null
+    const id = card?.dataset.eventId
+    if (!card || !id) return
+    // 缩略图条里点单张图是"打开大图"，不是"开合缩略图条"。
+    if (target?.closest('.event-photos')) return
+    const ev = eventsRef.current.find((item) => item.id === id)
+    if (!ev || (ev.photos?.length ?? 0) === 0) return
+    /*
+     * **延迟到双击窗口之后再执行**。
+     *
+     * 原生双击的事件序列是 `click → click → dblclick`。若在这里同步开合，
+     * 双击一个带照片的块会先开合两次（视觉上等于没变）再弹出编辑框，
+     * 用户看到的是"双击时缩略图闪了一下"。把单击动作压在 `DOUBLE_TAP_MS`
+     * 之后，`dblclick` 一到就取消它——单击与双击各自只产生一个效果。
+     */
+    if (clickTimerRef.current !== null) window.clearTimeout(clickTimerRef.current)
+    clickTimerRef.current = window.setTimeout(() => {
+      clickTimerRef.current = null
+      togglePhotos(id)
+      setSelectedId(id)
+    }, DOUBLE_TAP_MS)
+  }
+
   const onDoubleClick = (e: React.MouseEvent): void => {
     // 触屏双击走自研判定（见 gestures.onTap），这里只服务鼠标。
     if (lastPointerTypeRef.current !== 'mouse') return
+    // 取消上面那次被延迟的单击动作，避免"开合 + 编辑"同时发生。
+    if (clickTimerRef.current !== null) {
+      window.clearTimeout(clickTimerRef.current)
+      clickTimerRef.current = null
+    }
     const target = e.target as Element | null
     const cardId = (target?.closest('.event-card') as HTMLElement | null)?.dataset.eventId
     if (cardId) {
@@ -744,13 +805,33 @@ export default function QuadrantPage(): JSX.Element {
     }
   }
 
+  /**
+   * 删除事件上的第 `index` 张照片。
+   *
+   * 三件事必须一起做，漏一件就出问题：
+   * ① 事件上的 id 摘掉（并触发同步）；
+   * ② 实体删掉（本地 + 云端，见 `photoStore.removePhoto`）；
+   * ③ **object URL 缓存摘掉**（`forgetPhotoUrl`）。第 ③ 步容易漏：即便缩略图
+   *    组件已经 unmount，缓存里那条 URL 仍指向已删掉的 blob；更糟的是若用户
+   *    正好开着大图查看器看的就是这张，`viewer.index` 会越界指向空槽。
+   */
   const removeEventPhoto = async (eventId: string, index: number): Promise<void> => {
     const event = eventsRef.current.find((e) => e.id === eventId)
     const photos = event?.photos ?? []
     const id = photos[index]
     if (!id) return
-    updateEvent(eventId, { photos: photos.filter((_, i) => i !== index) }, viewRef.current)
+    const remaining = photos.filter((_, i) => i !== index)
+    updateEvent(eventId, { photos: remaining.length > 0 ? remaining : undefined }, viewRef.current)
+    forgetPhotoUrl(id)
     await removePhoto(id)
+
+    // 查看器正开着这条事件：把下标夹回有效范围；一张不剩就关掉它
+    // （否则查看器里会显示"图片不可用"，而用户其实刚把它删了）。
+    setViewer((prev) => {
+      if (!prev || prev.eventId !== eventId) return prev
+      if (remaining.length === 0) return null
+      return { ...prev, index: Math.min(prev.index, remaining.length - 1) }
+    })
   }
 
   const togglePhotos = (eventId: string): void => {
@@ -807,6 +888,7 @@ export default function QuadrantPage(): JSX.Element {
           if (shouldClearDragOnPointerLeave(e.pointerType)) gestures.cancel()
         }}
         onDoubleClick={onDoubleClick}
+        onClick={onViewportClick}
         onContextMenu={onViewportContextMenu}
       >
         <canvas ref={canvasRef} className="quadrant-canvas" />
@@ -829,6 +911,7 @@ export default function QuadrantPage(): JSX.Element {
                 photosOpen={photosOpen.has(e.id)}
                 onSelect={() => setSelectedId(e.id)}
                 onOpenPhoto={(index) => setViewer({ eventId: e.id, index })}
+                onDeletePhoto={(index) => void removeEventPhoto(e.id, index)}
                 onContextMenu={onEventContextMenu}
               />
             )
