@@ -76,18 +76,11 @@ export default function SegmentedSlider({ label, value, colors, onChange }: Prop
                 key={i}
                 className="review-slider-segment"
                 style={{
-                  /*
-                   * 未填充段与卡片同色（--panel），不再用 --border。
-                   * 用 --border 会在卡片上压出一条比卡片亮的条带，
-                   * 和"背景块"明显不是一个面。未填充区的范围改由
-                   * .review-slider-baseline 那条 1px 描边示意。
-                   */
-                  backgroundColor: i < value ? colors[i] : 'var(--panel)'
+                  backgroundColor: i < value ? colors[i] : 'var(--border)'
                 }}
               />
             ))}
           </div>
-          <span className="review-slider-baseline" aria-hidden="true" />
           <span
             className="review-slider-thumb"
             style={{ left: `${value * 10}%` }}

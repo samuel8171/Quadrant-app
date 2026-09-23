@@ -74,20 +74,6 @@ describe('responsive layout metrics', () => {
     expect(themeCss).toMatch(/\.title-underline\s*\{[\s\S]*align-self:\s*center/)
   })
 
-  it('keeps the review slider unfilled track on the same surface as its card', () => {
-    const slider = readFileSync(
-      resolve(process.cwd(), 'src/renderer/src/components/review/SegmentedSlider.tsx'),
-      'utf8'
-    )
-    // 未填充段必须与卡片同色（--panel），不能再用 --border 压出一条亮带。
-    expect(slider).toMatch(/i < value \? colors\[i\] : 'var\(--panel\)'/)
-    expect(slider).not.toMatch(/'var\(--border\)'/)
-    // 未填充区的范围改由一条 1px 内描边示意。
-    expect(themeCss).toMatch(/\.review-slider-baseline\s*\{[\s\S]*border:\s*1px solid var\(--border\)/)
-    // 行上不能再叠浅色底，否则又出现第三种色阶。
-    expect(mobileCss).toMatch(/\.review-slider-row\s*\{[\s\S]*background:\s*transparent/)
-  })
-
   it('sets mobile day timeline minimum height and review slider layout', () => {
     expect(mobileCss).toMatch(/\.day-canvas\s*\{[\s\S]*min-height:\s*370px/)
     expect(mobileCss).toMatch(/\.review-sliders\s*\{[\s\S]*height:\s*150px/)
