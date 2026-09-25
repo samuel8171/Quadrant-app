@@ -400,9 +400,16 @@ while (pending.length > 0) {
     process.stdout.write(`  子树 ${t.path || '<root>（根树）'}\n`)
   }
   if (stillMissing.length === pending.length) {
-    /* 一整轮毫无进展，说明是硬错误 */
+    /* 一整轮毫无进展，说明是硬错误。**必须把响应体带上** ——
+       只报状态码时，422 的四种成因（子对象不存在 / 条目重复 / mode 非法 / 路径非法）
+       完全分不出来，上一次就是这样白等了 9 分钟。
+       见 tmp/pushdiag*.{sh,py}（定点复现单个树的 POST）。 */
     const detail = stillMissing
-      .map(({ t, err }) => `  - ${t.path || '<root>'}：${err instanceof Error ? err.message.split('\n')[0] : err}`)
+      .map(({ t, err }) => {
+        const msg = err instanceof Error ? err.message : String(err)
+        const [head, ...rest] = msg.split('\n')
+        return `  - ${t.path || '<root>'}：${head}${rest.length ? '\n      ' + rest.join('\n      ').slice(0, 400) : ''}`
+      })
       .join('\n')
     throw new Error(`子树上传停滞，以下 ${stillMissing.length} 个无法创建：\n${detail}`)
   }
