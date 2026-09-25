@@ -232,7 +232,15 @@ export default function QuadrantPage(): JSX.Element {
     if (!menu) return
     const onDown = (e: PointerEvent): void => {
       const target = e.target as Element | null
-      if (target && target.closest('.context-menu')) return
+      /*
+       * 判据是玻璃的**定位层** `.gs-layer--menu`，不再是 `.context-menu`。
+       * 菜单玻璃化后 `.context-menu` 这个类已经不存在了——继续用它会让
+       * 这条守卫恒不命中，于是**在菜单项上按下指针也会立刻收起菜单**，
+       * 而 click 要等 pointerup 才派发，等反应过来元素已经卸载，
+       * 整个菜单变成了"看得见、点不动"。
+       * closest 沿祖先链上溯，落在定位层即可命中。
+       */
+      if (target && target.closest('.gs-layer--menu')) return
       setMenu(null)
     }
     window.addEventListener('pointerdown', onDown)

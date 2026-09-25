@@ -6,10 +6,11 @@
  * 之后补发的兼容性 `mousedown` 会抢走刚打开输入框的焦点），靠读代码推断已多次得出错误结论。
  * 它不参与构建产物（Vite 默认只以 `index.html` 为入口），可在地址栏直接打开调试。
  *
- * 用法：/probe.html?page=quadrant|weekly|goals|review[&strict=0][&sidebar=1]
+ * 用法：/probe.html?page=quadrant|weekly|goals|review[&strict=0][&sidebar=1][&crash=1]
  */
 import React from 'react'
 import ReactDOM from 'react-dom/client'
+import ErrorBoundary from '../src/components/ErrorBoundary'
 import Sidebar from '../src/components/Sidebar'
 import GoalsPage from '../src/pages/GoalsPage'
 import QuadrantPage from '../src/pages/QuadrantPage'
@@ -22,6 +23,14 @@ const params = new URLSearchParams(location.search)
 const pageName = (params.get('page') ?? 'quadrant') as Page
 const withSidebar = params.get('sidebar') === '1'
 const strict = params.get('strict') !== '0'
+/**
+ * `crash=1`：故意在树里抛一次错。
+ *
+ * 专门给顶层错误边界用的一条自检路径。它是"只在出事故时才生效"的那种代码，
+ * 平时没有任何机会被执行；不主动制造一次崩溃，就只能靠信任它写对了 ——
+ * 而这一轮恰恰是因为"没有错误边界"导致整个窗口空白，不能再用信任代替验证。
+ */
+const crash = params.get('crash') === '1'
 
 const PAGES: Record<Page, () => JSX.Element> = {
   goals: GoalsPage,
@@ -110,12 +119,24 @@ function Probe(): JSX.Element {
   )
 }
 
+function Boom(): JSX.Element {
+  throw new Error('探针故意抛出的错误：用来验证顶层错误边界')
+}
+
 ReactDOM.createRoot(document.getElementById('root')!).render(
-  strict ? (
-    <React.StrictMode>
+  /*
+   * 探测页也套上错误边界，与真实入口 (src/main.tsx) 保持一致：
+   * 否则探针跑在一条比生产更脆的路径上，量出来的"能挂载"没有意义。
+   */
+  <ErrorBoundary>
+    {crash ? (
+      <Boom />
+    ) : strict ? (
+      <React.StrictMode>
+        <Probe />
+      </React.StrictMode>
+    ) : (
       <Probe />
-    </React.StrictMode>
-  ) : (
-    <Probe />
-  )
+    )}
+  </ErrorBoundary>
 )

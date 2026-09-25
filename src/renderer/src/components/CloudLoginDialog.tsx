@@ -1,6 +1,7 @@
 import { FormEvent, useState } from 'react'
 import { useClosing } from '../hooks/useClosing'
 import { login } from '../lib/cloudSync2'
+import GlassModal from './glass/GlassModal'
 
 interface Props {
   onCancel: () => void
@@ -30,12 +31,13 @@ export default function CloudLoginDialog({ onCancel, onLoggedIn }: Props): JSX.E
   }
 
   return (
-    <div className={`modal-mask${closing ? ' closing' : ''}`} onClick={close}>
-      <form
-        className={`modal cloud-login-modal${closing ? ' closing' : ''}`}
-        onClick={(event) => event.stopPropagation()}
-        onSubmit={submit}
-      >
+    <GlassModal closing={closing} onMaskClick={close} className="cloud-login-modal">
+      {/*
+        表单从原来的「就是 .modal 面板本身」变成玻璃内部的元素：
+        玻璃层接管了外壳（背景/圆角/内边距），表单只负责提交语义，
+        因此 form 上不需要再挂任何外壳类。
+      */}
+      <form onSubmit={submit}>
         <h3>登录云端账号</h3>
         <p className="confirm-message">登录一次后由本机记住，用于手机与桌面端之间同步计划数据。</p>
         <label className="modal-field">
@@ -66,6 +68,6 @@ export default function CloudLoginDialog({ onCancel, onLoggedIn }: Props): JSX.E
           </button>
         </div>
       </form>
-    </div>
+    </GlassModal>
   )
 }

@@ -46,7 +46,28 @@
 - 本机无 Chrome、无 `ms-playwright` 浏览器缓存；直接复用系统 Edge + `playwright-core`（`C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe`），无需下载二进制。可用 `UI_PROBE_BROWSER` 覆盖。
 - **两次独立的 `page.mouse.click` 不会让浏览器合成 `dblclick`**（clickCount 各为 1）；鼠标双击用 `page.mouse.dblclick`，触摸双击用两次 `page.touchscreen.tap`。触摸长按/拖动需走 CDP `Input.dispatchTouchEvent`。
 - `addInitScript` 执行时 `document.documentElement` 可能尚未创建，MutationObserver 要轮询挂载，否则整段注入脚本会因抛错而失效。
-- 已知时序陷阱：触屏轻触后浏览器会在 `pointerup` **之后**补发 `mousedown`（其默认动作会抢走焦点，曾导致"输入框闪现即消失"）。
+- **已知时序陷阱**：触屏轻触后浏览器会在 `pointerup` **之后**补发 `mousedown`（其默认动作会抢走焦点，曾导致"输入框闪现即消失"）。
+- **`backdrop-filter`（玻璃磨砂）的取证：只有「元素级截图」不能信，页面级截图可以。**
+  第七轮（2026-09-24）把这条彻底量清了 —— 本轮之前记的"CDP 看不见磨砂、只能用系统级
+  抓图"**不要再用**：
+  - `page.screenshot({ clip })`（页面级）**忠实地渲染 `backdrop-filter`**：无头 Edge 上
+    量到"材质开 std 0.4 / 材质关 119.0"，那就是磨砂本身，且与系统级真实屏幕读数
+    同向同量级（菜单死 0.66 ↔ 78.4；弹窗活 0.07 ↔ 3.5）。
+  - `locator().screenshot()`（元素级）**会把一切判成"穿透"**：它为元素单独建
+    render surface，连 `opacity:0.95` 这种规范正对照都读成"穿透"。**别用它量材质。**
+  - 判据必须是**同方法内的「保留率」**：同一状态抓"材质开 / 关"两张比 std。
+    绝对数字不可跨方法比（第五轮 CDP 读 38.0、真实屏幕 3.2，比值同向但绝对值差 10 倍）。
+  ⇒ 量磨砂**不需要抢占屏幕**。系统级抓图（`scripts/glass-material-screen.{mjs,py}`）
+  仍然保留，用作"屏幕上真正长什么样"的最终验收。
+- **保留率的两个指纹很好认**：≈0 = 磨砂既画出来了、也采到了背景；
+  **≈0.66 = 只剩染色**（`--gs-tint` 的 alpha 恰好 0.34，把对比度压到 0.66）。
+  见到 0.66 就别再怀疑别的原因，直接去查定位层的 `z-index` / `position`。
+- **窗口置顶会被别人的置顶浮层压住**（腾讯会议共享浮窗、NVIDIA Overlay 之类）。
+  两个必踩的坑：① `user32.SetWindowPos` **必须显式声明 `argtypes`**，否则
+  `HWND_TOPMOST = -1` 在 x64 上被零扩展成 `0x00000000FFFFFFFF`，调用**静默失败**
+  且日志里看不出来；② 定位标记别用红/绿（会与探针自己的红/蓝条纹撞色），用青/品红。
+  抓图前先确认屏幕没被占用（`tmp/winfocus.py` 可列可见窗口），
+  否则会把别人的窗口拍下来 —— 既拿错数据，也可能拍进用户的隐私内容。
 
 ## 触摸手势的三个硬约束（改移动端手势前必读）
 
@@ -232,4 +253,139 @@ node scripts/pwa-height-probe.mjs --out docs/probes/pwa-height.md
 ### 探测页入口
 
 探针须走 `/probe.html?page=weekly&sidebar=1`，**不要用 `/`**：`/` 是登录页（`.app` 与 `.sidebar` 都不存在，测量会拿到 null），而探测页会直接挂载真实组件并绕开登录门禁。另外探测页要先 `await init()`，`waitForSelector('.app')` 等到才说明挂载完成（期间渲染的是 `loading…`）。
+
+## 液玻璃材质（改 `components/glass/` 或任何玻璃外观前必读）
+
+> **2026-09-24 第七轮：菜单磨砂的真凶是「定位层自己的 `z-index`」，已修。**
+> 量法（无头即可，不用抢屏幕）：条纹插在被测浮层**之前**（同级、absolute、无 z-index），
+> 同一状态抓"材质开 / 材质关"两张，比 **保留率 = std(开)/std(关)**。
+> ≈0 = 磨砂生效；**≈0.66 = 只剩染色（死）**。
+
+**玻璃定位层（`.gs-layer*`）上不能有非 auto 的 `z-index`，也不能是 `position: fixed`**
+
+单变量实测，**两个宿主都做过 —— 别只信一个**：
+
+| 宿主 | 变量 | 保留率 |
+|---|---|---|
+| 菜单 | 原样，层 `z-index: 50` | 0.66 死 |
+| 菜单 | 层 `z-index: 30` / `z-index: 0` | 0.66 死（**0 与 50 同病**） |
+| 菜单 | 层 `z-index: auto` | **0.00** 活 |
+| 菜单 | 层 z auto ＋ **材质板** z 9 | **0.00** 活（材质板自己带 z 无害） |
+| 弹窗 | 原样（层 z auto，外面包着 `.modal-mask` fixed+z60） | **0.07** 活 |
+| 弹窗 | 给**它自己的定位层**加 z 50 | 0.65 死 |
+
+⇒ 两条边界：**更外层祖先**的 z-index / fixed **不影响**（弹窗就是反例：它的祖先里有
+`fixed` + `z-index: 60`，材质照样活）；**材质板自己**带 z-index **无害**。
+所以修法是**把层级从定位层搬到材质板与内容层**（`--gs-z`；两处取**同一个数**，
+靠树序把内容压在上面 —— 给内容 +1 会多盖一层正 z，手机 dock 的按钮就会被吞掉点击）。
+
+⚠️ 本节早前记的「带 `position: fixed` 或 `z-index` 的**祖先**就是 backdrop root 边界」
+**是错的，已作废**（规范也写明 z-index / fixed 不形成 backdrop root）。
+被坐实的只有一条现象：**这一层自己带上了，材质就死**。**机制仍未定论，不要推测。**
+`.gs-layer--dock`（手机 dock）的 `z-index: 0` 是同一个坑，已一并改成 `--gs-z: 0`。
+`url()` 滤镜与这条**无关**（换干净 `blur()` 一样死）。
+
+**弹窗遮罩（`.modal-mask`）曾经是材质板的祖先 —— 那也是同一个坑的另一副面孔。**
+遮罩为了压过事件卡必须带 `z-index`（一张**合成面**），采样被截在它内部。
+实测（同一块板、同一组条纹）：遮罩当祖先 → 保留率 **0.30**、板内亮 24.9；
+搬进玻璃层内部当**兄弟** → **0.02**、45.1（菜单直通页面是 0.02 / 76.2）。
+⇒ **任何"要压在材质板下面、又必须带 z-index"的东西，都只能画在材质板之前当兄弟，
+不能当祖先**（`GlassSurface` 的 `layerPrefix` 就是给这个用的）。
+⚠️ 因此**别用"把遮罩调淡"去解决弹窗不像玻璃**：结构不对时越淡材质越不糊
+（0.55→0.15 保留率 0.30→0.48，到 0 就是 0.66 死）。结构改对后浓度才是亮度旋钮，
+取 0.20 时弹窗板内亮度 74.4 对上菜单 76.2。
+
+```
+# 开发服务器
+./node_modules/.bin/vite --config vite.web.config.ts --port 5199 --host 127.0.0.1 --strictPort
+PY313="C:/Users/Samuel/AppData/Local/Programs/Python/Python313/python.exe"
+
+# ① 量磨砂 —— 无头页面级截图就够（第七轮起不必抢屏幕）
+#    条纹插在被测浮层之前 + 同状态抓"材质开/关"两张 + 算保留率，见第七轮的那两组脚本
+node tmp/menu-fix-verify.mjs && "$PY313" tmp/menu-fix-judge.py        # 菜单（含层级命中测试）
+node tmp/dialog-oracle.mjs  && "$PY313" tmp/dialog-judge.py           # 弹窗（内容隐藏 + 双采样盒）
+
+# ①' 系统级验收 —— 只在要"屏幕上真正长什么样"时用（会置顶窗口，别在开会时跑）
+node scripts/glass-material-screen.mjs --out tmp/glassScreen
+"$PY313" scripts/glass-material-screen.py tmp/glassScreen     # 打印 ✅/❌ 与因果判定
+# 抓图前会把标题匹配的窗口置顶（Win32 SetWindowPos）；找不到红/绿标记块＝窗口被遮挡
+
+# ② 材质结构 —— 定位层未被 fixed/z-index 截断、几何重合、染色、设置接线
+node scripts/glass-material-probe.mjs --out tmp/glassMaterial
+"$PY313" scripts/glass-material-judge.py tmp/glassMaterial      # 退出码 1 = 有宿主是空心的
+
+# 结构/几何/可点性断言（34 项，只作旁证）
+node scripts/liquid-glass-probe.mjs --out docs/probes/liquid-glass
+
+# 修复前后对照图与染色候选图（读 tmp/glassCause 的历史帧，故只在有存档时有意义）
+node scripts/glass-before-after.mjs --out tmp/glassMaterial/ba
+node scripts/glass-tint-candidates.mjs --out tmp/glassMaterial/tint
+"$PY313" scripts/glass-figs.py --out docs/probes/liquid-glass-shots
+```
+
+**最重要的两条**（完整结论见 `.workbuddy/memory/MEMORY.md` 第一节、报告见 `docs/probes/liquid-glass.md` 第零节）：
+
+1. **材质的唯一宿主是 `.gs-plate`（材质板），它是面板的兄弟、挂在锚点层上。**
+   不能在 liquid-glass-react 的子树里放 `backdrop-filter` —— 库根节点带 `transform`，
+   在 Chromium 里它就是 **backdrop root**，后代的 backdrop 只有"根节点自己画过的东西"，
+   而根节点背景透明 ⇒ 采到空白（这正是"所有弹窗全透明"的根因，**不是版本限制**）。
+   同理**锚点不能带 transform**（动画会临时加）—— 材质会被抽干。
+2. **别再用"断言全绿"当验收。** 曾出现 33 项断言全绿、而所有弹窗内部是全透明的：那些断言
+   只验节点/属性/几何，**没有一项量"有没有东西被画出来"**。材质类改动必须跑上面的
+   `glass-material-*`（判据是材质开/关的像素差 ≥ 0.6 且变化像素 ≥ 3%）。
+
+已知未解释的观测：材质板存在时，库自己的 `span.glass__warp`（已 `display:none`）
+仍会额外贡献一层糊化（关掉它 Δ16.27 / 80% 像素）。机制说不清，因此保持关闭（材质所有者唯一），
+**要动这条先重跑材质探针**。
+
+### 桌面端探针（CDP 接管真实窗口，网页探针替不了）
+
+```bash
+# 9222 常被别的 Electron host 占着，换 9333
+unset ELECTRON_RUN_AS_NODE NODE_OPTIONS
+./node_modules/.bin/electron-vite dev --remoteDebuggingPort 9333
+"C:/Users/Samuel/AppData/Local/Programs/Python/Python313/python.exe" tmp/focus-quadrant.py
+
+node scripts/desktop-glass-cdp.mjs --port 9333                    # standard 档
+node scripts/desktop-glass-cdp.mjs --port 9333 --mode shader       # shader 档
+node scripts/error-boundary-check.mjs                              # 故意抛错，验兜底界面
+```
+
+三坑，都会让探针"看着在跑、其实什么也没量到"：
+
+1. **必须 `unset ELECTRON_RUN_AS_NODE NODE_OPTIONS`**。沙箱会注入它们（后者是
+   `--require=…/node-language-shim.cjs`），Electron 退化成纯 Node，报
+   `Cannot read properties of undefined (reading 'whenReady')` —— **不是代码问题**。
+2. **窗口被遮挡时渲染进程 rAF 被节流** → Playwright 的 `page.screenshot()` /
+   `page.click()` 会一直等到超时（等 fonts / 等稳定帧）。改用原生 CDP
+   `Page.captureScreenshot` 与 `page.evaluate(() => el.click())`，并先提窗口到前台。
+3. **桌面端截图是 DPR 1.75**（1280×800 窗口 → 2240×1400 PNG），像素取样要先换算。
+
+### 两条由「库量尺寸的时机」引出的硬约束（当天第三轮，都实测踩过）
+
+库只在**挂载**与 `window.resize` 两个时刻用 `getBoundingClientRect()` 量自己，
+两次都不可靠，且**错误会一直留着**：
+
+1. **宿主被 CSS 隐藏时它会量到 0×0。** shader 档拿这个零去 `createImageData(0, ·)`
+   抛 `IndexSizeError`；异常在 effect 里，而应用没有错误边界 → React 卸载整棵树 →
+   **窗口只剩底色、"永久打不开"**（设置是持久化的）。另外三档不抛错，所以这个故障
+   **只在 shader 档出现**，排查时别被"其他档正常"误导。
+   两道修法都要留着：`GlassSurface` 用 **`getClientRects().length > 0`**（判"有没有布局盒"，
+   不是"尺寸是不是零"）做挂载闸门；顶层 `components/ErrorBoundary.tsx` 兜底并给
+   「重置外观设置并重载」出口。**新增任何会抛错的 render/effect 前先想清楚有没有边界。**
+2. **`getBoundingClientRect()` 把祖先 transform 算进去。** 入场动画 `@keyframes pop-in`
+   的 `scale(0.94)` 挂在祖先 `.gs-anim` 上 → 库把尺寸永久记成 0.94 倍 → 它那 6 层装饰
+   （2 底色 + 4 镜面边）全部缩小，稳定后镜面边比玻璃体小约 14px；而动画期间材质板
+   也停在 0.94、两者恰好重合，所以症状是**"动画里看着对、一稳定就错位"**。
+   修法：`animationend`（`animationName === 'pop-in'`）时替库发一次 `window` 的 `resize`
+   —— 那是库自己注册的重测入口。**故意不加"别的实例在动画就先别发"的守卫**（自愈设计）。
+   自检：`.gs-anim` 里非 `.gs-panel` 子项的 `style.width` ÷ 玻璃体宽 **必须 ≈ 1.0000**，
+   `desktop-glass-cdp.mjs` 已把它做成断言。
+
+顺带量到的事实：**shader 档每打开一个玻璃层卡主线程约 1.3 秒**（长任务 3 个、最长 1276ms；
+standard 档 0 个），其中 canvas API 只占 30ms，其余全在库的逐像素 JS 循环。
+StrictMode 下 effect 双调用会翻倍，打包版约一半。
+
+**Δ 的口径统一为「逐通道 0~255」**：曾经写成 `np.abs(a-b).sum(axis=2)`（逐像素三通道求和，
+量纲 0~765），同一画面会报出 3 倍的 Δ，与文档/图注对不上。改判读逻辑时别退回求和。
 

@@ -1,0 +1,1096 @@
+# 液态玻璃（liquid-glass-react）接入验证
+
+日期：2026-09-24（含当天第三、四、**五**次修订：桌面端整窗空白 + 镜面边错位；
+第五次＝材质其实一直是死的，见下面第一节）
+
+| 探针 | 作用 | 实测 |
+|---|---|---|
+| `scripts/glass-material-screen.mjs` + `.py` | **磨砂到底有没有画出来**（真实屏幕抓图，唯一可信） | ON std 3.5 / OFF-fixed std 78.4，因果成立 |
+| `scripts/glass-material-probe.mjs` + `scripts/glass-material-judge.py` | 材质**结构**：定位层未被截断、几何重合、染色、设置接线 | 全绿（注意：**它看不见磨砂**，见第一节） |
+| `scripts/desktop-glass-cdp.mjs` | **桌面端真窗口**的挂载/闸门/镜面边尺寸/异常（走 CDP 接管真实 Electron） | 本轮**未能运行**（见第九节末） |
+| `scripts/error-boundary-check.mjs` | 故意抛错，确认顶层错误边界的恢复界面真的出现 | 5/5 项通过 |
+| `scripts/liquid-glass-probe.mjs` | 结构/几何/类名/可点性 34 项 | 全部通过 |
+| 全量单测 | 22 个文件逐文件跑 | 204/204 通过 |
+
+截图：`scripts/glass-shots.mjs` → `docs/probes/liquid-glass-shots/`（22 张）
+修复对照图：`docs/probes/liquid-glass-shots/glass-material-0{1..4}-*.png`、
+`glass-blank-window-before-after.png`、`glass-ring-position-before-after.png`
+
+> ⚠️ **本文件第一版（同日上午）曾写「33/33 通过」，而当时所有弹窗内部是全透明的。**
+> 那 33 项只验节点存在性、属性值与几何，**没有任何一项去量"有没有东西被画出来"**。
+>
+> ⚠️ **第五次修订又打掉一层：`glass-material-*` 那一组也看不见磨砂。**
+> 它拍的是 CDP 截图，而 CDP 截图**不忠实地渲染 backdrop-filter**；
+> 于是它量的"材质开/关像素差"其实只来自**染色**，磨砂一直是死的它也全绿。
+> 这不是修辞 —— 用户第二轮就报「稳定后弹窗直接变透明」，我按这套探针判了两次"已修好"。
+> **判断磨砂只能用 `glass-material-screen.{mjs,py}`（真实屏幕抓图）。**
+
+---
+
+## 零之前·第五轮：磨砂一直是死的 —— 两个发现
+
+### 发现一：CDP 截图看不见 backdrop-filter（元级错误）
+
+同一时刻、同一页面、同一个 `backdrop-filter: blur(18px)`，两种取证方式量出的条纹清晰度：
+
+| 格子 | CDP 截图 std | **真实屏幕 std** |
+|---|---|---|
+| A 条纹原样 | 118.8 | 119.1 |
+| B `backdrop-filter: blur(18px)` | 38.0 | **3.2 ← 糊平，效果真实存在** |
+| C 前景 `filter: blur(18px)` | 39.6 | 14.8 |
+| D 半透明色块 | 69.0 | 53.6 |
+
+（`tmp/backdrop-visibility-test.mjs` + `tmp/grab-screen.py`；有头与无头都一样。）
+
+**推论：本项目此前所有基于 `page.screenshot()` 的"材质 Δ"读数全部无效**——
+它们量到的是材质板的 `background` 染色，`backdrop-filter` 从来没被真正看见过。
+材质死了一年（也许从来没活过）而探针全绿，根因就在这里。
+
+### 发现二：`.gs-layer { position: fixed }` 让后代的 backdrop-filter 采不到任何东西
+
+接手用户第三轮的复现：真实弹窗稳定后，身后塞高频条纹，条纹**锐利穿透**。
+
+单变量实测（只改 `.gs-layer` 的 `position`，其余一字不动，系统级抓屏量条纹 std）：
+
+| `.gs-layer` 的 position | 材质板矩形 | 身后条纹 std | 判读 |
+|---|---|---|---|
+| `fixed`（修复前） | 460.0,328.5 360×163 | **78.4** | 锐利 ⇒ 完全没采到背景 |
+| `absolute`（修复后） | 460.0,328.5 360×163 | **3.5** | 糊平 ⇒ 正常 |
+| `static` | 460.0,328.5 360×163 | 3.5 | 糊平 |
+| `display: contents` | 460.0,328.5 360×163 | 3.5 | 糊平 |
+
+**几何逐像素不变**，所以这不是"位置变了所以看着不一样"，是纯粹的合成层行为。
+
+排除掉的候选（都实测无效，别再去试）：
+
+- **不是 `url()` 的问题**：把材质板声明换成干净的 `blur(18px)`（去掉 `gs-refract` 类、
+  或内联 `!important` 覆盖、或把 `--gs-fid` 换成不存在的 id）→ 一样是 78.4。
+- **与 `z-index` / `isolation` / `transform` / `contain` 都无关**：
+  `fixed` 叠加这四项修饰后仍是 78.4（`tmp/plate-layer-variants2.mjs`）。
+  > ⚠️ 第七轮修正：**`z-index` 那一项是错的** —— 它当时叠在**已经坏掉的 fixed 层**上，
+  > 自然"无关"。单独把 `z-index` 加到**正常（absolute）**的定位层上，材质立刻死
+  > （菜单 0.66、弹窗 0.65）。`isolation` / `transform` / `contain` 的结论仍未被复测。
+- **不是"祖先带 transform 抽干 backdrop"那条老规律**：祖先链逐项查过，
+  全部 `transform: none / filter: none / opacity: 1 / will-change: auto / contain: none`。
+
+**修法**：`.gs-layer { position: absolute; inset: 0 }`。
+安全性已验证：`.modal-mask` 是 `fixed; inset: 0` 且无内边距，`absolute` 子元素铺满它
+＝ 铺满视口，与 `fixed` 同盒（实测几何一致）；菜单层的父链全是 `static`，
+containing block 退化为初始包含块，而**文档不可滚动**（4 种页面 × 桌面/手机视口实测
+`scrollHeight − clientHeight = 0`），坐标与视口一致。
+`.gs-layer--dock`（手机 dock）与 `.gs-layer--preview` 本来就是 `absolute`，不受影响。
+
+### 发现二的机制模型（可用来推别的宿主）
+
+Chromium 把 `backdrop-filter` 的采样范围**限制在最近的 backdrop root 以内**，
+而**带 `position: fixed` 或 `z-index` 的祖先就在扮演这个边界**：材质板在层内、
+身后页面在层外 ⇒ 采到空白。印证：
+
+- 把条纹塞进 `.gs-layer` **内部**（层内、材质板之前）→ 四种 position 变体**全都**糊平（std 27.2）
+  ⇒ 边界确实在层上，层内的东西看得见。
+- 弹窗修复后（层 `z-index: auto`）采样能一路够到 `.modal-mask`(z 60) 里的条纹；
+  **菜单档的 `.gs-layer--menu` 带 `z-index: 50`**，采样被截在层内 ⇒ 菜单材质的磨砂**仍未生效**
+  （实测：条纹锐利 std 78~119，改 position 无效）。
+  > ✅ 第七轮已修：把 z-index 从定位层**搬到材质板与内容层**（`--gs-z`），
+  > 菜单保留率 0.66 → **0.00**，且板外整页 Δmean 0.000。注意方向：
+  > 不是"改由一个带 z-index 的**祖先**提供"（祖先怎样都不影响），
+  > 而是**定位层必须彻底不带 z-index**。
+
+### 顺带修正的一处旧结论
+
+本文件早前记过「Chromium 真的渲染 `backdrop-filter: … url(#svg) …`（差 Δ48 / 84.8%）」。
+按上面对照数据推翻：**该 `url()` 是被静默忽略的，逐位相同**（自建滤镜也一样）。
+那条 Δ48 是探针伪影 —— 与本节"CDP 看不见 backdrop-filter"同源。
+
+> ⚠️ **第七轮再翻回来：`url()` 不是被忽略的。** 带正对照的实测（`tmp/settings-truth.mjs`）：
+> 同一处 `!important` 覆盖只保留 `url()` 与不覆盖 **Δ0.000/Δmax 0**（覆盖无副作用），
+> 去掉 `url()` 则 Δmean 2.9/Δmax 11；直接改库里 `feDisplacementMap@scale`
+> （0 vs 200，声明一字不动）在**模糊 4px 时 Δmax 108、73.4% 像素变化**。
+> 即上面的"推翻"本身推错了 —— 第五轮那条 Δ48 未必是伪影，很可能是真信号。
+
+### 复现方式（第五轮）
+
+```bash
+# 1) 另开终端起开发服务器
+./node_modules/.bin/vite --config vite.web.config.ts --port 5199 --host 127.0.0.1 --strictPort
+# 2) 真实屏幕取证（两步；Node 侧不能 spawn 进程，沙箱会 EBUSY）
+node scripts/glass-material-screen.mjs --out tmp/glassScreen
+python scripts/glass-material-screen.py tmp/glassScreen      # 会打印 ✅/❌ 与因果判定
+```
+
+---
+
+## 零之前·第六轮：稳定前后其实一模一样；菜单采不到层外
+
+用户原话：「**修复菜单栏磨砂。弹窗背景效果仍不佳，且调整设置无变化。
+你去截稳定前的菜单栏或弹窗参考**」。三条诉求分别取证，结论如下。
+
+### 诉求一「稳定前有折射、稳定后变透明」——**不成立**
+
+把 `gs-pop-in` 动画重启后 `animationPlayState: paused` + 负
+`animation-delay: -0.1s` **冻结在中点**（不依赖抓图时序），与稳定后同一视口、同一采样区：
+
+| 状态 | backdrop-filter | 条纹 std | 材质板矩形 |
+|---|---|---|---|
+| `DA-current` 稳定后 | `blur(16.8px) url("#:r1:") saturate(1.4)` | **3.5** | 360.0×163.0 |
+| `DF-frozen` 动画中点 | 同上 | **3.5** | 360.4×163.2 |
+
+**逐位相同。** 入场动画期间材质没有任何额外增益。
+用户看到的"稳定前有折射"是动画本身的高光扫动 + 上一轮已修的
+镜面边 0.94 尺寸跳变造成的**观感错觉**，不是材质开关。
+
+同批还量到（真实屏幕，均以层内条纹为基准）：
+
+| 变体 | std | 结论 |
+|---|---|---|
+| `DA` 现状（含 `url()`） | 3.5 | 糊平 |
+| `DB` 摘掉 `url()` | 2.8 | **与 DA 基本一致 ⇒ `url()` 无害**（第五轮的怀疑被否掉） |
+| `DC` `blur(0px)` | 78.5 | 锐利 ⇒ blur 是有效变量 |
+| `DD` `blur(30px)` | 13.4 | 更糊 |
+| `DE` `backdrop-filter: none` | 78.5 | 锐利（对照） |
+
+### 诉求二「菜单栏磨砂」——**确实坏了，但坏法不是"没磨砂"**
+
+菜单**层内**条纹会被糊（`MA` 截图：菜单内部均匀无条纹，`MC` `blur(0px)` 时才露出条纹）；
+但**层外**（页面层）的条纹**完全糊不到**（`MG` 截图：菜单内部条纹清晰如初）。
+同口径下弹窗是"糊平"的（`DG`）。
+
+⇒ 材质板的采样范围疑似被限制在**承载玻璃的那一层内部**。
+若要真正确证，需要**双色条纹**（层内红 / 层外蓝）看材质板偏哪个通道 ——
+单色条纹做不到，因为"糊掉"与"只采到纯色遮罩"在像素上都是均匀的。
+脚本已就绪：`scripts/glass-backdrop-boundary.mjs`。
+
+### 诉求三「调整设置无变化」——**链路是通的，是"没有东西可糊"**
+
+跳过 UI 直接改 `<html>` 上的 CSS 变量（`tmp/settings-effect.mjs`，无头）：
+
+| 变体 | vs 基准的 Δmean |
+|---|---|
+| `--gs-blur` 16.8px→4px | **9.11** |
+| `--gs-radius` 32px→64px | **5.15** |
+| `--gs-sat` 140%→100% | 0.13（条纹是灰度的，本就几乎无响应） |
+
+⇒ 设置 → store → `syncGlassCssVars` → 材质板 这条链路**没有断**。
+再叠加"采样被截在层内、而层内只有一层 55% 纯黑遮罩"这一条，
+**blur 调到多少都是在糊纯色 ⇒ 视觉零变化**，这才是用户观感的来源。
+另外设置面板 6 个滑块里有 4 个（位移强度 / 色差 / 弹性 / 折射模式）
+在本栈上**本来就完全无效**（折射做不出来，见第四节）。
+
+> ⚠️ 第七轮修正：**位移强度 / 色差 / 折射模式其实有效**，只是被模糊量压住
+> （模糊 16.8px 时位移 0→200 只改 3.4~6.3% 像素；降到 4px 就是 73.4%、Δmax 108）。
+> 真正按设计不生效的只有**弹性**（所有调用点 `interactive=false`，库不接指针）。
+> 「blur 调到多少都是在糊纯色 ⇒ 视觉零变化」这条也只对"材质被截断"的那些宿主成立
+> —— 菜单与手机 dock 的材质当时是死的（第七轮已修）。
+
+### ⭐ 取证手段的能力边界（比结论更重要）
+
+这一轮把"用什么截"这件事彻底厘清了，三种口径互不等价：
+
+| 手段 | 能渲染 backdrop-filter？ | 能判断"采样是否被挡住"？ |
+|---|---|---|
+| `page.screenshot()`（整页） | ❌ 看不见（第五轮的旧结论） | ❌ |
+| `locator().screenshot()`（元素级） | ✅ 无头下也能（有磨砂 std 2.1 / 无磨砂 78.5） | ❌ 会为该元素单独建 render surface，**全穿透** |
+| 有头 + 窗口移到屏幕外 | — | ❌ 同样全穿透 |
+| **真实屏幕系统抓图** | ✅ | ✅ **唯一可用** |
+
+> ⚠️ **第七轮修正（整张表都要降级看）**：第一行与最后一行都不成立。
+> 页面级 `page.screenshot({ clip })` 本轮**明确看得见**磨砂（材质开 std 0.4 / 关 119.0），
+> 而且与真实屏幕同向同量级（菜单死 0.66↔78.4、弹窗活 0.07↔3.5）；
+> 真实屏幕**不是唯一**可用手段，也不需要再为它开有头窗口。
+> 唯一被坐实的是**元素级** `locator().screenshot()`：它连 `opacity:0.95` 这个规范正对照
+> 都读成"穿透"，会把一切判成穿透。详见第七轮那节。
+
+无头最小复现（`tmp/backdrop-boundary-minimal.mjs`，10 个祖先变体：`absolute` /
+`z-index:50` / `fixed` / `fixed+z-index:60` / `opacity<1` / `isolation` / `transform`）
+**全部返回 std 1.5（穿透）**，连规范正对照 `opacity:0.95` 也是 ——
+即软件合成根本不模拟这条限制，**别再用无头去验它**。
+
+### 顺带把上一轮的机制描述判了错
+
+Filter Effects 2 明确写着 backdrop root 只由
+`filter` / `opacity<1` / `mask` / `clip-path` / `backdrop-filter` /
+`mix-blend-mode` / `will-change` 形成，并特别注明：
+
+> **a Backdrop Root is not formed by elements with z-index applied,
+> fixed or sticky-positioned elements, and elements with transforms applied.**
+
+所以第五轮那段「带 `position: fixed` 或 `z-index` 的祖先就是 backdrop root 边界」
+**是错的**（已在 `glass.css` 里更正并标注"机制未定论"）。
+fixed 那个现象**只在真实 GPU 合成的有头渲染下**出现，更像 Chromium 合成层的回读限制。
+
+### 复现（第六轮新增）
+
+```bash
+# 边界判定（真实屏幕；两步，Node 侧不能 spawn，沙箱会 EBUSY）
+node scripts/glass-backdrop-boundary.mjs --host dialog --out tmp/brBound-dialog
+python scripts/glass-material-screen.py tmp/brBound-dialog     # 另开终端或紧随其后
+
+# 设置链路（无头即可，不占屏幕）
+node tmp/settings-effect.mjs
+
+# 无头最小复现（证明无头不可用，10 变体全穿透）
+node tmp/backdrop-boundary-minimal.mjs
+```
+
+
+
+## 零之前·第七轮：菜单磨砂的真凶是「定位层自己的 z-index」
+
+用户诉求（原文）：「**修复菜单栏磨砂。弹窗背景效果仍不佳，且调整设置无变化。
+你去截稳定前的菜单栏或弹窗参考**」，随后补一句「**这种效果是对的**」
+（附一张弹窗压在黑白高频条纹上、内部被糊成均匀灰的抓图，作为目标观感）。
+
+### 真凶：`.gs-layer--menu { z-index: 50 }`
+
+单变量实测（无头：`tmp/zrule-dialog.mjs` + `tmp/zrule-judge.py`）。
+量法：条纹插在浮层**之前**（同级、`absolute`、无 z-index ⇒ 必在浮层之下）；
+同一状态抓「材质开 / 材质关」两张，判 **对比度保留率 = std(开)/std(关)**：
+
+| 宿主 | 变量 | 保留率 | 判读 |
+|---|---|---|---|
+| 菜单 | 原样（定位层 `z-index: 50`） | 0.66 | 只剩染色 |
+| 菜单 | 定位层 `z-index: 30` | 0.66 | 同上 |
+| 菜单 | 定位层 `z-index: 0` | 0.66 | 同上（**0 与 50 同病**） |
+| 菜单 | 定位层 `z-index: auto` | **0.00** | 磨砂生效 |
+| 菜单 | 定位层 z auto ＋ 材质板 z 9 | **0.00** | 材质板自己带 z-index 无害 |
+| 弹窗 | 原样（层 `z-auto`，外面包着 `.modal-mask` fixed+z60） | **0.07** | 磨砂生效 |
+| 弹窗 | 给它**自己的定位层**加 `z-index: 50` | 0.65 | **同样的病** |
+
+两条边界（都实测，别再推翻）：
+
+- **更外层祖先带 z-index / fixed 不影响**：弹窗的定位层是 `z-auto`，外面还包着
+  `.modal-mask { position: fixed; z-index: 60 }`，材质照样活。
+  ⇒ 第六轮那段「带 fixed / z-index 的**祖先**就是 backdrop root 边界」**作废**。
+- **材质板自己带 z-index 无害**（与不设时逐位相同）。
+
+⇒ 规则：**非 auto 的 `z-index` 与 `position: fixed` 是同一类"掐死材质"的修饰，
+且必须发生在材质板的定位层身上。**
+
+### 修法：层级从定位层搬到材质板与内容层
+
+`.gs-layer--*` 定义 `--gs-z`，`.gs-plate` 与 `.gs-panel/.gs-fallback` 消费它，
+两处取**同一个数**（靠树序把内容压在上面；给内容 +1 会多跳一层正 z，
+手机 dock 的按钮就会被盖住、点不到）。数值与原层级逐位相同：菜单 50 / 手机菜单 110 /
+手机 dock 0；未定义的宿主（弹窗、设置预览）取 auto。
+
+验证（`tmp/menu-fix-verify.mjs` + `tmp/menu-fix-judge.py`）：
+
+| 项 | 结果 |
+|---|---|
+| 落地后保留率 | **0.00**（开 std 0.4 / 关 119.0） |
+| 把 z-index 加回定位层（回归对照） | 0.66 ⇒ 量法有分辨力，且确实是这段 CSS 在起作用 |
+| 板外整页比对 | Δmean **0.000**、Δmax 1 ⇒ 绘制顺序逐像素不变 |
+| 命中测试（桌面 3 点 / 手机 2 点） | 全部落在菜单自己的 `button.context-item`（手机那两点正好压在 dock 上） |
+
+> 重跑同一脚本会得到 **开 std 2.2 / 均值 76.2**（均值一致，std 受采样盒里的板边装饰影响）——
+> **判据看保留率（0.02），不要看 std 的绝对值。**
+
+### 弹窗「背景效果仍不佳」：材质没坏，别先动折射参数
+
+弹窗单独量（`tmp/dialog-oracle.mjs`；内容 `visibility:hidden`；两个互不相交的采样盒）：
+
+| 状态 | 保留率（R 盒 / L 盒） |
+|---|---|
+| 条纹在遮罩**之外**（= 真机形态） | 0.07 / 0.07 |
+| 条纹在遮罩**之内** | 0.02 / 0.02 |
+| 给它自己的定位层加 z 50 | 0.65 / 0.65 |
+
+真机截图也印证（用户那张图）：弹窗内部块标准差 **0.3**、亮度 101.7，而弹窗外条纹场是
+129.5 —— 内部那块是被真正糊过的。
+
+⚠️ **上一版弹窗读数 0.84 是量错了**：采样盒压在「取消 / 确认」两个按钮上，
+按钮文字的高对比把保留率从 0.07 抬到了 0.84。**量材质前先把 `.gs-content` 隐藏。**
+
+观感差异的真正来源是**遮罩浓度**：真机上材质板采到的是「0.55 黑遮罩 × 页面」，
+对比度先被削掉一半，再糊一遍自然"看不出磨砂"；用户那张参考图是把条纹插在遮罩
+**之内**（未被削）才显得通透。要往参考图靠，动的是 `.modal-mask` 的 0.55 与
+材质板 `--gs-tint` 的 0.34，**不是折射参数**。
+
+> ⚠️ **第八轮修正**：上面这段只对了一半。遮罩的问题不是"压暗"，而是**它是材质板的祖先**
+> —— 那会把采样截在遮罩的合成面里（保留率 0.30，且只把遮罩调淡会让材质**更不糊**：
+> 0.55→0.15 时保留率 0.30→0.48，到 0 就是 0.66 死）。第八轮把遮罩搬进玻璃层内部
+> （材质板的兄弟）后，保留率立刻 0.02、浓度才成为纯粹的亮度旋钮；取 0.20 使弹窗板内亮度
+> 74.4 对上菜单的 76.2。详见第八轮那节。
+
+### 「调整设置无变化」：三个有效、三个被模糊压住、一个按设计不接
+
+`tmp/settings-truth.mjs` + `tmp/settings-judge.py`（都带正对照）：
+
+| 滑块 | 实测 | 判定 |
+|---|---|---|
+| 模糊量 0.4 → 0（16.8px → 4px） | Δmean 3.6、Δmax 32、7.1% 像素 | 有效 |
+| 圆角 32 → 0 / 32 → 64 | Δmean 2.3 / 7.3，Δmax ≥150 | 有效 |
+| 饱和度 100% / 140% / 220%（彩色靶子） | 彩度 28.6 / 38.9 / 59.8 | 有效（⚠ 灰白条纹上当然看不出来） |
+| 折射模式 / 位移强度 / 色差 | 见下表 | **有效，但被模糊量压住** |
+| 弹性 | 所有调用点 `interactive=false`，库压根不接指针 | 按设计不生效 |
+
+折射那三个旋钮的判据（直接改库里 `feDisplacementMap@scale`，声明一字不动）：
+
+| 条件 | Δmean | Δmax | 变化像素 |
+|---|---|---|---|
+| 位移 0 vs 200，模糊 16.8px | 1.7 ~ 2.0 | 10 ~ 16 | 3.4 ~ 6.3% |
+| 位移 0 vs 200，**模糊 4px** | **27.9** | **108** | **73.4%** |
+
+（正对照：同一处 `!important` 覆盖但保留 `url()`，与不覆盖 **Δ0.000 / Δmax 0**。）
+
+### 稳定前 vs 稳定后（用户点名要的参考帧）
+
+`tmp/menu-anim-truth.mjs`：入场逐帧，每帧各抓开 / 关两张（内容隐藏）：
+
+| t | 0ms | 40ms | 80ms | 120ms | 160ms | 200ms | 300ms | 500ms |
+|---|---|---|---|---|---|---|---|---|
+| 保留率 | 0.55 | 0.22 | 0.14 | 0.14 | 0.14 | **0.02** | 0.02 | 0.02 |
+
+⇒ 材质在 ~200ms 内进入稳态，此后**恒定**。「只有动画期间才有折射、一稳定就没了」
+这种行为**已经不存在**：全程是同一块材质板在糊背景。60~160ms 那点残差是入场缩放
+期间的合成层插值，不是材质开关。
+
+对照图：`docs/probes/liquid-glass-shots/glass-menu-before-after.png`（改前 / 改后 × 材质开 / 关）
+与 `docs/probes/liquid-glass-shots/glass-menu-anim.png`（入场逐帧，标注保留率）。
+
+### ⭐ 三条旧结论被推翻（别再翻回去）
+
+1. **「`backdrop-filter` 里的 `url()` 被 Chromium 静默忽略」——错。**
+   去掉 `url()` 与留着相比 Δmean 2.9 / Δmax 11 / 4.9% 像素变化（正对照 Δ0.000）；
+   改滤镜内容更明显（模糊 4px 时 Δmax 108 / 73.4% 像素）。
+   **折射是能做的，只是默认 blurAmount 0.4 把可见度压到约 1/12。**
+   设置面板里那句「想要折射就把模糊量降到 0.2 以下」现在有量级依据。
+2. **「无头浏览器不能用来验它」——错，那是探针坏了。**
+   第六轮那个最小复现里，10 个变体**连同 `opacity:0.95` 正对照**全部读 std 1.5
+   （一片平）—— 正对照都读平，说明采样区里根本没有条纹，不是"全都穿透"。
+   本轮全部结论都是无头跑出来的，且与真实屏幕同向同量级。
+3. **「`page.screenshot()` 看不见 backdrop-filter」——不成立（页面级 clip 截图）。**
+   本轮 `page.screenshot({ clip })` 读出的 0.4 vs 119.0 就是磨砂本身。
+   真正坑人的是**元素级** `locator().screenshot()`：它连 `opacity:0.95` 这个规范
+   正对照都读成"穿透"，会把一切判成穿透。
+
+### 量材质的四条铁律（本轮踩全了）
+
+1. 条纹要放在**被测浮层之前**（同级、`absolute`、无 z-index）；
+2. 判据用**保留率**（同状态开 / 关各一张），不要用绝对清晰度 ——
+   只看绝对值会把"染色把对比度压暗"读成"糊了"；
+3. 采样盒必须**躲开文字**（弹窗按钮能把 0.07 抬成 0.84），必要时先隐藏 `.gs-content`；
+4. 采样必须在**几何稳定后**取（入场动画期间材质板是 `scale(0.94)`，
+   按动画中的矩形取样会溢出板外、读到板后的页面）。
+
+### 复现（第七轮新增）
+
+```bash
+# 定规则：是不是定位层自己的 z-index（无头，两个宿主各一组）
+node tmp/zrule-dialog.mjs && python tmp/zrule-judge.py
+# 弹窗的诚实量法（内容隐藏 + 两个互不相交的采样盒）
+node tmp/dialog-oracle.mjs && python tmp/dialog-judge.py
+# 菜单修法的收口验证（保留率 + 板外整页 diff + 命中测试 + 手机档）
+node tmp/menu-fix-verify.mjs && python tmp/menu-fix-judge.py
+# 入场逐帧（稳定前 vs 稳定后）
+node tmp/menu-anim-truth.mjs
+# 逐旋钮（含正对照、彩色靶子、直接改库滤镜 scale）
+node tmp/settings-truth.mjs && python tmp/settings-judge.py
+```
+
+
+
+## 零之前·第八轮：弹窗与菜单对齐（遮罩不能是材质板的祖先）
+
+用户第二句原话：**「现在菜单栏的效果正确，弹窗的效果应与菜单栏一致」**。
+菜单第七轮已修好，剩下的就是让弹窗看起来一样。结论：**差的不只是浓度，主要是结构。**
+
+### 诊断：同一块材质板、同一组条纹，弹窗暗 3 倍且只糊到一半
+
+| 宿主 | 材质**开** std / 均值 | 材质关 std / 均值 | 保留率 |
+|---|---|---|---|
+| 菜单（采样直通页面） | **2.2 / 76.2** | 119.0 / 126.9 | **0.02** |
+| 弹窗（遮罩是祖先，0.55） | 16.0 / **24.9** | 53.5 / 57.4 | **0.30** |
+
+保留率 0.30 意味着**只糊掉七成对比度**（第七轮的菜单死态是 0.66），亮 24.9 意味着
+材质板采到的是一张"已经被 0.55 黑压掉一半"的页面。两件事同一个因：
+**遮罩是材质板的祖先**。遮罩为了压过事件卡必须带 `z-index`，那它就是一张**合成面**，
+材质板的背景采样被截在它内部。
+
+被否掉的两条替代解释：
+
+- **不是"遮罩只是把背景调暗了"**：只把遮罩调淡（结构不动）会**同时把模糊也弄丢** ——
+  实测浓度 0.55→0.35→0.15→0.00 时，板内保留率 0.30→0.33→0.48→**0.66（死）**。
+  即"调浓度"这条路上，越淡越接近菜单的亮度，但材质同时越接近"没糊"。
+- **不是幅度旋钮的问题**：给材质板的 `backdrop-filter` 串一个 `brightness(k)`
+  （k = 1.5 / 2 / 2.5 / 3 / 4）**读数逐位相同**（std 3.5 / 均值 11.4）——
+  `brightness()` 在这条链上不生效（blur / saturate / `url()` 都生效，唯独它没有）。
+  所以"补亮度"必须靠别的手段。
+
+### 修法：遮罩改成玻璃层**内部**的一块漆（材质板的兄弟，不是祖先）
+
+`GlassSurface` 新增 `layerPrefix`，插在**定位层内部、锚点之前**；`GlassModal` 把
+`.modal-mask` 交给它。结构一动，效果立竿见影（同一组条纹）：
+
+| 摆法 | 开 std | 开均值 | 保留率 |
+|---|---|---|---|
+| 遮罩包在外面（**改前**） | 16.0 | 24.9 | 0.30 |
+| 遮罩放进层里（**改后**） | **1.0** | 45.1 | **0.02** |
+
+放层里还顺带解决了嵌套：同一 `--gs-z` 时，后挂载的层整棵压在先挂载的之上，
+内层遮罩才能把外层弹窗一起压暗（做成外层兄弟节点就做不到）。
+
+### 浓度：结构改对之后它才变成纯粹的"亮度旋钮"
+
+| 遮罩浓度 | 板内均值 | 保留率 |
+|---|---|---|
+| 0.55 | 45.1 | 0.02 |
+| 0.35 | 61.7 | 0.02 |
+| **0.20** | **74.4** ← 菜单 76.2 | 0.02 |
+| 0.10 | 82.5 | 0.02 |
+| 0（无漆） | 91.4 | 0.02 |
+
+⇒ 取 **0.20**：与菜单的板内亮度只差 1.8/255（−2%）。代价是周围页面只压暗 20%，
+聚焦感变弱 —— 这正是"与菜单一致"的应有之义（菜单本来就不压暗页面）。
+弹窗文字的可读性由材质板染色（`--gs-tint`）保证，与菜单同一套。
+
+### 落地后的验收（`tmp/dialog-final-verify.mjs`）
+
+| 项 | 结果 |
+|---|---|
+| 层内树序 | `modal-mask → gs-anchor`（遮罩在材质板之前） |
+| 层级 | 遮罩 z=60 / 手机 120；材质板 z=70 / 手机 130；**定位层自身 z=auto** |
+| 弹窗材质开 | std **1.9** / 均值 **74.4** / 保留率 **0.02** |
+| 菜单材质开（同口径） | std 2.2 / 均值 76.2 / 保留率 0.02 ⇒ **相差 −2%** |
+| 点遮罩空白处 | 弹窗关闭 ✓（遮罩搬进 `pointer-events:none` 的层里最容易坏的就是这条） |
+| 点面板里的「取消」 | 弹窗关闭 ✓ |
+| 手机档 | 板心 215,466 = 视口中心 215,466（**逐像素居中**）；板底命中弹窗层内的元素（不是 dock） |
+
+对照图：`docs/probes/liquid-glass-shots/glass-dialog-before-after.png`
+（改前：暗板 + 重幕 / 改后：亮磨砂 / 菜单参照，三张同一口径）。
+
+### ⚠️ 本轮修正第七轮的一句结论
+
+第七轮写的是「要往参考图靠，动的是 `.modal-mask` 的 0.55 与 `--gs-tint` 的 0.34」。
+**只改浓度是不够的**：在旧结构下浓度一淡，材质就跟着死（见上表 0.66）。
+必须先**把遮罩从材质板的祖先链上摘下来**，浓度才是可调的自由度。
+
+### 复现（第八轮新增）
+
+```bash
+# 结构对照：遮罩当祖先 vs 当兄弟（每档各抓 ON/OFF，判读用同一条保留率）
+node tmp/dialog-struct-fix.mjs
+# 落地状态验收：材质读数 + 交互（点遮罩/点按钮）+ 手机档几何
+node tmp/dialog-final-verify.mjs
+# 只扫浓度（在结构改对的前提下）
+node tmp/dialog-match-menu.mjs
+```
+
+---
+
+## 零之前·第九轮：把"弹出物"点了一遍，收编最后一个非玻璃弹窗
+
+用户诉求：**「四象限没问题，现在实现所有弹出菜单（在目标、周计划、周日复盘）的液态玻璃效果」**。
+
+代码里这三处的菜单**本来就已经是** `GlassSurface`，所以先不猜、先点：
+`tmp/popup-inventory.mjs` 对每个场景"重载 → 点一个按钮 → 再取一次浮层清单"，
+比基线多出来的就是这次点击弹出的东西（跳过有副作用的按钮）。
+
+### 清单（这才是"所有弹出物"的完整答案）
+
+| 页面 / 视图 | 触发 | 弹出物 | 是否玻璃 |
+|---|---|---|---|
+| 目标 @桌面 | 卡片上的详情图标 | 目标详情弹窗 | ✅ 玻璃（`.gs-layer--dialog`） |
+| 目标 @手机 | 卡片「…」（桌面档 `display:none`） | 更多菜单 | ✅ 玻璃（`--gs-z: 110`） |
+| 目标 | 删除 | 确认弹窗 | ✅ 玻璃 |
+| 周计划 @周视图 | — | **没有任何弹出物**（10 个按钮逐个点过） | — |
+| 周计划 @日视图 | 事件块右键 | 事件菜单（2 项） | ✅ 玻璃（`--gs-z: 50`） |
+| 周计划 @日视图 | 「添加」/「新建预设」 | **事件表单弹窗**（新建/编辑事件、预设） | ❌ **不是玻璃** ← 本轮唯一缺口 |
+| 周日复盘 @撰写 | — | **没有弹出物**（只有 3 个按钮：保存草稿 / 保存为 Word / 记录） | — |
+| 周日复盘 @记录 | — | 没有弹出物（只有 1 个返回按钮） | — |
+| 全应用 | 保存失败等 | `AlertDialog` / `LeaveConfirmDialog` | ✅ 玻璃 |
+
+那两个**已有**的菜单不是"看起来像玻璃"，是真的在糊（同口径保留率）：
+
+| 菜单 | 开 std / 均 | 关 std / 均 | 保留率 |
+|---|---|---|---|
+| 目标页 更多菜单（手机档） | 2.7 / 91.5 | 119.0 / 125.4 | **0.02** |
+| 周计划 日视图菜单（桌面） | 4.3 / 92.9 | 114.2 / 129.2 | **0.04** |
+
+两者的危险祖先都只有**材质板自己**（`z:110`／`z:50`，实测无害），定位层是 `absolute + z-index:auto` ✓。
+
+### 缺口：事件表单弹窗（`EventFormDialog`）
+
+它是全应用最后一个还在用老壳 `.modal-mask > .modal.weekly-dialog` 的弹窗 ——
+点出来只有 `div.modal-mask`，没有 `.gs-plate`。改为 `GlassModal`（与其余六个弹窗同一套外壳）。
+
+验收（`tmp/eventform-verify.mjs`）：
+
+| 项 | 结果 |
+|---|---|
+| 尺寸 | 板 **460×665**，与旧壳 **460** 同宽（`contentWidth` 412 + 2×24 内边距） |
+| 结构 | 层内 `modal-mask → gs-anchor`；遮罩 z=60、板 z=70、面板 z=70、层 `--gs-z=70`；面板仍带 `modal glass-host weekly-dialog`（`.modal h3` / `.modal-actions` 那批后代选择器继续生效） |
+| 材质 | 开 std 1.7 / 均 **75.3**，关 92.8 / 102.5 ⇒ 保留率 **0.02**（与菜单 76.2、弹窗 74.4 同一水平） |
+| 能用 | 填标题 → 保存 → localStorage 里真的多出该事件、弹窗关闭 |
+| 能关 | 点遮罩空白处关闭 ✓ |
+| 手机档 430×932 | 板 382×772 完整落在视口内（限高滚动容器 `.gs-dialog-body` 生效） |
+| 嵌套「删除确认」 | 两层都是玻璃，确认框**压在表单之上** ✓；但内层遮罩（z 60）低于外层材质板（z 70）⇒ 它不会把表单压暗（已知边界，观感可接受：确认框自己糊住了表单内容） |
+
+### 复现（第九轮）
+
+```bash
+node tmp/popup-inventory.mjs                 # 逐按钮清点每一页的弹出物
+node tmp/menus-audit.mjs                     # 三个页面已有菜单的材质/几何/命中测试
+node tmp/eventform-verify.mjs                # 事件表单玻璃化后的五项验收
+node tmp/day-menu-debug.mjs                  # 日菜单开没开（排查用）
+```
+
+---
+
+## 零之前·第十轮：手机端（含 iOS 降级档）与桌面端对齐
+
+用户诉求：**「网页手机端可跟进桌面端进度」**。本轮改的全是**结构**（遮罩不再当祖先、
+层级搬到材质板、事件表单改用 GlassModal），而结构是两档共用的 —— 所以必须在
+**降级档**下再验一遍：iOS 上走的是 `fallback` 引擎（没有 SVG 位移，材质只剩磨砂 + 染色 + 镜面边）。
+
+做法：把外观设置里的 `forceEngine` 直接写成 `fallback`（localStorage
+`quadrant-glass-v1`），在 430×932 手机视口下重跑四类宿主 + 弹窗。
+脚本 `tmp/mobile-fallback-audit.mjs`（含 ON/OFF 保留率与命中测试）。
+
+| 宿主（降级档 @430×932） | 保留率 | 备注 |
+|---|---|---|
+| 四象限 事件菜单 | **0.02** | 命中落在 `button.context-item` ✓ |
+| 四象限 确认弹窗 | **0.01** | 板心 215,466 = 视口中心（逐像素居中）、完整落在视口内 ✓ |
+| 周计划 日菜单 | **0.02** | — |
+| 周计划 事件表单 | **0.02** | 板 382×772，完整落在视口内 ✓ |
+| 目标页 更多菜单 | **0.02** | 板 406×156（贴底） ✓ |
+| 手机 dock | **0.01** | 见下面的坑 |
+
+四类宿主在降级档下的染色都是 `rgba(26,29,35,0.62)`（`--gs-tint-opaque`）、
+`backdrop-filter: blur(16.8px) saturate(1.4)`、材质板 0 子节点、`.gs-fallback` 面板在位 ✓。
+
+⚠️ **dock 第一次读到 0.24，是量错了**：手机 dock 的导航按钮是它的**兄弟**
+（不在 `.gs-content` 里，隐藏内容隐藏不掉），正好落在采样盒里 ⇒ 把读数抬起来。
+把 `nav.nav` 一起遮掉后是 **0.01**（`tmp/dock-check.mjs`）。
+**量材质时"躲开文字"这条对 dock 同样成立，而且它比弹窗更隐蔽** —— 弹窗至少还有
+`.gs-content` 可以隐藏，dock 的高对比内容是兄弟节点。
+
+### 「网页端没落地」怎么判：先分清"没部署"还是"构建有问题"
+
+用户报「现在构建的网页端手机页面的弹窗菜单栏等没有模糊效果」。两条判据，都是纯外部的：
+
+**① 线上到底跑的是哪一版**（判"是不是没部署"）：
+
+```bash
+html=$(curl -s --noproxy '*' https://samuel8171.github.io/Quadrant-app/)
+echo "$html" | grep -o 'assets/[^"]*'          # 拿线上引用的产物名
+# 与本地对比：grep -o 'assets/[^"]*' dist-web/index.html
+css=$(curl -s --noproxy '*' https://…/assets/index-XXXX.css)
+for s in gs-plate gs-layer--dialog glass-host --gs-z; do echo "$s $(echo "$css" | grep -o -- "$s" | wc -l)"; done
+```
+
+实测（2026-09-25）：线上产物里 `gs-plate` **0 次**、`glass-host` **0 次**，
+最后一次部署是 9-23 的 `c94d78d1` ⇒ **线上压根没有玻璃代码**，症状完全由"没部署"解释。
+
+**② 已构建的产物本身好不好**（判"是不是构建的问题"）。真实入口有登录门禁
+（`supabase.auth.getSession()`，假会话**有时**读得进去、有时被判未登录 —— 别依赖它）。
+可靠办法是**用生产模式再打一个含探针页的包**：`tmp/vite.probe.config.ts` 把
+`src/renderer/probe.html` 也作为入口，同一套 Vite/React 管线、同样的压缩与 CSS 提取：
+
+```bash
+node_modules/.bin/vite build --config tmp/vite.probe.config.ts   # → tmp/dist-probe
+node tmp/built-probe-audit.mjs                                    # 起静态服务 + 手机视口实测
+```
+
+实测结果（生产构建 @430×932，chromium 档）：**dock 0.02 / 菜单 0.03 / 弹窗 0.01 /
+事件表单 0.03**，`--gs-blur` 是 16.8px ⇒ **构建产物没问题**。
+⚠️ 写这个临时配置时注意 `build.outDir` 是相对 `root`（`src/renderer`）解析的：
+`resolve(__dirname, '../../tmp/dist-probe')` 会落到 `D:/tmp/dist-probe`。
+
+
+
+两个缺陷，都与**库里那句 `getBoundingClientRect()`** 有关；都不是版本限制。
+
+
+### 0.1 整窗空白：库拿 0 去建 canvas，异常无人接住
+
+用户把折射模式切成 `Shader` 之后，桌面端从此打不开——窗口标题栏还在，里面只剩
+body 的底色。控制台里的原话：
+
+```
+Uncaught IndexSizeError: Failed to execute 'createImageData' on
+'CanvasRenderingContext2D': The source width is zero or not a number.
+The above error occurred in the <GlassContainer> component:
+    at LiquidGlass → GlassSurface → aside → Sidebar → div → App
+```
+
+链路（每一环都在源码里可查）：
+
+1. 桌面端底部 dock 由 CSS 隐藏：`.gs-layer--dock { display: none }`（手机档才 `display:block`）。
+2. 库在挂载 effect 里量自己：`glassRef.current.getBoundingClientRect()` → **全零**。
+3. `mode === 'shader'` 的 effect 用这个零去 `createImageData(0, ·)` → 抛 `IndexSizeError`。
+   另外三档（standard/polar/prominent）用的是静态贴图，量到零只是尺寸难看，不抛错——
+   **所以这个故障只在 shader 档出现**。
+4. 异常在 effect 里抛出，而应用**没有任何错误边界** → React 卸载整棵树。
+5. 设置是持久化的（`localStorage['quadrant-glass-v1']`），下次启动照旧 → 表现为"永久打不开"。
+
+修法两层：
+
+- **闸门**：`GlassSurface` 只在"这一层有布局盒"时才挂库。
+  判据用 `getClientRects().length`，而不是量尺寸是否为零 ——
+  `display:none` 没有盒子（0 个矩形），而"有盒子但恰好零尺寸"是另一回事，
+  后者给库的量是真实布局值、不会触发上面那条异常。要的是"有没有布局"，不是"有多大"。
+  同时这也让 CSS 隐藏的宿主不再在后台空跑一整套 SVG 滤镜链。
+- **错误边界**：顶层加一个（`components/ErrorBoundary.tsx`），把"任何一处渲染异常
+  = 整个窗口空白"这个放大器去掉，并在兜底界面给一个「重置外观设置并重载」的出口
+  —— 一个持久化的坏数值把应用锁死时，用户需要一条不用开 DevTools 就能走出来的路。
+
+### 0.2 镜面边比玻璃体小一圈：0.94 被量进去了
+
+用户的原话：
+
+> 「折射效果只有在菜单栏或弹窗播放动画时才有，一旦稳定背景就变透明」
+> 「稳定后描边范围比整个窗口范围小」
+
+**是同一个原因。** 库在挂载那一刻量尺寸，而那一刻入场动画正跑在祖先 `.gs-anim` 上
+带着 `scale(0.94)`；`getBoundingClientRect()` 是**把祖先 transform 算进去**的，
+于是库把尺寸永久记成 0.94 倍。库那 6 层装饰（2 层底色 + 4 层镜面边）全部按这个
+`glassSize` 画，所以稳定后镜面边缩在玻璃体里侧约 14px；而动画期间材质板也停在
+0.94，两者恰好重合 —— **动画里看着对、一稳定就不对**，两条抱怨其实是同一件事。
+
+实测（`scripts/desktop-glass-cdp.mjs`，弹窗 468×708）：
+
+| | 装饰层内联宽 | 与玻璃体比值 | 同级扫描线亮度峰值位置 |
+|---|---|---|---|
+| 修复前 | 439.92px | **0.9400** | CSS x=**420.0**（玻璃体左缘 406） |
+| 修复后 | 468px | **1.0000** | CSS x=**406.3** |
+
+修法：动画结束（`animationend`，`animationName === 'pop-in'`）时替库触发一次
+`window` 的 `resize` —— 那是库自己注册的重测入口，是公开契约而不是私有 API。
+**故意不加"别的实例正在动画就先别发"的守卫**：模型是"谁结束谁发"，每个带 in 动画的
+实例都会在自己结束时发一次，于是即便某次发的时机不巧、把另一个正在动画的实例量成
+0.94 倍，那个实例结束时会再发一次把自己纠正回来，结果自愈；加了守卫反而要判断
+"这个 running 的是不是我自己"，判错就是静默失效。
+
+`glassSize` 还只在"挂载"与"window resize"两个时刻更新，所以**内容变了不会重测**——
+本项目弹窗都是新挂载的，暂时吃不到这个亏。
+
+### 0.3 顺带量到：shader 档每次开一个玻璃层要卡 1.3 秒
+
+修好之后 shader 档不再崩，但露出了成本。打开一次「外观」弹窗（含它内部那条折射预览），
+长任务 3 个、**最长 1276ms**；同一操作在 standard 档下长任务 0 个、最长 0ms。
+`toDataURL` / `createImageData` / `putImageData` 合计只有 30ms，所以那 1.3 秒全在
+库的逐像素 JS 循环里（`updateShader`：对每个像素调一次 fragment，再
+`rawValues.push` 两次，然后第二次遍历写 ImageData）。
+
+> 注：开发模式带 `React.StrictMode`，effect 双调用会把次数翻倍；打包版约为一半。
+
+结论写在设置面板的说明里了：除非确实要 shader 那种边缘形状，不建议长期开着。
+**这一档要不要保留，留给用户决定**（它是用户点名要的选项之一）。
+
+---
+
+## 零、库的原生材质为什么一点都画不出来（本轮根因）
+
+**症状**：弹窗、菜单、dock 全都只剩一圈发丝白边，内部完全透明。
+
+**不是版本限制**（用户的第一直觉）。同一份材质往上挪两层就活。
+
+**根因**：库把材质放在 `span.glass__warp` 上，而它是**库根节点的后代**，
+根节点带着居中用的 `transform: translate(-50% + …)`。
+在 Chromium 里 **带 transform 的元素是一个 backdrop root** —— 后代的 `backdrop-filter`
+只能采到"这个根节点自己画过的东西"，而库根节点的背景是全透明的 ⇒ 材质采到一片空白。
+
+单变量实测（同一弹窗、同一位置、同一材质，只换宿主）：
+
+| 材质挂在 | Δmean vs 基准 | 判读 |
+|---|---|---|
+| `.gs-layer` / `.gs-anchor` 的子元素（祖先无 transform） | **74.87** | 活，能采到身后页面 |
+| `.gs-panel` 的子树里 | **4.53** | 只采到父级自己画的内容（≈0） |
+| `.gs-panel` 自身 | **0.00** | 死 |
+| 顶掉 transform / 关掉 warp 的 `filter` / 藏 `<svg>` / 藏 mix-blend 元素 | 0.00~0.32 | **全都救不回来** |
+
+注：元素**自己**的 transform 无害（材质挂在自身带 transform 的元素上照样活，
+T1 ≡ T2 逐位相同）—— **只有祖先带 transform 才致命**。
+
+**修法**：新增一块 `.gs-plate`（材质板），挂在锚点层、做面板的**兄弟**，
+材质由它统一提供：
+
+```css
+.gs-plate {
+  position: absolute; left: 0; top: 0;
+  width: var(--gs-panel-w); height: var(--gs-panel-h);   /* 由 JS 用 ResizeObserver 实测 */
+  margin-left: calc(var(--gs-panel-w) * -0.5);
+  margin-top:  calc(var(--gs-panel-h) * -0.5);           /* 负边距居中，不用 transform */
+  border-radius: var(--gs-radius, 32px);
+  background: var(--gs-tint);
+  backdrop-filter: blur(var(--gs-blur)) saturate(var(--gs-sat));
+  pointer-events: none;
+}
+.gs-plate.gs-refract { backdrop-filter: blur(var(--gs-blur)) var(--gs-fid) saturate(var(--gs-sat)); }
+```
+
+库继续负责它擅长的部分：SVG 位移滤镜定义、几何、镜面边、内容层。
+`.gs-panel .glass__warp` 显式 `display: none` —— 材质的所有权唯一。
+
+**三条硬规矩**（违反任一条都出过 bug）：
+
+1. **材质板是面板的兄弟，不是祖先。** 带 `backdrop-filter` 的元素同时是后代的
+   **包含块**（与 `filter` 同规则）。套在面板外面 → 面板的 `top:0/left:0` 从
+   "锚点原点"变成"材质板左上角"，整体偏半格，且形成尺寸回路。
+2. **不用 transform 居中**，用 `left/top: 0` + 负边距。
+3. **动画挂材质板自己 + `.gs-anim` 包装层，绝不挂锚点。** 锚点带 transform 时
+   材质会被抽干（弹窗会"先没有玻璃 200ms 再补上"）。`.gs-anim` 必须是 **0×0 静态盒**。
+
+**尺寸只能实测，且只能读 `ResizeObserver` 的 `borderBoxSize`**：
+`getBoundingClientRect()` 把祖先 transform 算进去，入场动画期间量到的是
+`scale(0.94)` 后的盒子（正好小 6.25%），动画结束不再更新 → 材质板永久小一圈。
+
+### 修复前后对照图（`docs/probes/liquid-glass-shots/`）
+
+| 图 | 内容 |
+|---|---|
+| `glass-material-01-dialog-mobile.png` | 手机弹窗：**真实修复前截图** vs 修复后（弹窗外 26px 环带平均差 **0.00/255**，背景逐像素相同） |
+| `glass-material-02-dialog-desktop.png` | 桌面弹窗 1.6×：材质关 vs 开（看穿过的象限分界线是否被糊掉） |
+| `glass-material-03-menu-dock.png` | 右键菜单 + 手机 dock：材质关 vs 开 |
+| `glass-material-04-tint-candidates.png` | 染色强度四候选（只改 `--gs-tint`） |
+
+---
+
+## 一、结论先行
+
+1. **桌面/Chromium 端确实渲染出了折射**，不是"看起来像磨砂"。
+   在条纹背景上做 A/B：位移强度 0 → 118 时画面均差 **23.71**、单通道最大差 **97~104**、
+   90.8% 的像素发生变化；玻璃外同一帧的负对照差异 **恰好 0**
+   （证明差异来自玻璃而非截图抖动）。
+   这个实验是在 spike 页上做的（当时它**测不出**真实弹窗的材质是空的，见第零节）；
+   现在折射链已挪到材质板上，真实宿主上的复测见 `glass-material-*` 探针。
+2. **iOS 走纯 CSS 降级档**。iOS 上所有浏览器都被强制 WebKit，
+   而本库的折射来自 `filter: url(#svg)` 叠在 `backdrop-filter` 之上 —— 只有 Chromium 这样合成。
+   上游 README 自己写着 "displacement will not be visible"。
+   降级档是同一套材质语言的无折射版本（磨砂 + 染色 + 镜面边 + 厚度）。
+3. **用户选定的参数会让折射几乎不可见**，这是重要的、必须讲清楚的取舍，见第四节。
+4. **深色主题下"近黑染色"本身也几乎隐形**，见第四节的补充。
+
+---
+
+## 二、双引擎分流
+
+| 档位 | 覆盖 | 材质 |
+|---|---|---|
+| chromium | Chromium / Edge / Android Chrome | 走库，含位移折射、色差、镜面边、弹性 |
+| fallback | iOS 全域（含 CriOS / FxiOS / EdgiOS）、macOS Safari、Firefox | 纯 CSS：`backdrop-filter` + 染色 + 蒙版渐变发丝边 + 内高光 |
+
+判引擎的顺序**必须先查 iOS 再看 Chrome 品牌串**：CriOS（iOS 上的 Chrome）品牌串里带
+"chrome/crios"，先匹品牌串会把它误判成 Chromium 档，于是 iPhone 用户拿到一个没有折射、
+且位移/色差/弹性三个滑块全部空转的界面。
+
+两档共享 `blurAmount` / `saturation` / `cornerRadius`；`displacementScale` /
+`aberrationIntensity` / `elasticity` / `mode` 只有 Chromium 会响应，设置面板据此置灰
+并标注原因（实测降级档下 3 个滑块 + 4 个模式按钮被禁用）。
+
+---
+
+## 三、接进本项目的四处硬约束
+
+库不是"传个 children 就行"的组件，它有四个隐含契约。全部由
+`components/glass/GlassSurface.tsx` + `glass.css` 吸收，调用方不必知道。
+
+### 1. `top`/`left` 是**中心点**，不是左上角
+
+根节点的 `transform` 硬编码为 `translate(calc(-50% + …), calc(-50% + …))`，
+且**无法通过 props 覆盖**（它先展开我们给的 style，再写入自己的 transform）。
+
+解法：不去对抗它，而是把几何交给一个 **0×0 的锚点**（`.gs-anchor`）。
+把锚点放在目标中心、让库取 `top:0/left:0`，两件事一起解决：
+
+- 中心点对齐不需要预先知道元件尺寸（尺寸由内容决定，渲染前拿不到）；
+- 入场动画的 `scale` 绕锚点进行，等于绕元件中心缩放。
+
+### 2. CSS 动画会盖掉内联 `transform`
+
+`animation` 对 `transform` 的声明优先于内联样式。若把 `pop-in` 加在库的根节点上，
+居中用的 `translate(-50%,-50%)` 会在 200ms 动画期间被整个顶掉 —— 面板从中心定位
+跳到左上角定位再跳回来，肉眼可见一次闪动。
+
+**注意：动画也不能挂在 `.gs-anchor` 上。** 锚点一旦带 transform 就成了 backdrop root，
+后代（包括材质板）的 `backdrop-filter` 会被抽干 —— 表现为"弹窗先出现、玻璃 200ms 后才补上"。
+现方案：动画同时挂在 `.gs-plate` 与 `.gs-anim`（面板的 0×0 静态包装层）上。
+
+### 3. 根节点是 shrink-to-fit，尺寸不能乱给
+
+根节点 `position: absolute` + `display: inline-block` ⇒ 尺寸由内容决定。
+实测：不显式设宽时根 rect === `.glass` rect（364×70）；**显式给 `width: 420` 反而
+让根 420 ≠ 玻璃体 364，按根尺寸画的边框层随之错位**。
+结论是反直觉的：**不要给宽度**，而是给内容层一个确定宽度（`--gs-content-w`）。
+
+### 4. 内容层被内联了 `font: 500 20px/1 system-ui`
+
+那是给库自己的 demo 卡片准备的，继承下来会把弹窗正文全顶成 20px。
+由 `.gs-content` 显式重置（实测 14px）。
+
+---
+
+## 四、用户选定参数与折射的冲突（本轮最重要的发现）
+
+参数：`displacementScale 118` / `blurAmount 0.4` / `saturation 140%` / `aberrationIntensity 3` /
+`elasticity 0.10` / `cornerRadius 32`。
+
+库把模糊量换算成 `blur((overLight ? 12 : 4) + blurAmount × 32)px`，
+所以 **`blurAmount: 0.4` ⇒ 实际模糊 16.8px**。模糊会把"边缘位移"赖以被看见的参照物糊掉：
+
+| 对照 | 画面均差 | 模式之间的差异 |
+|---|---|---|
+| `blurAmount = 0` | 23.71 | ~24~25 |
+| `blurAmount = 0.4`（实际 16.8px） | **2.38** | **2.3~4.5** |
+
+即：**用户指定的模糊把大约 90% 的折射强度与"四种折射模式之间的区别"抹平了。**
+四种模式在默认参数下几乎不可区分。
+
+> 第七轮复测（更直接）：把库里 `feDisplacementMap@scale` 在 0 与 200 之间改，
+> **模糊 4px 时 73.4% 的像素发生变化（Δmax 108），模糊 16.8px 时只剩 3.4~6.3%（Δmax 10~16）**
+> —— 约 1/12。所以这里的 90% 不是"折射做不出来"，而是"被模糊压住了"。
+
+处理方式不是偷偷改成"好看的数值"（那是替用户改需求），而是
+**在外观设置面板里把因果讲出来**：实时显示「实际模糊 16.8px」，
+≥12px 时给出告警并说明"想要看得见折射，把模糊量降到 0.2 以下"。
+用户仍然可以保有自己的参数选择，但不会拿到一个看起来"坏掉了"的结果。
+
+### 补充：染色在深色主题下也几乎隐形（2026-09-24 实测）
+
+材质板修好之后，真实宿主上的材质开/关像素差是
+**Δmean 4.43/255、92.3% 的像素发生变化**（桌面弹窗）—— 材质确实在画，
+但观感仍然偏"镂空"。原因是**染色是近黑 `rgba(20,23,29,0.34)`，而它叠的页面也是近黑**：
+两者几乎同色，叠加后只剩"把身后的东西压暗一点"。
+
+而 `blurAmount 0.4` ⇒ 16.8px 模糊，会把身后唯一的参照物（象限分界线）也一起糊平。
+两个因素叠加，材质就只剩"发丝边 + 略微变暗"。
+
+四个染色候选的实测对比见
+`docs/probes/liquid-glass-shots/glass-material-04-tint-candidates.png`
+（`scripts/glass-tint-candidates.mjs` 生成，只改 `--gs-tint`，其余参数不动）：
+
+| 候选 | 值 | 观感 |
+|---|---|---|
+| T0 现状 | `rgba(20,23,29,0.34)` | 填充几乎隐形，仍像镂空 |
+| T1 同色加深 | `rgba(20,23,29,0.62)` | 压暗明确，但仍是"没有色的深块" |
+| T2 冷灰提亮 | `rgba(40,46,58,0.68)` | **一眼是一块面**，背后分界线隐约可见 |
+| T3 iOS 白雾 | `linear-gradient(rgba(255,255,255,.075), …), rgba(18,20,26,.55)` | 深色材质观感，最"苹果" |
+
+**染色不是用户给的那六个参数之一**，属于实现方可以调的观感项，
+但它直接决定"像不像玻璃"，所以单列出来而不是默默选一个。
+
+---
+
+## 五、探针断言
+
+### 5.1 材质断言（`glass-material-probe.mjs` + `glass-material-judge.py`）——**结构门槛，不是磨砂门槛**
+
+> ⚠️ 第五轮更正（见第一节）：本组拍的是 **CDP 截图**，而 CDP 截图看不见 `backdrop-filter`。
+> 它量到的"材质开/关像素差"实际只来自材质板的**染色**。它可以证明
+> 「材质板挂对了位置、几何与可见面重合、定位层没被 `fixed` 截断、设置滑块真的驱动了
+> `--gs-blur`」，**但不能证明磨砂画出来了** —— 材质整体失效时它照样全绿。
+> 磨砂请跑 `glass-material-screen.{mjs,py}`。
+
+8 个真实宿主（弹窗 / 入场动画中期冻结帧 / 右键菜单 / 手机 dock / 降级档弹窗 /
+设置面板 / 折射预览条 / 事件表单），每个都拍"材质开"与"材质关"两帧并逐像素比：
+
+| 判据 | 门槛（逐通道 0~255） | 实测 |
+|---|---|---|
+| 材质可见 | Δmean ≥ 1.67 **且** 变化像素 ≥ 3%（Δmean < 0.35 判空心、< 1.67 判极弱） | 8/8 通过 |
+| 材质被模糊（不是纯色块） | 材质区梯度显著低于背景 | 8/8 通过 |
+| 材质板与可见面几何重合 | 逐边 ≤1.5px | 最大 0.3px |
+| `filter` 必须是 `none` | 元素滤镜会连文字一起位移 | 全部 none |
+| chromium 档的 `backdrop-filter` 必须含 `url(` | 折射链真的接上了 | `blur(16.8px) url("#:r2:") saturate(1.4)` |
+| 降级档必须**不含** `url(` | 同上反向 | 通过 |
+| 锚点必须 `transform: none` | 否则材质被抽干 | 7/7 通过 |
+| 滑块联动 | `--gs-blur` 改后材质板跟着改 | ✅ |
+
+逐宿主实测（2026-09-24，`glass-material-judge.py tmp/glassMaterial`）：
+
+| 宿主 | Δmean | Δmax | 变化像素 | grad 开/关 | 判读 |
+|---|---|---|---|---|---|
+| 弹窗 | 4.43 | 73 | 92.3% | 5.74 / 6.48 | ✅ 可见 · 已糊化 |
+| 弹窗·入场动画中期（冻结帧） | 2.95 | 29 | 84.6% | 5.95 / 6.41 | ✅ |
+| 右键菜单 | 7.24 | 99 | 95.2% | 9.48 / 10.88 | ✅ |
+| 手机 dock | 2.72 | 30 | **5.6%** | 9.86 / 10.19 | ✅ 但很弱 |
+| 降级档弹窗 | 9.67 | 82 | 85.7% | 4.35 / 5.17 | ✅ |
+| 设置面板 | 5.04 | 153 | 83.4% | 9.17 / 9.78 | ✅ |
+| 折射预览条 | 89.64 | 153 | 92.3% | 12.07 / 29.10 | ✅ |
+| 事件表单 | 2.75 | 38 | 63.3% | 3.87 / 4.18 | ✅ |
+
+**手机 dock 的 5.6% 要单独看**：它压在页面最底部一片近乎纯色的背景上，
+模糊没有参照物可用，只有染色在起作用 —— 数值上是"通过"，观感上最弱。
+
+### 5.2 结构断言（`liquid-glass-probe.mjs`，34 项）——只作旁证
+
+移动视口 390×844（`deviceScaleFactor: 2`，触摸）／桌面 1440×900。
+**这 34 项全绿也不能说明材质画出来了**，见文件头的警告。
+
+| 组 | 断言 | 实测 |
+|---|---|---|
+| dock 几何 | 玻璃与 `.sidebar` 逐边重合（容差 1.5px） | 两侧 366×66，偏差 x0.5 y0 w0 h0 |
+| 导航 | 5 项（4 页面 + 外观入口）／单项高 ≥44px | 5 项，56px |
+| 折射管线 | 谱变层 `filter` 引用 SVG 滤镜 | `url("#:r0:")` |
+| 字体复位 | 内容层不再是 20px | 14px |
+| 弹窗 | 玻璃水平居中／滑块与按钮数量 | 中心 x=195（视口中心 195）；6 滑块 + 7 按钮 |
+| 持久化 | 拖滑块即时写入 localStorage | `displacementScale=20` |
+| 菜单几何（手机） | 左上角 == 指针点（容差 2px） | 偏差 x0.0 y0.0；176×348 |
+| 菜单几何（手机） | 高 == 行数 × 行高 + 2×内边距 | 348 == 7×48 + 12 |
+| 菜单行高 | 手机 48px／桌面 34px | 均符合 |
+| **菜单可点性** | 点「详细信息」真的打开事件详情 | 已打开（见第六节） |
+| 层级 | 菜单 z 压过 dock | 菜单 110 > dock 100 |
+| 无障碍 | 内容层 `role="menu"` | 通过 |
+| 降级档 | 不再有 `.glass`，渲染 `.gs-fallback` | 0 个 / 1 个 |
+| 降级档 | 材质板带 `-webkit-backdrop-filter`（iOS 必需前缀） | `blur(16.8px) saturate(1.4)` |
+| 降级档 | 染色落在材质板上（`.gs-fallback` 自身不再带背景） | 通过 |
+| 降级档 | 圆角来自设置 | 32px |
+| 降级档 | dock 玻璃同样与 `.sidebar` 重合 | 366×66 |
+| 降级档 | Chromium 专属项置灰 | 3/6 滑块、4/4 模式 |
+| 目标抽屉 | 左右各留 12px／底边 = 视口底 − 12 − 导航高 | 左 12 右 378；766 = 844 − 12 − 66 |
+| 目标抽屉 | 高 = 行数 × 行高 + 2×内边距／水平居中 | 156 = 3×48 + 12；中心 195 |
+| 目标抽屉 | 菜单项可点 | 已打开目标详情 |
+| 运行时 | 无 pageerror / console error | 0 条 |
+
+---
+
+## 六、本轮修掉的一个真实回归（几何探针抓不到）
+
+**症状**：菜单看得见，但点不动。
+
+**原因**：菜单玻璃化后 `.context-menu` 这个类不再渲染，而
+`QuadrantPage` 的「点菜单外收起」守卫还在查 `target.closest('.context-menu')`。
+守卫因此**恒不命中** —— 在菜单项上按下指针也会立刻 `setMenu(null)`，
+而 `click` 要等 `pointerup` 才派发，那时元素已经卸载，`onClick` 永远收不到。
+
+**为什么之前的 24 项全绿也没发现**：那些断言只验了几何与类名存在性，
+没有任何一项去点一下菜单项并检查副作用。
+
+**修法**：守卫改判 `.gs-layer--menu`（玻璃的定位层，是菜单的 DOM 祖先，
+`closest` 沿祖先链上溯即可命中，且不受该层 `pointer-events: none` 影响）。
+并新增一组断言：**真的点一下，检查副作用**（详情弹窗是否打开、菜单是否收起）。
+
+同类陷阱还有一处：目标卡的溢出菜单 `.context-menu` 手机档带 `z-index: 110`
+（因为手机端底部 dock `.sidebar` 是 `100`）。玻璃层的 `.gs-layer--menu` 原本只有 50，
+若不补回，窄屏菜单会藏到 dock 后面 —— 看得见上两行、点不到。
+已在 `glass.css` 给手机档补上 110（高于 dock 100、低于 `.modal-mask` 120）。
+
+---
+
+## 七、一次**有意的**版式变更：手机端弹窗由「贴底抽屉」改为「居中卡片」
+
+这不是顺手改的，需要说明。
+
+原实现用 `.modal-mask { align-items: flex-end }` + `.modal { width: min(100%, 560px);
+border-radius: 22px 22px 0 0 }` 把弹窗压到屏幕底部。但**玻璃层不参与父容器的 flex 排布**：
+它是 `.gs-layer`（`position: fixed`）内的绝对定位锚点，遮罩的 `align-items` 对它没有作用。
+
+想恢复贴底不是改几行 CSS 能做到的：库的根节点 transform 硬编码
+`translate(-50%,-50%)`、`top/left` 是中心点语义，所以"底边贴屏幕底"必须先知道面板高度
+（内容决定，渲染前拿不到）—— 要么加 `ResizeObserver`（首帧会闪），
+要么引入一套抵消用的补偿变换 + 专用关键帧。
+
+取舍：收益与代价不成比例，且居中卡片天然免疫 iOS 的
+`env(safe-area-inset-bottom)` 与 dvh 那堆坑（贴底方案当年正是为此打的补丁）。
+**净效果**：手机上弹窗居中显示，高弹窗靠 `.gs-dialog-body` 限高滚动，不会溢出屏幕。
+
+### 顺带修掉的两处
+
+1. **`.modal-actions` 手机档有害**：它是为旧的 16px 弹窗内边距设计的，
+   用 `margin: 20px -16px -16px` 让按钮行向两侧出血。玻璃版内边距是 24px，
+   负外边距抵消不掉 24 —— 实测按钮行比正文宽 32px、左侧错位 16px、
+   底边只剩 8px（正文侧是 24px）。已删除；修复后标题 / 正文 / 按钮行
+   左边界与宽度全部一致（`left: 24, w: 294`），上下留白对称（均 24px）。
+2. **弹窗缺限高**：删除的 `.modal` 手机档原本带 `max-height: 86dvh; overflow-y: auto`，
+   而玻璃面板是 shrink-to-fit —— 字段多的事件表单在小屏上会直接超出视口、
+   上下两端被切掉且无法滚动。已补 `.gs-dialog-body` 限高滚动。
+
+---
+
+## 八、复现方式
+
+```bash
+# 1) 另开终端起开发服务器
+./node_modules/.bin/vite --config vite.web.config.ts --port 5199 --host 127.0.0.1 --strictPort
+
+# 2) 材质断言（8 个宿主，必须全绿）+ 评判
+node scripts/glass-material-probe.mjs --out tmp/glassMaterial
+"$PY313" scripts/glass-material-judge.py tmp/glassMaterial
+
+# 3) 结构断言（34 项，旁证）
+node scripts/liquid-glass-probe.mjs --out docs/probes/liquid-glass
+
+# 4) 视觉巡检（22 张截图）
+node scripts/glass-shots.mjs --out docs/probes/liquid-glass-shots
+
+# 5) 修复前/后对照图（读 tmp/glassCause 的存档帧 + 现场拍「修复后」）
+node scripts/glass-before-after.mjs --out tmp/glassMaterial/ba
+node scripts/glass-tint-candidates.mjs --out tmp/glassMaterial/tint
+"$PY313" scripts/glass-figs.py --out docs/probes/liquid-glass-shots
+```
+
+`$PY313` = `C:/Users/Samuel/AppData/Local/Programs/Python/Python313/python.exe`
+（系统 Python 带 PIL/numpy；沙箱自带的那个没有）。
+
+### 桌面端探针（走 CDP 接管真实 Electron 窗口）
+
+```bash
+# 1) 起桌面端并开远程调试端口（9222 常被别的 Electron host 占着，换 9333）
+unset ELECTRON_RUN_AS_NODE NODE_OPTIONS   # 见下方坑 1
+./node_modules/.bin/electron-vite dev --remoteDebuggingPort 9333
+
+# 2) 把窗口提到前台（窗口被遮挡时渲染进程 rAF 被节流，见坑 3）
+"$PY313" tmp/focus-quadrant.py
+
+# 3) 桌面端全链路断言（闸门 / 挂载 / 镜面边比值 / 异常 / 长任务）
+node scripts/desktop-glass-cdp.mjs --port 9333            # standard 档
+node scripts/desktop-glass-cdp.mjs --port 9333 --mode shader
+
+# 4) 错误边界的恢复界面（故意抛错）
+node scripts/error-boundary-check.mjs
+```
+
+这三个坑都会让探针"看起来在跑、其实量不到东西"：
+
+1. **必须先 `unset ELECTRON_RUN_AS_NODE NODE_OPTIONS`**。WorkBuddy 的沙箱会注入
+   `ELECTRON_RUN_AS_NODE=1` 与 `NODE_OPTIONS=--require=…/node-language-shim.cjs`，
+   Electron 会退化成纯 Node 进程，报
+   `TypeError: Cannot read properties of undefined (reading 'whenReady')`——
+   **这不是代码问题**，同一个命令在普通终端里是好的。
+2. **端口不要用 9222**：本机另一个 Electron host 已占用，症状是
+   `bind() returned an error … 只允许使用一次` + `Cannot start http server for devtools`。
+3. **窗口被遮挡时不要用 Playwright 的 `page.screenshot()` / `page.click()`**：
+   渲染进程 rAF 被节流，两者会一直等到超时（等 fonts / 等稳定帧）。
+   改用原生 CDP `Page.captureScreenshot` 与 `page.evaluate(() => el.click())`，
+   并先用 `tmp/focus-quadrant.py`（`FindWindowW(None, "象限")` + `ShowWindow` +
+   `SetForegroundWindow`）把窗口提到前台。
+
+> 桌面端截图是 **DPR 1.75**（1280×800 的窗口 → 2240×1400 的 PNG），
+> 按像素取样时必须先换算，否则量到的位置整片偏掉。
+
+探针复用**系统 Edge**（本机没有 ms-playwright 浏览器缓存），
+可用 `UI_PROBE_BROWSER` 覆盖。走 `/probe.html`，绕开网页端登录门禁。
+
+### 播种数据的两个坑（踩过）
+
+- **事件日期必须按「本周」动态算**，不能写死某天：日视图默认打开"今天"那一列，
+  写死别的周时画布上一个块都没有，指标看着正常、量的却是空画布。
+- **字段名必须严格贴合 `AppData`**：`WeekEvent` 用 `date` 而不是 `day`，
+  且需要 `color` / `showInQuadrant`；`WeekPreset` 需要 `remark`。
+  写错会被 `validAppData` 整体拒绝 —— 症状同样是"页面正常但一个块都没有"。
+- 象限画布是世界坐标 + 缩放，播种的卡片常落在视口外。等 `waitForSelector('.event-card')`
+  要显式给 `state: 'attached'`；派发 `contextmenu` 时带显式坐标，
+  与卡片真实位置解耦。
+
+---
+
+## 九、材质变量的唯一来源
+
+`glass.css` 的 `:root` 是材质变量的唯一定义处，消费方一律 `var()` 引用：
+
+| 变量 | 含义 |
+|---|---|
+| `--gs-radius` | 圆角（JS 内联在 `<html>` 上，来自设置） |
+| `--gs-blur` | 实际模糊像素 = `4 + blurAmount × 32` |
+| `--gs-sat` | 饱和度百分比 |
+| `--gs-tint` | 普通档染色（dock 等身后有内容要看的浮层） |
+| `--gs-tint-strong` | 加重档染色（菜单、预设抽屉等内部有可点元素的浮层） |
+| `--gs-shadow` / `--gs-shadow-strong` | 与上面两档配套的高光与投影 |
+| `--gs-menu-row` | 菜单行高（桌面 34 / 手机 48），组件用 `useMenuRowHeight()` 读回 |
+
+**移动端预设抽屉**本轮也改为引用这套变量（原来是手搓的
+`backdrop-filter: blur(24px) saturate(150%)`），否则同一块屏幕上会出现两套互不相干的
+玻璃参数 —— 用户在设置里调了模糊，抽屉不跟着变。它**刻意不上折射**：
+它是"工作面"而非瞬时浮层（卡片是 `draggable` 的，折射位移会让整块面板随指针游动），
+且它的展开/收起依赖 `grid-template-rows: 0fr → 1fr` 的高度过渡，
+需要自己是一个有真实高度的普通盒，而玻璃层根节点托不住这条过渡。
