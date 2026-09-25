@@ -48,12 +48,12 @@
   "modal": {
     "rect": {
       "x": 24,
-      "y": 425,
+      "y": 46,
       "w": 342,
       "h": 752
     },
     "cx": 195,
-    "cy": 801,
+    "cy": 422,
     "engineTag": "Chromium 全效果",
     "sliderCount": 6,
     "disabledSliders": 0,

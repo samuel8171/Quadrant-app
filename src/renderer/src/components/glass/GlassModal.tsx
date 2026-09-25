@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import GlassSurface from './GlassSurface'
 
 /*
@@ -30,6 +31,26 @@ import GlassSurface from './GlassSurface'
  * `modal` 这个类仍然挂在玻璃根节点上，让 `.modal h3` / `.modal-actions`
  * / `.modal-btn` 等一批后代选择器继续生效；它的旧壳属性由
  * `.modal.glass-host` 交还给玻璃层（见 glass.css §四）。
+ *
+ * ── 为什么要 portal 到 body：定位层的包含块必须是**视口**（2026-09-25 第十三轮）
+ *
+ * 定位层（`.gs-layer`）是 `position: absolute; inset: 0` —— 它的尺寸与原点来自
+ * **最近的定位祖先**。而弹窗是"浮在整屏之上"的东西，一旦它被渲染进某个定位容器，
+ * 那 50%/50% 就不再是屏幕中心。实测（手机档 402×874）：
+ *
+ *   外观设置弹窗挂在 `aside.sidebar` 里，而手机档的 sidebar 是
+ *   `position: fixed; bottom: …; height: 66px` 的**贴底导航条** ⇒
+ *   定位层实测 12,798 377×66（就是那条导航条本身），锚点落在 (200.5, 831)
+ *   而不是屏幕中心 (201, 437) ⇒ 面板 440→1222，**下越界 348px**，
+ *   内容的滚动条被推到屏幕外、滚不动，用户看到"下半部分全被遮住"。
+ *
+ * 所以弹窗一律 portal 到 `document.body`：
+ *   · body 与 #root 都不是定位祖先 ⇒ 包含块退化为初始包含块（文档不滚动，等价视口）；
+ *   · 与桌面板无关（桌面档 sidebar 是 static 的 flex 兄弟，本来就正确），
+ *     但把这条约束**写在组件里**，以后谁把弹窗放进任何定位容器都不会再翻车；
+ *   · 层级不受影响：遮罩 60/120 与材质板 70/130 是正 z，仍然压过手机导航条(100)；
+ *   · React 事件依旧沿**组件树**冒泡（portal 的语义），点遮罩关闭、点面板按钮
+ *     的行为与 portal 前一致。
  */
 
 interface Props {
@@ -53,7 +74,11 @@ export default function GlassModal({
   contentWidth,
   padding = '24px'
 }: Props): JSX.Element {
-  return (
+  /*
+   * 挂到 body，而不是留在调用者所在的 DOM 位置 —— 定位层的包含块必须是视口。
+   * 反例与实测数据见文件头「为什么要 portal 到 body」。
+   */
+  return createPortal(
     <GlassSurface
       center={{ top: '50%', left: '50%' }}
       contentWidth={contentWidth}
@@ -79,6 +104,7 @@ export default function GlassModal({
       }
     >
       {children}
-    </GlassSurface>
+    </GlassSurface>,
+    document.body
   )
 }

@@ -1267,6 +1267,102 @@ body {
   inset: 0;
   z-index: 60;
   background: rgba(0, 0, 0, 0.2);
+  /*
+   * 背景虚化（2026-09-25 第十三轮，按用户的 iOS 参考图加）。
+   *
+   * 虚化的是**面板以外的整片背景**，所以挂在遮罩上、而不是材质板上：
+   * 材质板只负责面板自己那块的磨砂，面板外的背景此前只有 0.20 的暗色、
+   * 页面上的网格线与卡片边仍然一条条看得清（对照 iOS 打开文件夹时整片糊掉）。
+   *
+   * 层级上安全的前提是**遮罩是定位层内的兄弟、不是材质板的祖先**（见 GlassModal）：
+   * 带 backdrop-filter 的元素会成为其后代的 backdrop root，而材质板不在它的子树里，
+   * 所以面板自己的材质不受影响（实测保留率与虚化前同量级，见 docs/probes）。
+   *
+   * 半径由 `--gs-mask-blur` 给（glass.css 的变量总表），默认 20px：
+   * 比面板自己的 `--gs-blur`（16.8px）略大，页面上的文字到这一步已不可辨认。
+   *
+   * ⚠️ 下一条 mask 会把**面板所占的那一块挖空**，所以"面板采到的背景被预先糊了一道"
+   * 这件事只发生在没有洞的时候 —— 现在虚化与染色只作用于四周。见下面那条注释。
+   */
+  backdrop-filter: blur(var(--gs-mask-blur, 20px));
+  -webkit-backdrop-filter: blur(var(--gs-mask-blur, 20px));
+  /*
+   * ── 挖掉面板所占的那一块（2026-09-26 第十四轮）
+   *
+   * 上一条把遮罩铺满整屏并虚化它 —— 但**面板正后面也被糊了一道、还压暗了 20%**。
+   * 材质板的本职是"透过面板看背景"，中间隔着遮罩就等于给玻璃加了一层深色滤镜：
+   * 对比度掉、亮度掉，折射也没东西可搬（位移要背景有高频细节）。
+   * 实测（面板内同一片条纹、把材质板自己的材质关掉）：
+   *
+   *   遮罩铺满整屏   面板内 std 2.2（已被遮罩糊平）
+   *   遮罩挖了洞     面板内 std 95.3（原样页面）
+   *
+   * 所以用 mask 在遮罩上挖一个**与面板等大小、等圆角**的洞：虚化与染色只留在四周，
+   * 面板自己的背景回到原样页面（只经过材质板一次）。这是"增强光线透射"的直接做法，
+   * 也是物理上更对的一种：遮罩是幕布，玻璃该透的是幕布后面的东西，不是幕布。
+   *
+   * 洞 = 圆角矩形，用「十字两条带 + 四个角上的挖去四分之一圆的方块」拼出来，
+   * **八层全部 add**：两条带各自贴到视口边，四个角块用 radial-gradient 把朝向面板
+   * 那一角挖出半径 R 的圆。刻意不用 `mask-composite: subtract` 去"减"一个圆角矩形 ——
+   * Safari 对 mask-composite 的支持面更窄，八层 add 在所有目标引擎上都成立；
+   * 引擎不支持 mask 时整条声明被丢弃 ⇒ 遮罩退化成"铺满整屏"，与加这条之前一模一样（安全降级）。
+   *
+   * 几何全部读 `.gs-layer` 上的 `--gs-panel-w/h` 与 `--gs-cx/--gs-cy`（GlassSurface 写入），
+   * 所以洞永远跟着面板走，含将来非居中的浮层。`--gs-hole-*` 只是本地别名，别在别处用。
+   */
+  --gs-hole-w: var(--gs-panel-w, 0px);
+  --gs-hole-h: var(--gs-panel-h, 0px);
+  --gs-hole-r: var(--gs-radius, 32px);
+  --gs-hole-cx: var(--gs-cx, 50%);
+  --gs-hole-cy: var(--gs-cy, 50%);
+  -webkit-mask-image:
+    linear-gradient(#000 0 0),
+    linear-gradient(#000 0 0),
+    linear-gradient(#000 0 0),
+    linear-gradient(#000 0 0),
+    radial-gradient(circle at 100% 100%, transparent var(--gs-hole-r), #000 var(--gs-hole-r)),
+    radial-gradient(circle at 0% 100%, transparent var(--gs-hole-r), #000 var(--gs-hole-r)),
+    radial-gradient(circle at 100% 0%, transparent var(--gs-hole-r), #000 var(--gs-hole-r)),
+    radial-gradient(circle at 0% 0%, transparent var(--gs-hole-r), #000 var(--gs-hole-r));
+  -webkit-mask-size:
+    /* ① 上带 */ 100% calc(var(--gs-hole-cy) - var(--gs-hole-h) / 2),
+    /* ② 下带 */ 100% calc(100% - var(--gs-hole-cy) - var(--gs-hole-h) / 2),
+    /* ③ 左带 */ calc(var(--gs-hole-cx) - var(--gs-hole-w) / 2) 100%,
+    /* ④ 右带 */ calc(100% - var(--gs-hole-cx) - var(--gs-hole-w) / 2) 100%,
+    /* ⑤ 左上角块 */ calc(var(--gs-hole-cx) - var(--gs-hole-w) / 2 + var(--gs-hole-r))
+      calc(var(--gs-hole-cy) - var(--gs-hole-h) / 2 + var(--gs-hole-r)),
+    /* ⑥ 右上角块 */ calc(100% - var(--gs-hole-cx) - var(--gs-hole-w) / 2 + var(--gs-hole-r))
+      calc(var(--gs-hole-cy) - var(--gs-hole-h) / 2 + var(--gs-hole-r)),
+    /* ⑦ 左下角块 */ calc(var(--gs-hole-cx) - var(--gs-hole-w) / 2 + var(--gs-hole-r))
+      calc(100% - var(--gs-hole-cy) - var(--gs-hole-h) / 2 + var(--gs-hole-r)),
+    /* ⑧ 右下角块 */ calc(100% - var(--gs-hole-cx) - var(--gs-hole-w) / 2 + var(--gs-hole-r))
+      calc(100% - var(--gs-hole-cy) - var(--gs-hole-h) / 2 + var(--gs-hole-r));
+  -webkit-mask-position: 0 0, 0 100%, 0 0, 100% 0, 0 0, 100% 0, 0 100%, 100% 100%;
+  -webkit-mask-repeat: no-repeat;
+  mask-image:
+    linear-gradient(#000 0 0),
+    linear-gradient(#000 0 0),
+    linear-gradient(#000 0 0),
+    linear-gradient(#000 0 0),
+    radial-gradient(circle at 100% 100%, transparent var(--gs-hole-r), #000 var(--gs-hole-r)),
+    radial-gradient(circle at 0% 100%, transparent var(--gs-hole-r), #000 var(--gs-hole-r)),
+    radial-gradient(circle at 100% 0%, transparent var(--gs-hole-r), #000 var(--gs-hole-r)),
+    radial-gradient(circle at 0% 0%, transparent var(--gs-hole-r), #000 var(--gs-hole-r));
+  mask-size:
+    100% calc(var(--gs-hole-cy) - var(--gs-hole-h) / 2),
+    100% calc(100% - var(--gs-hole-cy) - var(--gs-hole-h) / 2),
+    calc(var(--gs-hole-cx) - var(--gs-hole-w) / 2) 100%,
+    calc(100% - var(--gs-hole-cx) - var(--gs-hole-w) / 2) 100%,
+    calc(var(--gs-hole-cx) - var(--gs-hole-w) / 2 + var(--gs-hole-r))
+      calc(var(--gs-hole-cy) - var(--gs-hole-h) / 2 + var(--gs-hole-r)),
+    calc(100% - var(--gs-hole-cx) - var(--gs-hole-w) / 2 + var(--gs-hole-r))
+      calc(var(--gs-hole-cy) - var(--gs-hole-h) / 2 + var(--gs-hole-r)),
+    calc(var(--gs-hole-cx) - var(--gs-hole-w) / 2 + var(--gs-hole-r))
+      calc(100% - var(--gs-hole-cy) - var(--gs-hole-h) / 2 + var(--gs-hole-r)),
+    calc(100% - var(--gs-hole-cx) - var(--gs-hole-w) / 2 + var(--gs-hole-r))
+      calc(100% - var(--gs-hole-cy) - var(--gs-hole-h) / 2 + var(--gs-hole-r));
+  mask-position: 0 0, 0 100%, 0 0, 100% 0, 0 0, 100% 0, 0 100%, 100% 100%;
+  mask-repeat: no-repeat;
   pointer-events: auto;
   display: flex;
   align-items: center;

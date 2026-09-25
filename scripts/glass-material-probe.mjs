@@ -252,9 +252,28 @@ const browser = await chromium.launch({ executablePath, headless: true })
   const midInfo = await page.evaluate(SAMPLE, '.gs-layer--dialog .gs-plate')
   console.log(`    动画冻结后 plate.transform=${midInfo.plateTransform}`)
 
+  /*
+   * 遮罩不虚化时的同一块材质板 —— 这一组才是"材质有输出"的正证据。
+   *
+   * 2026-09-25 第十三轮起 `.modal-mask` 带上了 `backdrop-filter: blur(20px)`
+   * （面板以外的整片背景要虚化，见 theme.css 的 `.modal-mask`）。于是材质板采到的
+   * 背景**先被糊过一道**：A1/A3 那两行的 Δmean 主要来自染色、grad 几乎不变
+   * （实测 3.74 vs 3.72），只能证明"没空心"，证明不了"真的在糊"。
+   * 把遮罩虚化临时关掉、让材质板面对锐利背景，它就该表现出明显的 Δmean 与
+   * grad 下降 —— 这一行不随"背景被预先糊过"漂移，可以长期当门槛用。
+   */
+  const sharpOn = await shoot(page, 'A5-dialog-sharp-on', ':root{--gs-mask-blur:0px}')
+  const sharpOff = await shoot(page, 'A6-dialog-sharp-off', `:root{--gs-mask-blur:0px}${MATERIAL_OFF}`)
+
   cases.push(
     { name: on, ref: off, box: info.plate, label: '弹窗 · 材质开 vs 关' },
-    { name: midOn, ref: midOff, box: info.plate, label: '弹窗 · 入场动画中期（冻结）' }
+    { name: midOn, ref: midOff, box: info.plate, label: '弹窗 · 入场动画中期（冻结）' },
+    {
+      name: sharpOn,
+      ref: sharpOff,
+      box: info.plate,
+      label: '弹窗 · 遮罩不虚化（材质自身贡献）'
+    }
   )
   notes.push(
     `弹窗几何：plate ${JSON.stringify(info.plate)} / face ${JSON.stringify(info.face)} / root ${JSON.stringify(info.rootBox)}`
