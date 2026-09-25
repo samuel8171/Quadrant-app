@@ -1,6 +1,7 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App'
+import ErrorBoundary from './components/ErrorBoundary'
 import './styles/theme.css'
 
 /*
@@ -21,6 +22,13 @@ if (isStandalone) {
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <App />
+    {/*
+      顶层错误边界。此前没有它，任何一处渲染期异常都会让 React 卸载整棵树、
+      窗口只剩底色——「桌面端打开无画面」有一半是它放大的（另一半见
+      components/glass/GlassSurface.tsx 的 ④）。
+    */}
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
   </React.StrictMode>
 )

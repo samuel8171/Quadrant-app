@@ -1,0 +1,177 @@
+{
+  "results": [
+    {
+      "name": "dock 玻璃与 .sidebar 逐边重合（容差 1.5px）",
+      "pass": true,
+      "detail": "侧栏 366×66 @(12,768)　玻璃 366×66 @(11.5,768)　偏差 x0.5 y0 w0 h0"
+    },
+    {
+      "name": "导航为 5 项（4 个页面 + 外观入口）",
+      "pass": true,
+      "detail": "实际 5 项，列宽模板 68.1875px 68.2031px 68.2031px 68.2031px 68.1875px"
+    },
+    {
+      "name": "单个导航项高度 ≥ 44px（iOS 触摸下限）",
+      "pass": true,
+      "detail": "实测 56px"
+    },
+    {
+      "name": "谱变层 computed filter 引用 SVG 滤镜",
+      "pass": true,
+      "detail": "url(\"#:r0:\")"
+    },
+    {
+      "name": "内容层 font 已重置（不再是库内联的 20px）",
+      "pass": true,
+      "detail": "14px / 20.3px \"Segoe UI\", \"Microsoft YaHei\", system-ui, sans-serif"
+    },
+    {
+      "name": "弹窗玻璃水平居中于视口",
+      "pass": true,
+      "detail": "中心 x=195，视口中心 195"
+    },
+    {
+      "name": "设置面板含 6 个滑块 + 7 个模式/引擎按钮",
+      "pass": true,
+      "detail": "滑块 6，按钮 7"
+    },
+    {
+      "name": "折射预览条内嵌了一块玻璃",
+      "pass": true,
+      "detail": "已渲染"
+    },
+    {
+      "name": "拖动滑块即时写入持久化存储",
+      "pass": true,
+      "detail": "displacementScale=20"
+    },
+    {
+      "name": "菜单玻璃左上角落在指针点上（容差 2px）",
+      "pass": true,
+      "detail": "偏差 x0.0 y0.0"
+    },
+    {
+      "name": "菜单玻璃高度 = 行数 × 实测行高 + 2 × 内边距",
+      "pass": true,
+      "detail": "实测 348，推算 348（7 行 × 48px + 12）"
+    },
+    {
+      "name": "手机端菜单行高为 48px（触摸目标）",
+      "pass": true,
+      "detail": "实测 48px"
+    },
+    {
+      "name": "事件菜单行数 ≥ 5",
+      "pass": true,
+      "detail": "7 行（剪切/复制/粘贴/添加照片/删除/保存/详细信息）"
+    },
+    {
+      "name": "降级引擎下不再渲染库的 .glass",
+      "pass": true,
+      "detail": "仍有 0 个 .glass"
+    },
+    {
+      "name": "降级引擎渲染了 .gs-fallback",
+      "pass": true,
+      "detail": "1 个"
+    },
+    {
+      "name": "降级材质带 -webkit-backdrop-filter（iOS 必需前缀）",
+      "pass": true,
+      "detail": "blur(16.8px) saturate(1.4)"
+    },
+    {
+      "name": "降级档染色压在材质板上（降级面无自己的底色，避免叠两层）",
+      "pass": true,
+      "detail": "plate=rgba(26, 29, 35, 0.62) fallback=none"
+    },
+    {
+      "name": "降级玻璃圆角来自设置（32px）",
+      "pass": true,
+      "detail": "32px"
+    },
+    {
+      "name": "降级档 dock 玻璃同样与 .sidebar 重合",
+      "pass": true,
+      "detail": "侧栏 366×66　降级玻璃 366×66"
+    },
+    {
+      "name": "降级引擎下 Chromium 专属滑块被置灰",
+      "pass": true,
+      "detail": "3/6 个滑块禁用（应为位移强度、色差、弹性 3 个）"
+    },
+    {
+      "name": "降级引擎下折射模式选项被置灰",
+      "pass": true,
+      "detail": "4/4"
+    },
+    {
+      "name": "桌面端 dock 玻璃层已隐藏",
+      "pass": true,
+      "detail": "display=none"
+    },
+    {
+      "name": "桌面端菜单行高为 34px",
+      "pass": true,
+      "detail": "实测 34px"
+    },
+    {
+      "name": "桌面端菜单左上角同样落在指针点上",
+      "pass": true,
+      "detail": "偏差 x0.0 y0.0"
+    },
+    {
+      "name": "手机端菜单层级压过底部 dock（否则被 dock 盖住点不到）",
+      "pass": true,
+      "detail": "材质板 z=110，dock 所在层 z=100，定位层 z=auto（必须是 auto：非 auto 会让材质采不到背景）"
+    },
+    {
+      "name": "菜单内容层带 role=\"menu\"",
+      "pass": true,
+      "detail": "role=menu"
+    },
+    {
+      "name": "点击菜单项确实触发了动作（事件详情弹窗打开）",
+      "pass": true,
+      "detail": "已打开事件详情"
+    },
+    {
+      "name": "点击后菜单自身收起",
+      "pass": true,
+      "detail": "已卸载"
+    },
+    {
+      "name": "抽屉与视口左右各留 12px",
+      "pass": true,
+      "detail": "左 12（应 12）右 378（应 378）"
+    },
+    {
+      "name": "抽屉底边 = 视口底 − 12 − 导航条高",
+      "pass": true,
+      "detail": "实测 766，应 766（视口 844 − 12 − 66）"
+    },
+    {
+      "name": "抽屉高 = 行数 × 行高 + 2 × 内边距",
+      "pass": true,
+      "detail": "实测 156，推算 156"
+    },
+    {
+      "name": "抽屉水平居中于视口",
+      "pass": true,
+      "detail": "中心 x=195"
+    },
+    {
+      "name": "目标抽屉菜单项可点（目标详情弹窗打开）",
+      "pass": true,
+      "detail": "已打开目标详情"
+    },
+    {
+      "name": "运行时无错误",
+      "pass": true,
+      "detail": "0 条"
+    }
+  ],
+  "allErrors": [],
+  "passed": 34,
+  "total": 34
+}

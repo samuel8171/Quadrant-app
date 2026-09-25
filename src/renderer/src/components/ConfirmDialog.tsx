@@ -1,4 +1,5 @@
 import { useClosing } from '../hooks/useClosing'
+import GlassModal from './glass/GlassModal'
 
 interface Props {
   message: string
@@ -13,29 +14,30 @@ interface Props {
 export default function ConfirmDialog({ message, detail, warning, onConfirm, onCancel }: Props): JSX.Element {
   const { closing, close } = useClosing(onCancel)
   return (
-    <div className={`modal-mask${closing ? ' closing' : ''}`} onClick={close}>
-      <div
-        className={`modal confirm-modal${closing ? ' closing' : ''}`}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <h3>确认操作</h3>
-        <p className="confirm-message">{message}</p>
-        {detail && <div className={`confirm-detail${warning ? ' warning' : ''}`}>{detail}</div>}
-        <div className="modal-actions">
-          <button className="modal-btn" autoFocus onClick={close}>
-            取消
-          </button>
-          <button
-            className="modal-btn primary"
-            onClick={() => {
-              onConfirm()
-              close()
-            }}
-          >
-            确认
-          </button>
-        </div>
+    <GlassModal
+      closing={closing}
+      onMaskClick={close}
+      className="confirm-modal"
+      /* 原 `.confirm-modal` 的外宽是 360px，玻璃版内边距 24px，故内容宽 312px */
+      contentWidth="min(312px, calc(100vw - 96px))"
+    >
+      <h3>确认操作</h3>
+      <p className="confirm-message">{message}</p>
+      {detail && <div className={`confirm-detail${warning ? ' warning' : ''}`}>{detail}</div>}
+      <div className="modal-actions">
+        <button className="modal-btn" autoFocus onClick={close}>
+          取消
+        </button>
+        <button
+          className="modal-btn primary"
+          onClick={() => {
+            onConfirm()
+            close()
+          }}
+        >
+          确认
+        </button>
       </div>
-    </div>
+    </GlassModal>
   )
 }

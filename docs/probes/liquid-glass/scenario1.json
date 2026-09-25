@@ -1,0 +1,80 @@
+{
+  "m": {
+    "viewport": {
+      "w": 390,
+      "h": 844
+    },
+    "glassCount": 1,
+    "fallbackCount": 0,
+    "warpFilter": "url(\"#:r0:\")",
+    "dockDisplay": "block",
+    "sidebarRect": {
+      "x": 12,
+      "y": 768,
+      "w": 366,
+      "h": 66,
+      "cx": 195,
+      "cy": 801
+    },
+    "dockGlassRect": {
+      "x": 11.5,
+      "y": 768,
+      "w": 366,
+      "h": 66,
+      "cx": 194.5,
+      "cy": 801
+    },
+    "dockPlateRect": {
+      "x": 19.5,
+      "y": 773,
+      "w": 350,
+      "h": 56,
+      "cx": 194.5,
+      "cy": 801
+    },
+    "navItemCount": 5,
+    "navColumns": "68.1875px 68.2031px 68.2031px 68.2031px 68.1875px",
+    "navItemRect": {
+      "x": 20,
+      "y": 773,
+      "w": 68.2,
+      "h": 56,
+      "cx": 54.1,
+      "cy": 801
+    },
+    "firstContentFont": "14px / 20.3px \"Segoe UI\", \"Microsoft YaHei\", system-ui, sans-serif",
+    "firstContentWidth": 350
+  },
+  "modal": {
+    "rect": {
+      "x": 24,
+      "y": 425,
+      "w": 342,
+      "h": 752
+    },
+    "cx": 195,
+    "cy": 801,
+    "engineTag": "Chromium 全效果",
+    "sliderCount": 6,
+    "disabledSliders": 0,
+    "modeButtons": 7,
+    "effective": "实际模糊 16.8px：已足够糊掉边缘位移。想要看得见折射，把「模糊量」降到 0.2 以下 （实测 0.4 时折射差异只剩约 1/10）。",
+    "previewGlass": true,
+    "filter": "url(\"#:r1:\")"
+  },
+  "afterDrag": {
+    "stored": "{\"mode\":\"standard\",\"displacementScale\":20,\"blurAmount\":0.4,\"saturation\":140,\"aberrationIntensity\":3,\"elasticity\":0.1,\"cornerRadius\":32,\"forceEngine\":\"auto\"}",
+    "filter": "url(\"#:r0:\")"
+  },
+  "menuReport": {
+    "clickX": 120,
+    "clickY": 300,
+    "left": 120,
+    "top": 300,
+    "w": 176,
+    "h": 348,
+    "rows": 7,
+    "rowH": "48px"
+  },
+  "errors": []
+}

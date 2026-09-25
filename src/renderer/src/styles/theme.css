@@ -15,6 +15,19 @@
   --mobile-nav-height: 78px;
 
   /*
+   * 右键菜单行高。**这是唯一的定义处**，各断点各给一次（见下文的移动端块）。
+   *
+   * 为什么不能只写在 CSS、还要让组件读它：玻璃体的位置由
+   * 「行数 × 行高 + 内边距」推出中心点（库的 top/left 是中心点语义，
+   * 而尺寸由内容决定，渲染前拿不到）。行高若与组件侧不一致，
+   * 菜单整体就会偏移——实测漏掉移动端的 48px 那次，菜单顶部偏了 49px。
+   *
+   * 也不要反过来在 TS 里写常量：`min-height` 大于 `height` 时会胜出，
+   * 移动端为了触摸目标另行放大过，写死一定对不上。
+   */
+  --gs-menu-row: 34px;
+
+  /*
    * 顶部安全区（状态栏 / 灵动岛）。
    *
    * 为什么必须有：viewport-fit=cover 让内容延伸到状态栏下方（这是 iOS
@@ -655,9 +668,13 @@ body {
   font-size: 14px;
 }
 
-.confirm-modal {
-  width: 360px;
-}
+/*
+ * 确认类弹窗的外宽（原为 360px）已改为组件侧的 `contentWidth`
+ * （ConfirmDialog / AlertDialog / LeaveConfirmDialog 传 312px = 360 − 2×24 内边距）。
+ * 宽度不能再由 CSS 决定：玻璃根节点是绝对定位的 shrink-to-fit，
+ * 尺寸完全由内容宽度推出，CSS 再写一个 width 会与玻璃体错开。
+ * `.confirm-modal` 类本身保留在玻璃根节点上，供将来挂样式。
+ */
 
 .confirm-message {
   margin: 0 0 4px;
@@ -1171,23 +1188,26 @@ body {
   }
 }
 
-.context-menu {
-  position: fixed;
-  z-index: 50;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  padding: 4px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
-  min-width: 140px;
-}
+/*
+ * 右键菜单的外壳（背景 / 描边 / 圆角 / 内边距 / 投影 / 定位 / 入场动画）
+ * 已全部交给液态玻璃层，见 components/glass/glass.css。
+ * 这里只留菜单项的排版——`.context-item` 同时被
+ * 四象限画布的菜单与日视图的菜单复用。
+ */
 
 .context-item {
   display: flex;
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 8px 10px;
+  /*
+   * 行高必须**确定**：玻璃体的位置由「行数 × 行高 + 内边距」算出中心点，
+   * 算错一行就会与玻璃错位（库的 top/left 是中心点语义，而且尺寸由内容决定，
+   * 渲染前拿不到）。行高从组件经 --gs-menu-row 下发，保持单一来源——
+   * 不要在这里写死一个 34px，那就是同一个数字的第二份定义。
+   */
+  height: var(--gs-menu-row, 34px);
+  padding: 0 10px;
   border: none;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -1218,11 +1238,36 @@ body {
   cursor: default;
 }
 
+/*
+ * 弹窗遮罩。
+ *
+ * **浓度 0.55 → 0.20（2026-09-25 实测定的）**：玻璃弹窗的材质板采到的是
+ * 「遮罩 × 页面」，所以遮罩浓度**直接决定弹窗看起来有多亮**。同一组条纹、同一块材质板：
+ *
+ *   遮罩 0.55 → 板内亮度 45.1     遮罩 0.35 → 61.7
+ *   遮罩 0.20 → 74.4  ★ 菜单同口径是 76.2     遮罩 0.10 → 82.5
+ *
+ * 0.20 是"弹窗与菜单栏观感一致"的那一档（用户诉求）。代价是周围页面只被压暗 20%，
+ * 聚焦感变弱 —— 这是有意的：**与菜单一致**就意味着一层薄纱，而不是厚幕。
+ * 弹窗自身文字的可读性由材质板的染色（`--gs-tint`）保证，与菜单同一套。
+ *
+ * 另：玻璃弹窗的遮罩现在是画在**玻璃层内部**（GlassModal 的 `layerPrefix`），
+ * 不再是材质板的祖先。结构改对之后，浓度**只影响亮度、不再影响糊不糊**
+ * （遮罩 0.55/0.35/0.20/0.10 四档的保留率都是 0.02）。原因见 GlassModal 顶部注释。
+ * 也正因为它在 `pointer-events: none` 的定位层里，这里必须显式把指针事件打开
+ * ——否则"点遮罩关闭"会失效（事件会穿透到下面的页面）。
+ *
+ * ⚠️ 这个类还有第二个使用者：**周视图的「事件表单」弹窗**（`EventFormDialog`，老壳、
+ * 面板自带不透明底色，不在玻璃层里）。它跟着一起变亮了 —— 面板本身不透明，可读性没问题，
+ * 但"周围压暗"这一层比过去弱。若哪天要给非玻璃弹窗更重的幕，别再动这一个类，
+ * 加一个修饰类（如 `.modal-mask.strong`）单独覆盖。
+ */
 .modal-mask {
   position: fixed;
   inset: 0;
   z-index: 60;
-  background: rgba(0, 0, 0, 0.55);
+  background: rgba(0, 0, 0, 0.2);
+  pointer-events: auto;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2492,14 +2537,6 @@ body {
   animation: pop-out 0.16s ease-in forwards;
 }
 
-.context-menu {
-  animation: pop-in 0.16s cubic-bezier(0.2, 0.9, 0.3, 1.15);
-}
-
-.context-menu.closing {
-  animation: pop-out 0.14s ease-in forwards;
-}
-
 @keyframes fade-in {
   from {
     opacity: 0;
@@ -2680,11 +2717,18 @@ body {
      * 给内容区省 20px；但 58 减去内边距 6×2 与边框 1×2 后内容高只剩 44px，
      * 而「图标 20 + 间距 3 + 文字 11」实需 34px，上下仅余 5px，视觉上很局促。
      *
-     * 定 66px：内容高 = 66 − 5×2(内边距) − 1×2(边框) = 54px，
-     * 图标+文字 34px 居中后上下各留 10px 呼吸；单个入口高 54px，
+     * 定 66px：内容高 = 66 − 5×2(内边距) = 56px（描边已随玻璃化移除，原为 54），
+     * 图标+文字 34px 居中后上下各留 11px 呼吸；单个入口高 56px，
      * 远高于 44px 触摸下限。代价是内容区少 8px。
      */
     --mobile-nav-height: 66px;
+
+    /*
+     * 菜单行高在手机端放大到 48px（触摸目标）。
+     * 组件侧的 useMenuRowHeight 会把这个值读回去算玻璃中心点，
+     * 所以这里改了行高，菜单定位也跟着走，不需要去改 TS。
+     */
+    --gs-menu-row: 48px;
   }
 
   body {
@@ -2722,13 +2766,22 @@ body {
     /* 内边距收到 5px，把省下的 2px 让给内容（见 --mobile-nav-height 的推导）。 */
     padding: 5px 8px;
     display: block;
-    background: rgba(31, 34, 40, 0.78);
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    /* 圆角随高度同步：22 是配 58px 的，抬到 66px 后保持胶囊感需要 24。 */
-    border-radius: 24px;
-    box-shadow: 0 12px 36px rgba(0, 0, 0, 0.42), inset 0 1px 0 rgba(255,255,255,0.1);
-    backdrop-filter: blur(24px) saturate(150%);
-    -webkit-backdrop-filter: blur(24px) saturate(150%);
+    /*
+     * ---------- 材质已交给液态玻璃 ----------
+     *
+     * 原来的实色底（0.78）+ 24px 模糊 + 描边 + 投影全部移除：这些由
+     * components/glass 的玻璃层接管。而且**必须**移除——留着的话玻璃之上
+     * 会再压一层 0.78 不透明的底，折射与被模糊的内容全被盖住，观感与
+     * 改造前几乎一样，那层滤镜就是白付的开销。
+     *
+     * 这里只留几何：位置、尺寸、内边距。
+     * 描边一并去掉，因此内容盒高度由 54 变成 56，
+     * 与 glass.css 里 `.gs-dock-plate` 的 56px 严格对应，改一处必须改另一处。
+     *
+     * 圆角仍需保留：玻璃层的圆角由外观设置驱动（--gs-radius），
+     * 这条让 .sidebar 自身跟着走，指示块再用 calc 减一圈。
+     */
+    border-radius: var(--gs-radius, 32px);
   }
 
   .brand,
@@ -2746,14 +2799,19 @@ body {
   .nav {
     height: 100%;
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    /* 五列：四个页面 + 一个外观设置入口。见 Sidebar.tsx 的说明 */
+    grid-template-columns: repeat(5, minmax(0, 1fr));
     gap: 2px;
   }
 
   /*
    * 底部栏沿用与左侧栏**同一个**指示块和同一条 transition，只是把滑动轴从纵向
    * 换成横向。translateX 里的百分比相对元素自身宽度，所以「自身宽 + gap」正好
-   * 等于 grid 一格的步长，4 列等分时不需要知道任何像素值。
+   * 等于 grid 一格的步长，等分时不需要知道任何像素值——换列数只需改这里的分母。
+   * 五列时 4 个间隙共 8px。
+   *
+   * --nav-index 只由页面项给出（0~3），因此指示块永远不会滑到第五格
+   * （外观设置入口那一格）。
    */
   .nav-indicator {
     display: block;
@@ -2761,9 +2819,12 @@ body {
     top: 0;
     bottom: 0;
     height: auto;
-    width: calc((100% - 6px) / 4);
-    /* 与容器圆角同步：容器 24px 减去内边距 5px ≈ 19px，取 21px 让内层更柔和。 */
-    border-radius: 21px;
+    width: calc((100% - 8px) / 5);
+    /*
+     * 与容器圆角同步。容器圆角由外观设置驱动（--gs-radius），内层比外层
+     * 小一圈才贴合；减 11px 使默认设置（32px）下正好得到原来的 21px。
+     */
+    border-radius: calc(var(--gs-radius, 32px) - 11px);
     background: rgba(77, 163, 255, 0.18);
     background-image: none;
     border: 1px solid rgba(77, 163, 255, 0.55);
@@ -3107,7 +3168,22 @@ body {
    * 预设面板在手机上改为「底部悬浮抽屉」：脱离 .day-body 的纵向流（否则它会
    * 把时间轴挤到只剩 135px，见 docs/probes/mobile-density.md），默认只露一条
    * 46px 把手，展开时以半透明浮层**盖**在时间轴上而不是挤压它。
-   * 与 .modal / .context-menu 同一套视觉规则，保持一致。
+   *
+   * 材质读外观设置的三个变量，**不自己写死一份**。理由有两条：
+   * ① 同一块屏幕上不该出现两套互不相干的玻璃参数——用户在设置面板里调了模糊/
+   *    饱和度，这个抽屉必须跟着变，否则「设置」只对一半的浮层生效；
+   * ② 它本来就是手搓的 `blur(24px) saturate(150%)`，改成引用变量后这两条硬编码
+   *    消失，`--gs-blur` / `--gs-sat` 回到「唯一的定义处」。
+   *
+   * 染色取「加重档」（--gs-tint-strong）：抽屉里有可点击的预设卡片，
+   * 底太透会让卡片边缘糊在时间轴上，判定不了点到哪儿。
+   *
+   * **此处刻意不上折射**，与弹窗/菜单的处置不同。它不是瞬时浮层而是
+   * 一块「工作面」：卡片是 draggable 的，拖动时折射位移会让整块面板随指针游动；
+   * 且它的展开/收起靠 `.preset-collapse` 的 `grid-template-rows: 0fr → 1fr`
+   * 过渡，需要自己是一个有真实高度的普通盒——玻璃层的根节点是
+   * `position:absolute` 的 shrink-to-fit，托不住这条高度过渡。
+   * 代价是 Android Chrome 上它是纯 CSS 材质，与桌面端时间轴的口径一致。
    */
   .preset-panel {
     position: fixed;
@@ -3119,11 +3195,15 @@ body {
     min-width: 0;
     max-height: min(300px, 46dvh);
     padding: 0;
-    border-radius: 20px;
-    background: rgba(31, 34, 40, 0.92);
-    box-shadow: 0 12px 36px rgba(0, 0, 0, 0.42), inset 0 1px 0 rgba(255, 255, 255, 0.1);
-    backdrop-filter: blur(24px) saturate(150%);
-    -webkit-backdrop-filter: blur(24px) saturate(150%);
+    border-radius: var(--gs-radius, 32px);
+    background: var(--gs-tint-strong, rgba(31, 34, 40, 0.9));
+    box-shadow: var(
+      --gs-shadow-strong,
+      0 12px 36px rgba(0, 0, 0, 0.42),
+      inset 0 1px 0 rgba(255, 255, 255, 0.1)
+    );
+    backdrop-filter: blur(var(--gs-blur, 16.8px)) saturate(var(--gs-sat, 140%));
+    -webkit-backdrop-filter: blur(var(--gs-blur, 16.8px)) saturate(var(--gs-sat, 140%));
     overflow: hidden;
   }
 
@@ -3387,22 +3467,22 @@ body {
   /* 行内不再需要竖向压缩，沿用移动端 44px 触摸目标（原 30px 覆盖已移除）。 */
   .review-textarea { flex: 1; min-height: 0; max-height: none; }
 
-  .context-menu {
-    left: 12px !important;
-    right: 12px;
-    bottom: calc(12px + var(--mobile-nav-height) + env(safe-area-inset-bottom));
-    top: auto !important;
-    z-index: 110;
-    min-width: 0;
-    padding: 8px;
-    border-radius: 20px;
-    background: rgba(31, 34, 40, 0.94);
-    backdrop-filter: blur(24px) saturate(150%);
-    -webkit-backdrop-filter: blur(24px) saturate(150%);
-  }
+  /*
+   * `.context-menu` 的定位与材质块**已整体删除**：三处菜单（四象限画布、
+   * 日视图、目标卡溢出）现在都走玻璃层，定位与背景由 glass.css 负责。
+   * 手机档原来是「贴底弹出 + z-index 110」，其中贴底形态只属于目标卡菜单，
+   * 现在由 GoalsPage 的 OverflowMenu 自己算底部锚点；z-index 110 搬到了
+   * glass.css 的 `.gs-layer--menu` 手机档（dock 是 100，菜单必须压过它）。
+   * 保留下来的只有下面的 `.context-item` 排版。见 components/glass/glass.css。
+   */
 
   .context-item {
-    min-height: 48px;
+    /*
+     * 行高改用变量统一给出。原来是 `min-height: 48px`——它大于 `.context-item`
+     * 的 `height` 时会胜出，于是菜单行高在桌面是 34、手机是 48，
+     * 而组件侧按 34 推中心点，菜单整体偏移了 49px。
+     * 现在两边读同一个 `--gs-menu-row`（手机 48 见 :root 覆盖）。
+     */
     padding: 12px 14px;
     border-radius: 12px;
     font-size: 15px;
@@ -3412,28 +3492,47 @@ body {
     color: #ff7b80;
   }
 
+  /*
+   * 手机端的弹窗从「贴底抽屉」改为「居中卡片」，**这是本轮的一次有意的版式变更**，
+   * 不是顺手改的，理由如下：
+   *
+   * 原实现靠 `.modal-mask { align-items: flex-end }` + `.modal { width: min(100%,560px);
+   * border-radius: 22px 22px 0 0 }` 把它压到屏幕底部。但玻璃层的定位不参与
+   * 父容器的 flex 排布 —— 它是 `.gs-layer`（满视口定位层）里的绝对定位锚点，
+   * 遮罩的 align-items 对它完全没有作用。
+   *
+   * 想恢复贴底也不是改几行 CSS 能做到的：库的根节点 transform 硬编码
+   * `translate(-50%,-50%)`，它的 top/left 是**中心点**语义，因此"底边贴屏幕底"
+   * 需要先知道面板高度（内容决定，渲染前拿不到）。要么加 ResizeObserver
+   * （首帧会闪），要么引入一套抵消用的补偿变换 + 专用关键帧。
+   * 收益与代价不成比例，尤其是居中卡片天然免疫 iOS 的
+   * `env(safe-area-inset-bottom)` 与 dvh 那堆坑 —— 贴底方案当年正是为此打了补丁。
+   *
+   * 高弹窗（事件表单）靠下面的 `.gs-dialog-body` 限高滚动兜住，不会溢出屏幕。
+   * 若哪天想把抽屉形态找回来，改这里 + glass.css 的定位层，不要再动 `.modal`。
+   */
   .modal-mask {
-    align-items: flex-end;
+    /*
+     * padding 归零仍然要保留：遮罩原本给贴底面板留了 0 内边距，居中之后
+     * 由玻璃层自己去留边（视觉上左右各 24px），若这里补 padding 会二次缩进。
+     */
     padding: 0;
+    /* 必须高于底部 dock(100) 与菜单(110)；改动前就是这个值 */
     z-index: 120;
   }
 
-  .modal {
-    width: min(100%, 560px);
-    max-width: 100%;
-    max-height: 86dvh;
-    overflow-y: auto;
-    border-radius: 22px 22px 0 0;
-    padding: 22px 16px calc(16px + env(safe-area-inset-bottom));
-  }
-
-  .modal-actions {
-    position: sticky;
-    bottom: -16px;
-    margin: 20px -16px -16px;
-    padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
-    background: linear-gradient(to top, var(--panel) 72%, transparent);
-  }
+  /*
+   * `.modal` 手机档与 `.modal-actions` 手机档**已整体删除**。
+   *
+   * `.modal` 那几条（width/max-height/border-radius/padding）现在全部无效：
+   * 尺寸与内边距由玻璃层决定，`.modal.glass-host` 已把旧壳属性清零。
+   *
+   * `.modal-actions` 那条不只是失效，**而且有害**：它是为旧的 16px 弹窗内边距
+   * 设计的，用 `margin: 20px -16px -16px` 让按钮行向两侧出血、贴住面板底边。
+   * 玻璃版内边距是 24px，负外边距抵消不掉 24 —— 实测按钮行比正文宽 32px、
+   * 左侧错位 16px、底边只剩 8px（正文侧是 24px），标题与按钮两边不齐。
+   * 按钮的触摸高度（min-height: 44px）与等分宽度仍由下面的 `.modal-btn` 保留。
+   */
 
   .modal-btn {
     flex: 1;

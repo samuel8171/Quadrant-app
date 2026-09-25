@@ -18,6 +18,7 @@ import {
 } from '../../lib/weekRules'
 import { useAppStore } from '../../state/appStore'
 import ConfirmDialog from '../ConfirmDialog'
+import GlassModal from '../glass/GlassModal'
 import { useClosing } from '../../hooks/useClosing'
 
 export type WeeklyFormState =
@@ -277,11 +278,26 @@ export default function EventFormDialog({ form, onClose }: Props): JSX.Element {
 
   return (
     <>
-      <div className={`modal-mask${closing ? ' closing' : ''}`} onClick={close}>
-        <div
-          className={`modal weekly-dialog${closing ? ' closing' : ''}`}
-          onClick={(e) => e.stopPropagation()}
-        >
+      {/*
+       * 外壳改用 `GlassModal`（2026-09-25）。
+       *
+       * 这是全应用最后一个还在用老壳（`.modal-mask > .modal.weekly-dialog`）的弹窗 ——
+       * 逐按钮点过一遍（`tmp/popup-inventory.mjs`）：日视图里「添加」「新建预设」
+       * 点出来的浮层清单里只有 `div.modal-mask`，没有 `.gs-plate`，也就是**唯一没有玻璃的弹出物**。
+       *
+       * 改完之后它与其余六个弹窗共用同一套外壳：材质板 + 圆角 + 内容层限高。
+       * 两点注意：
+       *  · 旧壳的 460px 宽（`.weekly-dialog`）由 `.modal.glass-host` 的 `width:auto` 让位，
+       *    宽度改由 `contentWidth` 表达：412 + 2×24 内边距 = 460，与原尺寸逐像素一致；
+       *  · 表单字段多、在小屏上会很高 —— 限高滚动由 GlassModal 的 `.gs-dialog-body` 兜住
+       *    （那条规则本来就是为这个弹窗写的，见 glass.css §七）。
+       */}
+      <GlassModal
+        closing={closing}
+        onMaskClick={close}
+        className="weekly-dialog"
+        contentWidth="min(412px, calc(100vw - 96px))"
+      >
         <h3>{titleText}</h3>
         {form.kind === 'event-create' && (
           <div className="modal-field">
@@ -541,8 +557,7 @@ export default function EventFormDialog({ form, onClose }: Props): JSX.Element {
             保存
           </button>
         </div>
-        </div>
-      </div>
+      </GlassModal>
       {confirmDelete && (
         <ConfirmDialog
           message="确定删除？此操作不可撤销。"

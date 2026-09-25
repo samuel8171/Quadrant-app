@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { ArrowLeft, ChevronLeft, ChevronRight, Plus } from 'lucide-react'
 import type { WeekEvent } from '../../../../shared/types'
 import ConfirmDialog from '../ConfirmDialog'
+import GlassSurface from '../glass/GlassSurface'
+import { menuGeometry, useMenuRowHeight } from '../glass/glassMenu'
 import EventBlock from './EventBlock'
 import EventFormDialog, { type WeeklyFormState } from './EventFormDialog'
 import PresetPanel from './PresetPanel'
@@ -327,6 +329,31 @@ export default function DayView({
   const dropPreviewPreset = dropPreview
     ? weekPresets.find((p) => p.id === dropPreview.presetId)
     : undefined
+  // 行高按断点变化（桌面 34 / 手机 48），从 CSS 读回，见 glassMenu.ts
+  const menuRowH = useMenuRowHeight()
+
+  /*
+   * 日视图菜单的项。
+   * 做成数组而不是两块 JSX，是因为玻璃体的中心点按「行数」推出——
+   * 行数写死的话，将来加一项菜单就会静默错位。
+   */
+  const menuItems = menuEvent
+    ? [
+        {
+          key: 'edit',
+          label: '修改信息',
+          danger: false,
+          run: (): void => setForm({ kind: 'event-edit', event: menuEvent })
+        },
+        {
+          key: 'delete',
+          label: '删除',
+          danger: true,
+          run: (): void =>
+            setDeleteTarget({ kind: 'event', id: menuEvent.id, title: menuEvent.title })
+        }
+      ]
+    : []
 
   return (
     <div className={`day-page ${className ?? ''}`} onAnimationEnd={onAnimationEnd}>
@@ -486,31 +513,33 @@ export default function DayView({
       </div>
       {form && <EventFormDialog form={form} onClose={() => setForm(null)} />}
       {menu && (
-        <div
-          className={`context-menu day-menu${menuClosing ? ' closing' : ''}`}
-          style={{ left: menu.x, top: menu.y }}
+        /*
+         * 菜单项走数组而不是两块 JSX：玻璃体的中心点按「行数」算，
+         * 硬写行数就会在将来加一项时静默错位。让行数由数据推出。
+         *
+         * `day-menu` 类留在定位层上：DayView 的「点外面关闭」判定用的是
+         * `target.closest('.day-menu')`，它沿 DOM 祖先链上溯，落在定位层即可命中。
+         */
+        <GlassSurface
+          {...menuGeometry(menu.x, menu.y, menuItems.length, menuRowH)}
+          layerClassName="gs-layer--menu day-menu"
+          contentRole="menu"
+          anim={menuClosing ? 'out' : 'in'}
         >
-          <button
-            className="context-item"
-            onClick={() => {
-              if (menuEvent) setForm({ kind: 'event-edit', event: menuEvent })
-              closeMenu()
-            }}
-          >
-            修改信息
-          </button>
-          <button
-            className="context-item danger"
-            onClick={() => {
-              if (menuEvent) {
-                setDeleteTarget({ kind: 'event', id: menuEvent.id, title: menuEvent.title })
-              }
-              closeMenu()
-            }}
-          >
-            删除
-          </button>
-        </div>
+          {menuItems.map(({ key, label, danger, run }) => (
+            <button
+              key={key}
+              role="menuitem"
+              className={`context-item${danger ? ' danger' : ''}`}
+              onClick={() => {
+                run()
+                closeMenu()
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </GlassSurface>
       )}
       {deleteTarget && (
         <ConfirmDialog

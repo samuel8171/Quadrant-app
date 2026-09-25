@@ -1,0 +1,763 @@
+/*
+ * ==========================================================================
+ * 液态玻璃 · 双引擎材质
+ * ==========================================================================
+ *
+ * 一条硬约束决定了这套样式为什么要分两档：
+ *
+ *   liquid-glass-react 的折射来自 **SVG 位移滤镜**，而只有 Chromium 会把
+ *   `backdrop-filter` 里的 `url()` 当回事（实测**确实渲染**，只是强度受模糊量支配，
+ *   见 §一 `.gs-plate.gs-refract`）。上游 README 也写着
+ *   「Safari and Firefox only partially support the effect
+ *    (displacement will not be visible)」。
+ *
+ * 所以：
+ *   chromium 档  Chromium / Edge / Android Chrome —— 折射滤镜进材质，全效果
+ *   fallback 档  iOS 全域（含 CriOS/FxiOS，都被强制 WebKit）、macOS Safari、
+ *                Firefox —— 同一块材质，只是不含位移滤镜
+ *
+ * 两档共享 blurAmount / saturation / cornerRadius 三个参数；
+ * displacementScale / aberrationIntensity / elasticity / mode 只有 Chromium 会响应，
+ * 设置面板会据引擎置灰并标注原因——不这么做，用户会在 iPhone 上反复拖动
+ * 那几个滑块而得不到任何反馈。
+ *
+ * ── 材质在哪一层（2026-09-24 修正，改这里之前务必读）
+ *
+ * **材质与染色只定义一次，在 `.gs-plate` 上**，两档共用。
+ * 不能放在 liquid-glass-react 的面板上：库把材质放在 `span.glass__warp`，
+ * 而它是**库根节点（带 transform）的后代**；带 transform 的元素在 Chromium 里
+ * 就是一个 backdrop root，后代的 backdrop 只剩"这个根节点自己画过的东西"，
+ * 而库根节点背景全透明 —— 于是材质采到空白、输出为零，全部弹窗透明。
+ * 单变量实测（同一弹窗、同一材质、只改宿主）：
+ *
+ *   .gs-anchor 的子元素（无 transform）  Δ74.87  活，能采到身后页面
+ *   .gs-panel 的子元素                    Δ4.53  只采到父级自己画的内容
+ *   .gs-panel 自身                        Δ0.00  死
+ *   顶掉 transform / 关 warp 的 filter / 藏 svg / 藏 mix-blend 元素 → 仍 0.00
+ *
+ * 结论：材质必须有它自己的、祖先链上没有 transform 的宿主，这就是 `.gs-plate`。
+ * 材质板同时是**唯一**适合挂 `filter:` 位移的地方：它是空 div，位移不到任何内容。
+ */
+
+/* ==========================================================================
+ * 一、定位层与锚点（两档共用）
+ * ========================================================================== */
+
+/*
+ * 满视口定位层。`pointer-events: none` 是必需的：这一层盖在弹窗遮罩之上，
+ * 若它吞掉点击，点遮罩关闭弹窗就失效了。可交互的部分由 .gs-panel /
+ * .gs-content 单独打开。
+ *
+ * ── 这一层**既不能带 z-index，也不能是 fixed**（2026-09-24 二次定案，改之前务必读完）
+ *
+ * 材质板能不能采到它身后的页面，取决于**这一层自己**的定位与层级。单变量实测：
+ *
+ *   .gs-layer { position: fixed }                   死  真实屏幕 条纹 std 78.4（锐利=没在采）
+ *   .gs-layer { z-index: 50 }                       死  无头 保留率 0.66（只剩染色）
+ *   .gs-layer { z-index: 30 }                       死  同上
+ *   .gs-layer { z-index: 0 }                        死  同上（0 与 50 同病）
+ *   .gs-layer { position: absolute; z-index: auto } 活  保留率 0.00
+ *   .gs-layer { position: static }                  活  真实屏幕 条纹 std 3.5（抹平）
+ *   .gs-layer { display: contents }                 活  同上
+ *
+ * 即 **`fixed` 与非 auto 的 `z-index` 是同一类"掐死材质"的修饰，且必须发生在
+ * 材质板的定位层身上**。两条边界（都是单变量实测，都别再推翻）：
+ *
+ *   · z-index 放在**更外层的祖先**上不影响 —— 弹窗的定位层是 `z-index:auto`，
+ *     它外面还包着 `.modal-mask { position: fixed; z-index: 60 }`，材质照样活着
+ *     （保留率 0.07）。所以"祖先有 stacking context 就会截断"是**错的**。
+ *   · z-index 放在**材质板自己**身上无害 —— 只改材质板自己的 z-index，
+ *     读数与不设时逐位相同（0.00）。
+ *
+ * 所以**层级一律挂在材质板与内容层上**（`--gs-z`，定义与数值见 §四），
+ * 定位层只负责铺满视口。各档 `--gs-z` 的数值与原层级数值逐位相同，绘制顺序不变。
+ *
+ * ── 机制（仍未定论，别当结论引用）
+ *
+ * Filter Effects 2 明确写着 backdrop root 只由 `filter` / `opacity<1` / `mask` /
+ * `clip-path` / `backdrop-filter` / `mix-blend-mode` / `will-change`(上述之一) 形成，
+ * 并特别注明「**a Backdrop Root is not formed by elements with z-index applied,
+ * fixed or sticky-positioned elements, and elements with transforms applied**」。
+ * 所以上面这张表**不是 backdrop root 语义造成的**，更像 Chromium 合成层边界对
+ * 背景回读的限制。**别再往"backdrop root"上解释，也别去猜是哪一条属性** ——
+ * 按上表在真实渲染里量一遍是唯一可靠的办法。
+ *
+ * ── 取证工具（本轮把两条旧结论推翻了，先读这里再动手）
+ *
+ * ① **无头浏览器是可信的**：按"条纹 + 材质开/关各一张 + 两个互不相交的采样盒"
+ *    来量，无头与真实屏幕在菜单上同向、同量级（原样 0.66 ／ 78.4 锐利）。
+ *    本文件早前记过一条"无头全穿透、不能用来验证" —— 那是因为当时用的是
+ *    **元素级** `locator().screenshot()`：它连 `opacity:0.95` 这种规范正对照
+ *    都读成"穿透"，本身就不忠实。换成页面级 `page.screenshot({ clip })` 即可。
+ * ② 判据必须是**对比度保留率**，不是绝对清晰度：同一状态各抓"材质开"与
+ *    "材质关（`backdrop-filter:none` + 背景透明）"两张，用 `std(开)/std(关)` 判定。
+ *    只看绝对值会把"染色把对比度压暗"误读成"糊了"。
+ * ③ **采样盒必须躲开文字**：弹窗的"取消/确认"两个按钮足以把保留率从 0.07 抬到 0.84，
+ *    让一个正常的弹窗看起来像坏的一样。量材质时把 `.gs-content` 设
+ *    `visibility:hidden`（不影响材质本身）。
+ * ④ 采样必须在几何**稳定后**取：入场动画期间材质板是 `scale(0.94)`，
+ *    按动画中的矩形取样会溢出板外、读到板后的页面。
+ *
+ * 工具与命令见 `docs/probes/liquid-glass.md`；本轮的对照脚本是
+ * `tmp/menu-truth.mjs`（菜单）、`tmp/dialog-oracle.mjs`（弹窗）、
+ * `tmp/zrule-dialog.mjs`（定"是不是定位层自己的 z-index"）。
+ *
+ * `absolute` 为什么等价安全：本层只被挂在两种父节点下 ——
+ *   · 弹窗：**父链上没有定位祖先**（页面 → .app → 初始包含块；`.modal-mask` 已不在祖先链上，
+ *     它现在是这一层**内部**的一块漆，见 §四 `.gs-layer--dialog`），
+ *     文档本身不滚动（应用是定高外壳 + 内部滚动容器），故坐标与视口一致（手机档实测板心
+ *     与视口中心逐像素重合）；
+ *   · 菜单：同上，父链全是 `position: static`。
+ * 若要给本层加父级，**必须确认该父级的 padding box 与视口重合、且文档不可滚动**，
+ * 并且该父级不能带非 auto 的 z-index 或 fixed —— 否则材质会死在一个看不见的地方。
+ *
+ * ⚠️ `.modal-mask`（弹窗遮罩，`fixed` + `z-index: 60`）**曾经是本层的父节点**，
+ * 那正是弹窗"看着不像玻璃"的元凶：遮罩为了压过事件卡必须带 z-index，于是它自己是一张
+ * **合成面**，把材质板的背景采样截在它内部 —— 保留率只有 0.30、板内亮度 24.9，
+ * 而菜单（采样直通页面）是 0.02 / 76.2。修法是把遮罩搬进本层当**兄弟**（`layerPrefix`），
+ * 不再当祖先。细节与数据见 §四 `.gs-layer--dialog` 与 `GlassModal.tsx` 的文件头。
+ *
+ * 注意 `.gs-layer--dock`（手机 dock）与 `.gs-layer--preview` 本来就已经是 absolute，
+ * 所以上面这条修正只影响弹窗与菜单两类宿主；而 `--dock` 的 `z-index: 0` 是同一个坑
+ * （0 与 50 同病），已一并改成 `--gs-z`。
+ */
+.gs-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+/*
+ * 零尺寸锚点 —— 这是接进本项目最关键的一处适配。
+ *
+ * 库的 `transform` 硬编码为 `translate(calc(-50% + …), calc(-50% + …))`
+ * 且**不可通过 props 覆盖**（它先展开 style 再写入自己的 transform），
+ * 也就是说传进去的 top/left 是元件的**中心点**而不是左上角。
+ *
+ * 把 0×0 的锚点放在目标中心、让库取 top:0/left:0，两个问题一起解决：
+ *   · 中心点对齐不再需要知道元件尺寸（尺寸是内容决定的，事先算不出）；
+ *   · 面板的绝对定位包含块是锚点，`top:0/left:0` 就是锚点**原点** ——
+ *     所以锚点必须死守 0×0，一旦有尺寸，面板就会落到它的左上角而不是中心。
+ *
+ * 锚点自己**不带 transform、也不带动画**：它是材质板唯一的祖先，
+ * 一旦带上 transform，材质板的 backdrop 会被抽干（见文件头）。
+ * 入场动画因此挂在材质板上。
+ */
+.gs-anchor {
+  position: absolute;
+  width: 0;
+  height: 0;
+}
+
+/*
+ * 材质板 —— 玻璃材质与染色**唯一的定义处**（两档共用）。
+ *
+ * 几何：绝对定位 + 负边距居中（不用 transform，见下）。
+ *   · **必须是面板的兄弟，不能是它的祖先**：带 backdrop-filter 的元素同时也是
+ *     后代的包含块（与 filter 同规则），套在面板外面会把面板的 top:0/left:0
+ *     从"锚点原点"改解释成"材质板左上角"，整块面板朝左上偏半格；
+ *     而且尺寸会成回路 —— 材质板尺寸取自可见面，可见面宽度又取决于包含块宽度。
+ *   · 负边距是"绕锚点原点居中"的手段，且不要用 transform：元素自己的 transform
+ *     虽然不影响自己的 backdrop-filter（已实测），但没有必要引入这条依赖。
+ *   · 尺寸来自 JS 实测（`--gs-panel-w/h`，见 GlassSurface.tsx）。
+ *     CSS 里算不出来：面板是 shrink-to-fit，高度由内容决定。
+ *
+ *   · **层级也在这块板上**（`z-index: var(--gs-z, auto)`）。
+ *     玻璃层的层级不能挂在定位层上（会让材质采不到背景，见 §一），于是搬到这里：
+ *     材质板自己带 z-index 实测无害。内容层必须给**同一个数**（不是 +1），
+ *     两者同在后代树序里、材质板在前 ⇒ 内容照样盖在材质之上；
+ *     若给内容 +1，它会多跳一层正 z，压过原本压在它上面的同级元素
+ *     （手机 dock 的按钮就是这么被盖住并吞掉点击的）。
+ */
+.gs-plate {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: var(--gs-panel-w, 0px);
+  height: var(--gs-panel-h, 0px);
+  margin-left: calc(var(--gs-panel-w, 0px) * -0.5);
+  margin-top: calc(var(--gs-panel-h, 0px) * -0.5);
+  z-index: var(--gs-z, auto);
+  border-radius: var(--gs-radius, 32px);
+  /* 染色是"永远不会失效"的那一层：backdrop-filter 不被支持时，靠它保住对比度 */
+  background: var(--gs-tint);
+  backdrop-filter: blur(var(--gs-blur, 6px)) saturate(var(--gs-sat, 140%));
+  -webkit-backdrop-filter: blur(var(--gs-blur, 6px)) saturate(var(--gs-sat, 140%));
+  /* 它盖在弹窗遮罩上，吞掉点击就等于"点遮罩关闭"失效；交互元素个别打开 */
+  pointer-events: none;
+}
+
+/*
+ * 动画包装层。零尺寸静态盒，正好落在锚点原点上。
+ *
+ * 库渲染的是一个 Fragment（面板 + 两个底色层 + 两条镜面边），本组件不能只给
+ * "面板"套壳，所以把整个片段包进来：入场的缩放与淡入要带着镜面边一起走。
+ *
+ * 必须保持静态且 0×0：动画期间它带 transform，会临时成为后代的包含块；
+ * 只要它的原点与锚点原点重合，面板的绝对定位前后落在同一处，不会跳。
+ */
+.gs-anim {
+  position: static;
+  width: 0;
+  height: 0;
+}
+
+/*
+ * 折射档：把库的位移滤镜接进来。
+ *
+ * **2026-09-24 二次实测：它是生效的，只是强度被模糊量压住了。** 这两句都要读，
+ * 上一轮记的"Chromium 静默忽略 backdrop-filter 里的 url()"是**错的**，作废。
+ *
+ * 本轮的判据（`tmp/settings-truth.mjs` + `tmp/settings-judge.py`，都带正对照）：
+ *
+ *   · 同一处 `!important` 覆盖、只保留 url()（正对照） 与不覆盖相比 **Δ0.000、Δmax 0**
+ *     ⇒ 覆盖本身无副作用，下面的差值可以归因给 url()；
+ *   · 去掉 url()                                 Δmean 2.9  Δmax 11  4.9% 像素变化
+ *     ⇒ **url() 有输出**，不是被忽略；
+ *   · 直接改库里那张滤镜的 `feDisplacementMap@scale`（-118/… → 0 vs 200，
+ *     声明一个字都不动）：模糊 16.8px 时 Δmax 10~16、3.4~6.3% 像素变化；
+ *     **把模糊降到 4px 时 Δmean 27.9、Δmax 108、73.4% 像素变化**（彩色背景上还会带动彩度）。
+ *     ⇒ 位移真的进了材质，而且**可见度几乎完全由模糊量决定**。
+ *
+ * 这也解释了用户为什么觉得"这几个滑块没反应"：blurAmount 0.4 = 16.8px，
+ * 位移的对象已经是"一片糊"，只剩边缘一点点梯度可搬。设置面板里那句
+ * 「实际模糊 ≥12px 时已糊掉边缘位移，想要折射就把模糊量降到 0.2 以下」
+ * 现在有了量级依据：**0.4 时只剩约 1/12**（Δmax 108 → 16）。
+ *
+ * 仍然成立的另一条（所以位移**不能**挂在 `filter:` 上）：
+ *   `backdrop-filter: blur() saturate()` ＋ `filter: url("#库滤镜")`
+ *   → 按 CSS Filter Effects 规范，**带 `filter` 的元素自己就是一个 backdrop root**，
+ *     于是它的 `backdrop-filter` 采不到任何东西 —— 材质整个消失。
+ *     实测（事件表单弹窗，分区取样，与"无材质"逐位比对，`tmp/cmpR3/`）：
+ *       中心带  无材质 28.51/g0.296   磨砂 29.84/g0.265   再挂 filter 27.58/g0.308
+ *       左边缘  无材质 30.96/g6.708   磨砂 32.38/g6.231   再挂 filter **30.96/g6.708**
+ *     后两列逐位相同 ⇒ 不是"产生了位移"，而是**材质被抹掉了**。
+ *     （与本项目最早那条结论同源：带 transform 的祖先会抽干后代的 backdrop。
+ *       `filter` 是同一个规则在"元素自己"身上的版本。）
+ *   即：**位移只能写在 `backdrop-filter` 的 `url()` 里**（Chromium 认），
+ *   写在同一个元素的 `filter:` 上会把材质掐死。库把两者放在同一层
+ *   （`span.glass__warp`），所以库自己的材质零输出、被我们显式关掉。
+ *
+ * 结论：材质由 `.gs-plate` 用 `backdrop-filter` 唯一提供 = 磨砂 + 位移 + 染色 + 镜面边；
+ * **"想看得见折射"的杠杆是模糊量，不是位移强度。**
+ */
+ * 保留 `url()` 而不是删掉它：它就是折射本体的接线处（本档只在 chromium 引擎出现，
+ * 见 `.gs-layer[data-glass-engine]`）。降级档（WebKit/Firefox）不挂这条类，
+ * 那些引擎不渲染 backdrop-filter 里的 url()，与上游 README 的说法一致。
+ */
+.gs-plate.gs-refract {
+  backdrop-filter: blur(var(--gs-blur, 6px)) var(--gs-fid) saturate(var(--gs-sat, 140%));
+}
+
+/*
+ * 降级档把染色压重：没有折射时，染色是可读性的主要来源。
+ * `.gs-layer` 带着 `data-glass-engine`，所以这里不需要第二处引擎判定。
+ */
+.gs-layer[data-glass-engine='fallback'] .gs-plate {
+  background: var(--gs-tint-opaque);
+}
+
+.gs-panel,
+.gs-content {
+  pointer-events: auto;
+}
+
+/*
+ * 内容层与材质板**共用同一个 z**（见 `.gs-plate` 的注释）。
+ *
+ * 两档的面板都已经是绝对定位（库根节点是内联 `position:absolute`，
+ * 降级档写在 `.gs-fallback` 上），所以 z-index 对它们有效。
+ * 没定义 `--gs-z` 的宿主（弹窗、设置预览）取 `auto`，与改动前完全一致。
+ */
+.gs-panel,
+.gs-fallback {
+  z-index: var(--gs-z, auto);
+}
+
+/*
+ * 内容层。
+ *
+ * `width` 必须显式给：库的 glassSize 量的是根节点矩形，而根节点是绝对定位的
+ * shrink-to-fit，尺寸完全由内容决定。内容宽度一旦漂移，根节点就与 .glass
+ * 不等宽，边框层（按根节点尺寸画）会与玻璃体错位。写死宽度让面板尺寸可预期。
+ *
+ * `font` 也必须显式重置：库在内容层内联了 `font: 500 20px/1 system-ui`，
+ * 那是给它的 demo 卡片准备的，直接继承会把弹窗里的 13~15px 正文全部顶成 20px。
+ */
+.gs-content {
+  box-sizing: border-box;
+  width: var(--gs-content-w, min(372px, calc(100vw - 96px)));
+  font: 400 14px/1.45 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  color: var(--text);
+}
+
+/*
+ * 库自己那层材质（`span.glass__warp`）**显式关掉**。
+ *
+ * 它挂在库根节点（带 transform）内部，backdrop 已被抽干 —— 实测给它加
+ * `backdrop-filter: invert(1)` 的像素差是 0.19/255，等于完全没有输出。
+ * 留着它只剩代价：一条完整的 SVG 滤镜链（feImage + 三个 feDisplacementMap +
+ * feBlend + feGaussianBlur）每次合成都得估一遍，画出来还是零。
+ *
+ * 关掉它同时杜绝了另一种隐患：哪天浏览器改了 backdrop root 的判定规则，
+ * 材质会画两遍（我们的材质板 + 库的 warp），叠加后的观感没人验过。
+ * 材质的所有权就此唯一：`.gs-plate` 负责画，库只负责滤镜定义与几何。
+ */
+.gs-panel .glass__warp {
+  display: none;
+}
+
+/* ==========================================================================
+ * 二、降级档（WebKit / Firefox）：纯 CSS 镜面边，材质由材质板统一提供
+ * ========================================================================== */
+
+/*
+ * 材质变量总表。**这是唯一的定义处**，消费方一律 `var()` 引用，不要再写死第二份。
+ *
+ *   --gs-radius   圆角，由外观设置驱动（glassSettings.syncGlassCssVars 写在 <html> 上）
+ *   --gs-blur     实际模糊像素 = 4 + blurAmount × 32，同上
+ *   --gs-sat      饱和度百分比，同上
+ *   --gs-tint          折射档染色：压轻，让折射看得出来（材质板）
+ *   --gs-tint-opaque   降级档染色：压重，没有折射时它是对比度的唯一来源（材质板）
+ *   --gs-tint-strong   抽屉等"重材质"元素的染色（非玻璃层，theme.css 消费）
+ *   --gs-shadow / --gs-shadow-strong  降级档的镜面高光与投影
+ *
+ * 另有一个**不属于材质、但必须与材质同处一处**的变量：
+ *
+ *   --gs-z   浮层层级。**必须定义在 `.gs-layer--*` 上、由`.gs-plate` 与
+ *            `.gs-panel`/`.gs-fallback` 消费，绝不能改成那一层自己的 z-index**
+ *            （会让材质采不到背景，见 §一）。数值与原层级数值一致：
+ *            菜单 50 / 手机菜单 110 / 手机 dock 0；未定义的宿主取 auto。
+ *
+ * 注意前三个变量由 JS 内联写在 <html> 的 style 上，优先级高于本表 —— 改默认值
+ * 要改 `glassSettings.ts` 的 GLASS_DEFAULTS，改这里只影响 JS 未生效前的首屏。
+ * 后者（tint/shadow 系列）是纯 CSS 的，改这里就是唯一改动点。
+ */
+:root {
+  --gs-tint: rgba(20, 23, 29, 0.34);
+  --gs-tint-opaque: rgba(26, 29, 35, 0.62);
+  --gs-tint-strong: rgba(31, 34, 40, 0.9);
+  --gs-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.16),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.28),
+    0 12px 40px rgba(0, 0, 0, 0.42);
+  --gs-shadow-strong:
+    0 12px 36px rgba(0, 0, 0, 0.42),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+}
+
+/*
+ * 降级档的**可见面**。材质与染色不在这里（在 `.gs-plate`），此处只剩：
+ *   高光层  内顶亮 + 内底暗，做出"有厚度的一块"
+ *   边界层  1.5px 渐变描边 + 外投影
+ *
+ * 渐变描边沿用与库相同的 mask 挖空手法（双层 linear-gradient + xor 合成），
+ * 目的是让两档的切边观感一致——它们应该是同一种材质的两个版本，
+ * 而不是两套不相干的视觉语言。Chromium 档的同类元素由库自己渲染。
+ */
+.gs-fallback {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: inline-flex;
+  align-items: center;
+  overflow: hidden;
+  transform: translate(-50%, -50%);
+  border-radius: var(--gs-radius, 32px);
+  box-shadow: var(--gs-shadow);
+}
+
+/*
+ * 镜面描边。用 mask 挖空做出"只有边、没有面"的一圈渐变，
+ * 高光集中在左上、随角度衰减——真实玻璃的切边就是这样一段亮弧，
+ * 而不是均匀的一圈线。
+ */
+.gs-fallback::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  padding: 1.5px;
+  background: linear-gradient(
+    135deg,
+    rgba(255, 255, 255, 0) 0%,
+    rgba(255, 255, 255, 0.14) 33%,
+    rgba(255, 255, 255, 0.42) 66%,
+    rgba(255, 255, 255, 0) 100%
+  );
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+}
+
+/*
+ * 没有位移贴图时，边缘会显得"平"。用一圈极淡的内侧渐暗把视线的中心收回来，
+ * 近似位移贴图造成的边缘聚集感。刻意压得很轻：这一层是代偿，不是模拟，
+ * 用力过猛会变成廉价的内阴影。
+ */
+.gs-fallback::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background: radial-gradient(
+    120% 120% at 50% 50%,
+    rgba(255, 255, 255, 0) 62%,
+    rgba(255, 255, 255, 0.07) 88%,
+    rgba(255, 255, 255, 0.13) 100%
+  );
+}
+
+/* ==========================================================================
+ * 三、入场 / 退场
+ * ========================================================================== */
+
+/*
+ * 入场 / 退场动画挂在**材质板与动画包装层两处**，都挂 `gs-pop-in` / `gs-pop-out`。
+ * 三个候选位置里，锚点与库根节点都不能用：
+ *
+ *   · 不能挂库的根节点：CSS 动画对 transform 的声明**优先于内联样式**，而库
+ *     正是用内联 transform 做居中。给它加 `pop-in`（动画 scale）会把居中的
+ *     translate(-50%,-50%) 整个顶掉，面板从中心定位跳到左上角定位，200ms 后再
+ *     跳回来——肉眼可见的一次闪动。
+ *   · 不能挂锚点：动画期间锚点带 transform，而它是材质板唯一的祖先 ——
+ *     材质板的 backdrop 会被抽干，弹窗会"先没有玻璃 200ms，再突然补上"。
+ *
+ * 挂在材质板自己身上是安全的：**元素自己的 transform 不影响自己的 backdrop-filter**
+ * （已实测），而它的盒子正好以锚点原点为中心，缩放原点天然就是玻璃中心。
+ * 包装层管面板与镜面边，材质板管材质，两边同曲线同起点，整块玻璃才是一起长的。
+ */
+.gs-plate.gs-pop-in,
+.gs-anim.gs-pop-in {
+  animation: pop-in 0.2s cubic-bezier(0.2, 0.9, 0.3, 1.15);
+}
+
+.gs-plate.gs-pop-out,
+.gs-anim.gs-pop-out {
+  animation: pop-out 0.16s ease-in forwards;
+}
+
+/* 减少动效偏好下两档都不做缩放动画 */
+@media (prefers-reduced-motion: reduce) {
+  .gs-plate.gs-pop-in,
+  .gs-plate.gs-pop-out,
+  .gs-anim.gs-pop-in,
+  .gs-anim.gs-pop-out {
+    animation: none;
+  }
+}
+
+/* ==========================================================================
+ * 四、玻璃化的具体浮层
+ * ========================================================================== */
+
+/*
+ * 弹窗。**定位层必须是遮罩的兄弟（同层内、树序在前），不能是它的后代。**
+ *
+ * 遮罩为了压过事件卡带 `z-index: 60`，那是**合成面**；材质板若在它内部，
+ * 背景采样就被截在这张面里。单变量实测（同一组条纹、同一块材质板）：
+ *
+ *   层在遮罩里  保留率 0.30  板内亮 24.9  ← 只糊到一点
+ *   层在遮罩外  保留率 0.02  板内亮 45.1  ← 与菜单同质量（菜单 0.00）
+ *
+ * 层级 70（手机 130）：必须高于本层内的遮罩（桌面 60 / 手机 120），
+ * 且**不写在这一层自己的 `z-index` 上**（那会让材质采不到背景，见 §一）。
+ *
+ * 已知边界：**玻璃弹窗套玻璃弹窗**时，内层遮罩（60）压不住外层的材质板（70）。
+ * 当前没有这种用法（唯一嵌套是"事件表单 + 确认框"，事件表单还是老壳、不在玻璃层里）。
+ * 若将来真出现，给内层更高的 `--gs-z` 即可，不要动定位层的 z-index。
+ */
+.gs-layer--dialog {
+  --gs-z: 70;
+}
+
+@media (max-width: 767px) {
+  /* 手机档遮罩是 120，弹窗必须再高一层 */
+  .gs-layer--dialog {
+    --gs-z: 130;
+  }
+}
+
+/*
+ * 右键菜单的层级。
+ *
+ * 原来这个值挂在 `.context-menu` 上，而 `.context-menu` 同时带着
+ * `animation: pop-in`（动画 transform scale）。玻璃化之后动画必须移到锚点上，
+ * 所以类名也跟着分成两处：定位/层级留在这一层，视觉全部交给玻璃层。
+ * 若继续复用 `.context-menu`，那段的 scale 动画会绕视口中心缩放整层，
+ * 菜单会从屏幕另一侧飞过来。
+ *
+ * **`z-index` 不能写在这一层**（写在这里会让材质采不到背景，菜单的磨砂就是这么
+ * 死的；单变量实测：定位层 z 50 保留率 0.66，改成 auto 后 0.00）。改用 `--gs-z`，
+ * 由 `.gs-plate` 与 `.gs-panel` 消费 —— 数值不变，绘制顺序逐像素不变，
+ * 但材质活了（`tmp/menu-fix-verify.mjs`，板外整页 Δ 0.03/0.1%）。
+ */
+.gs-layer--menu {
+  --gs-z: 50;
+}
+
+/*
+ * 手机上必须压过底部 dock。
+ *
+ * `.sidebar`（手机档）是 z-index 100，而菜单在窄屏下是"贴底弹出"或被钳在
+ * 视口下部，50 会让它藏到 dock 后面——看得见顶部两行、点不到。
+ * 110 是改动前 `.context-menu` 手机档用的同一个数字，此处沿用：
+ * 高于 dock(100)，低于 `.modal-mask` 手机档(120)，保证确认弹窗仍压在菜单之上。
+ */
+@media (max-width: 767px) {
+  .gs-layer--menu {
+    --gs-z: 110;
+  }
+}
+
+/* ==========================================================================
+ * 五、移动端底部 dock
+ * ========================================================================== */
+
+/*
+ * 桌面端隐藏这条玻璃层。
+ *
+ * 桌面端的 `.sidebar` 是 flex 兄弟而不是浮层，身后只有纯色底——模糊与折射
+ * 都没有对象可作用，最终只剩一圈镜面边。为一个满高的 SVG 位移滤镜
+ * 换一条亮边，性能与收益完全不成比例，所以桌面端保留原来的实色侧栏。
+ *
+ * 用 CSS 隐藏而不是 JS 断点条件渲染：媒体查询在 CSS 里已经存在一份，
+ * 再在 TS 里写一个 767 就成了同一个数字的第二处定义。
+ * 代价是桌面端多一个 display:none 的子树，可忽略。
+ */
+.gs-layer--dock {
+  display: none;
+}
+
+@media (max-width: 767px) {
+  /* 相对 .sidebar（它本身已是 position: fixed）定位，而不是相对视口 */
+  .gs-layer--dock {
+    position: absolute;
+    display: block;
+    inset: 0;
+    /*
+     * 同样是 `--gs-z` 而不是这一层的 z-index（0 与 50 同病，都会让 dock 的
+     * 磨砂采不到背景 —— 因为 dock 身后就是时间轴画布）。
+     *
+     * 数值保持 0：`.sidebar` 自己是 fixed + z 100，是一个 stacking context，
+     * 材质板与导航项都在它内部按树序比较；0 与 auto 在绘制顺序里同一步，
+     * 所以 dock 依旧排在导航项**下面**（材质是背景，按钮在它上面），
+     * 改成 --gs-z 后相对顺序逐像素不变。
+     */
+    --gs-z: 0;
+  }
+
+  /*
+   * dock 玻璃的内容盒尺寸。
+   *
+   * 必须与 .sidebar 的盒模型严格对应：sidebar 是「100vw − 24」宽、66 高、
+   * padding 5px 8px（无描边），所以内容盒 = (100vw − 24 − 16) × (66 − 10)。
+   * 玻璃体尺寸 = 内容盒 + 2 × 内边距，两边对不上就会出现玻璃与导航项
+   * 各偏几像素的"错版"观感——这类错位在深色底上很难一眼看出，只会觉得
+   * "哪里不太对"。
+   */
+  .gs-dock-plate {
+    width: calc(100vw - 40px);
+    height: 56px;
+  }
+}
+
+/* ==========================================================================
+ * 六、设置面板与折射预览条
+ * ========================================================================== */
+
+/* 面板较高（四个模式 + 六个滑块），手机上必须能滚 */
+.glass-settings .gs-content {
+  max-height: calc(var(--app-height, 100dvh) - 140px);
+  overflow-y: auto;
+}
+
+.glass-engine {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 0 14px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+}
+
+.glass-engine-tag {
+  flex: none;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  white-space: nowrap;
+  color: #cfe4ff;
+  background: rgba(77, 163, 255, 0.18);
+  border: 1px solid rgba(77, 163, 255, 0.5);
+}
+
+.glass-engine.fallback .glass-engine-tag {
+  color: #ffd2d3;
+  background: rgba(229, 72, 77, 0.16);
+  border-color: rgba(229, 72, 77, 0.45);
+}
+
+/*
+ * 折射预览条。
+ *
+ * 面板本身浮在 0.55 的暗遮罩上，身后没有高频纹理——位移滤镜把纯色搬运到
+ * 另一处还是同一个纯色，所以在这个面板上看不出折射强弱。
+ * 这条用三组条纹铺出高频背景，位移与色差才有对象可作用。
+ */
+.glass-preview {
+  position: relative;
+  height: 76px;
+  margin: 0 0 16px;
+  border-radius: 10px;
+  overflow: hidden;
+  background:
+    repeating-linear-gradient(45deg, #0e1622 0 6px, #e7f1ff 6px 12px),
+    repeating-linear-gradient(-45deg, rgba(255, 86, 86, 0.85) 0 4px, transparent 4px 26px),
+    linear-gradient(120deg, rgba(77, 163, 255, 0.95), rgba(160, 90, 255, 0.9));
+}
+
+.gs-layer--preview {
+  position: absolute;
+  inset: 0;
+}
+
+.glass-preview-chip {
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.glass-modes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.glass-mode {
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.glass-mode.active {
+  border-color: var(--accent);
+  background: rgba(77, 163, 255, 0.18);
+  color: #fff;
+}
+
+.glass-mode:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.glass-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0 0 12px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.glass-row.inert {
+  opacity: 0.5;
+}
+
+.glass-row-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.glass-row-label {
+  color: var(--text);
+}
+
+.glass-row-value {
+  color: #cfe4ff;
+  font-variant-numeric: tabular-nums;
+}
+
+.glass-row input[type='range'] {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.glass-hint {
+  font-size: 11px;
+  line-height: 1.5;
+  opacity: 0.85;
+}
+
+.glass-effective {
+  margin: 0 0 14px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.glass-effective.warn {
+  color: #f0dcae;
+  background: rgba(229, 180, 77, 0.12);
+}
+
+/* ==========================================================================
+ * 七、旧壳交还给玻璃层
+ * ========================================================================== */
+
+/*
+ * 弹窗内容的限高与滚动。
+ *
+ * 这一条是替补：删除的 `.modal` 手机档原本带 `max-height: 86dvh; overflow-y: auto`，
+ * 而玻璃面板是 shrink-to-fit —— 内容多高就多高，没有上限。事件表单这类
+ * 字段多的弹窗在小屏上会直接超出视口，**上下两端都被切掉且无法滚动**。
+ *
+ * 类名用 `.gs-dialog-body` 而不是 `.modal .gs-content`：后者与
+ * `.glass-settings .gs-content` 同权重 (0,2,0)，胜负只由源序决定，
+ * 改文件顺序就会静默改变设置面板的高度上限。给弹窗内容一个自己的类更稳。
+ *
+ * 减 96px 的来历（`.gs-content` 的位置实测确认过）：库把 `padding` 加在
+ * `.gs-content` **外面**的一层包装上，所以面板总高 = 内容高 + 2×24(内边距)，
+ * 而面板还要在视口里上下各留 24 的呼吸位 —— 24×4 = 96。
+ * 用 `--app-height` 而不是 `100dvh`，理由见 theme.css 末尾的 PWA 章节
+ * （standalone 下 iOS 会把安全区从 dvh 里减掉）。
+ */
+.gs-dialog-body {
+  max-height: calc(var(--app-height, 100dvh) - 96px);
+  overflow-y: auto;
+  /* 内容比面板窄时不该出现横向滚动条（长英文/URL 靠换行处理） */
+  overflow-x: hidden;
+}
+
+/*
+ * `.modal` 这个类必须留在玻璃根节点上，因为 `.modal h3` / `.modal-actions`
+ * / `.modal-btn` 等一批后代选择器都挂在它下面；但它自带的
+ * **背景、描边、宽度**不能留：背景会在玻璃之上再糊一层实色面板，
+ * 而 `width: 420px` 会破坏"绝对定位 shrink-to-fit"这一尺寸契约，
+ * 让根节点与 .glass 不等宽、边框层随之错位。
+ * 圆角/内边距/投影由库的内联样式接管，无需在此处理。
+ */
+.modal.glass-host {
+  width: auto;
+  max-width: none;
+  background: none;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  box-shadow: none;
+  /* 入场动画已移到锚点上，见 §三 */
+  animation: none;
+}

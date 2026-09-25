@@ -13,6 +13,8 @@ import {
 } from 'lucide-react'
 import type { Goal, Subtask } from '../../../shared/types'
 import ConfirmDialog from '../components/ConfirmDialog'
+import GlassSurface from '../components/glass/GlassSurface'
+import { MENU_PAD, useMenuRowHeight } from '../components/glass/glassMenu'
 import GoalDetailDialog from '../components/GoalDetailDialog'
 import { useClosing } from '../hooks/useClosing'
 import {
@@ -227,9 +229,16 @@ interface OverflowItem {
 }
 
 /**
- * 窄屏卡片操作的弹出菜单。刻意复用 `.context-menu` / `.context-item`：
- * 移动端断点内这两个类本来就是"贴底弹出 + 48px 行高"的形态，与时间轴卡片菜单一致，
- * 无需再造一套样式。宽屏不渲染它（`.goal-more` 默认 display:none）。
+ * 窄屏卡片操作的弹出菜单。
+ *
+ * 形态是「贴底弹出的抽屉菜单」，不跟随指针：窄屏上手指按住的是卡片，
+ * 菜单出现在底部拇指区比压在指尖下方更好点。因此定位不走 menuGeometry
+ * （那是「左上角对齐指针」的语义），而是自己算底部锚点，见下面的 center。
+ *
+ * 玻璃化之后**不再复用 `.context-menu`**：它的手机档自带一套手搓的
+ * backdrop-filter 与 left/right 定位，会和玻璃层抢同一批属性（背景糊两层、
+ * 定位被 over-constrain）。行高仍读同一个 `--gs-menu-row`（手机 48px），
+ * 与另外两处菜单同源。
  */
 function OverflowMenu({
   items,
@@ -243,15 +252,41 @@ function OverflowMenu({
   useEffect(() => {
     const onDown = (e: PointerEvent): void => {
       const target = e.target as Element | null
-      if (target && target.closest('.context-menu')) return
+      /*
+       * 判据是玻璃的**定位层**而不是菜单本身。它是菜单的 DOM 祖先，
+       * `closest` 沿祖先链上溯即可命中，且不受该层 `pointer-events: none`
+       * 的影响（closest 只看树结构，不看命中测试）。
+       * 用 .gs-layer--menu 与另外两处菜单保持一致。
+       */
+      if (target && target.closest('.gs-layer--menu')) return
       close()
     }
     window.addEventListener('pointerdown', onDown)
     return () => window.removeEventListener('pointerdown', onDown)
   }, [close])
 
+  const rowH = useMenuRowHeight()
+  const panelH = items.length * rowH + MENU_PAD * 2
+
   return (
-    <div className={`context-menu${closing ? ' closing' : ''}`} role="menu">
+    <GlassSurface
+      /*
+       * 中心点 = 面板底边再上移半个面板高。
+       * 底边距底部 `12px + 导航条高 + 安全区`——与改动前 `.context-menu`
+       * 手机档的 `bottom` 表达式逐字一致，改一处要同步另一处。
+       * 全程 CSS 表达式，不需要测量，因此不会出现"先错位再纠正"的闪动。
+       */
+      center={{
+        top: `calc(100% - 12px - var(--mobile-nav-height) - env(safe-area-inset-bottom) - ${panelH / 2}px)`,
+        left: '50%'
+      }}
+      /* 改动前是 left/right 各 12px，故内容宽 = 100vw − 24 − 两侧内边距 */
+      contentWidth={`calc(100vw - ${24 + MENU_PAD * 2}px)`}
+      padding={`${MENU_PAD}px`}
+      layerClassName="gs-layer--menu"
+      contentRole="menu"
+      anim={closing ? 'out' : 'in'}
+    >
       {items.map(({ label, icon: Icon, danger, onSelect }) => (
         <button
           key={label}
@@ -266,7 +301,7 @@ function OverflowMenu({
           {label}
         </button>
       ))}
-    </div>
+    </GlassSurface>
   )
 }
 

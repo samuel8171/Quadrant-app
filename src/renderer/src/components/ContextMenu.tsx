@@ -1,5 +1,7 @@
 import { ClipboardPaste, Copy, Eraser, ImagePlus, Info, Save, Scissors, Trash2 } from 'lucide-react'
 import { useClosing } from '../hooks/useClosing'
+import GlassSurface from './glass/GlassSurface'
+import { menuGeometry, useMenuRowHeight } from './glass/glassMenu'
 
 export interface ContextMenuState {
   x: number
@@ -36,11 +38,31 @@ export default function ContextMenu({ menu, canPaste, canAddPhoto, onAction, onC
     ? ITEMS.filter((item) => item.action !== 'photo' || canAddPhoto)
     : ITEMS.filter((item) => item.action === 'paste')
 
+  /*
+   * 菜单不做指针跟随（interactive 默认 false）。
+   * 库的弹性位移会让元件朝光标方向平移，而这里的每一行都是即刻生效的操作
+   * （含不可撤销的「删除」）——让点击目标在指针接近时轻微移动，是拿误触风险
+   * 换一点观感，不划算。玻璃的静态质感已经足够。
+   *
+   * 行高从 CSS 读（桌面 34 / 手机 48），不能写常量：移动端的
+   * `.context-item` 为了触摸目标另有尺寸，写死会让菜单顶部整体偏移。
+   */
+  const rowH = useMenuRowHeight()
+  const geo = menuGeometry(menu.x, menu.y, items.length, rowH)
+
   return (
-    <div className={`context-menu${closing ? ' closing' : ''}`} style={{ left: menu.x, top: menu.y }}>
+    <GlassSurface
+      center={geo.center}
+      contentWidth={geo.contentWidth}
+      padding={geo.padding}
+      layerClassName="gs-layer--menu"
+      contentRole="menu"
+      anim={closing ? 'out' : 'in'}
+    >
       {items.map(({ action, label, icon: Icon }) => (
         <button
           key={action}
+          role="menuitem"
           className={`context-item${action === 'delete' ? ' danger' : ''}`}
           disabled={action === 'paste' && !canPaste}
           onClick={() => {
@@ -52,6 +74,6 @@ export default function ContextMenu({ menu, canPaste, canAddPhoto, onAction, onC
           {label}
         </button>
       ))}
-    </div>
+    </GlassSurface>
   )
 }
