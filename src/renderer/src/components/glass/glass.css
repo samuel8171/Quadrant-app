@@ -128,6 +128,44 @@
 }
 
 /*
+ * ⭐ 视口盒（GlassModal 里 portal 的根，2026-09-26 第十四轮补）
+ *
+ * 为什么需要它：定位层是 `absolute; inset: 0`，它的包含块是**初始包含块**（布局视口），
+ * 而遮罩原来是 `position: fixed`（挂在**可见视口**）。手机浏览器里这两个视口常常**不重合**
+ * （地址栏 / 系统栏的高度差），于是"面板"和"挖掉的洞"用的是两套坐标 ——
+ * 用户看到的就是"所有面板和挖洞大小都不匹配"（其实是整体错位）。
+ * 给弹窗套一层 `fixed` 的视口盒，两者就都落在**可见视口**上，永远同一个基准。
+ *
+ * 三条边界（都实测过）：
+ *   · **材质不受影响**：`fixed` / `z-index` 只有挂在这一层自己身上时才会掐死材质，
+ *     挂在外层祖先上是安全的（第八轮就量过：定位层包在 `.modal-mask` fixed+z60 里材质照样活）。
+ *     本层是 fixed ⇒ 自带 stacking context，所以里面的 `--gs-z`（遮罩 120 / 材质板 130）
+ *     只在本层内比较，本层自己要有一个**高于手机导航条(100)** 的 z，否则整棵弹窗会被 dock 压住。
+ *   · `pointer-events: none`：只负责定位，点击仍由遮罩与面板自己接。
+ *   · 桌面档沿用同一个 z：桌面没有 dock，侧栏是 static，图像查看器是 90 —— 都低于 130，
+ *     与改动前的相对顺序一致。
+ */
+.gs-viewport {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  /*
+   * 层级要**镜像** `.gs-layer--dialog` 的 `--gs-z`（桌面 70 / 手机 130）：
+   * 本层是 fixed ⇒ 自成 stacking context，里面的遮罩(60/120)与材质板(70/130)
+   * 只在本层内比较，**整棵弹窗落在哪一层由这里的数字决定**。
+   * 取 70/130 是为了保住改动前的相对顺序：菜单(50/110) 与手机 dock(100) 在下、
+   * 桌面图像查看器(90) 在上。改 `--gs-z` 时这里要一起改。
+   */
+  z-index: 70;
+}
+
+@media (max-width: 767px) {
+  .gs-viewport {
+    z-index: 130;
+  }
+}
+
+/*
  * 零尺寸锚点 —— 这是接进本项目最关键的一处适配。
  *
  * 库的 `transform` 硬编码为 `translate(calc(-50% + …), calc(-50% + …))`
@@ -588,9 +626,17 @@
  * 六、设置面板与折射预览条
  * ========================================================================== */
 
-/* 面板较高（四个模式 + 六个滑块），手机上必须能滚 */
+/*
+ * 面板较高（四个模式 + 六个滑块），手机上必须能滚。
+ *
+ * 上限取 `min(100svh, --app-height)` 而不是只看 `--app-height`（2026-09-26 第十四轮）：
+ * `--app-height` 在 standalone 下是 **100lvh（大视口）**，它可能比**可见**高度还大
+ * （实测：把它设成 1000px 时面板上下各溢出 17px、1200px 时各 78px）——
+ * 那正是用户看到的"外观弹窗上下都被切掉"。`svh` 是"所有动态 UI 都显示时"的高度，
+ * 是三者里最小的 ⇒ 用它兜底，面板永远不会超出可见区域。
+ */
 .glass-settings .gs-content {
-  max-height: calc(var(--app-height, 100dvh) - 140px);
+  max-height: calc(min(100svh, var(--app-height, 100dvh)) - 140px);
   overflow-y: auto;
 }
 
@@ -751,11 +797,13 @@
  * 减 96px 的来历（`.gs-content` 的位置实测确认过）：库把 `padding` 加在
  * `.gs-content` **外面**的一层包装上，所以面板总高 = 内容高 + 2×24(内边距)，
  * 而面板还要在视口里上下各留 24 的呼吸位 —— 24×4 = 96。
- * 用 `--app-height` 而不是 `100dvh`，理由见 theme.css 末尾的 PWA 章节
- * （standalone 下 iOS 会把安全区从 dvh 里减掉）。
+ * 上限取 `min(100svh, --app-height)` 而不是只看 `--app-height`：
+ * `--app-height` 在 standalone 下是 100lvh（大视口），可能大于可见高度，
+ * 于是面板比屏幕还高（上下都被切）。`svh` 是三者里最小的那个，用它兜底最稳。
+ * 各档的来历见 theme.css 末尾的 PWA 章节（standalone 下 iOS 会把安全区从 dvh 里减掉）。
  */
 .gs-dialog-body {
-  max-height: calc(var(--app-height, 100dvh) - 96px);
+  max-height: calc(min(100svh, var(--app-height, 100dvh)) - 96px);
   overflow-y: auto;
   /* 内容比面板窄时不该出现横向滚动条（长英文/URL 靠换行处理） */
   overflow-x: hidden;

@@ -857,6 +857,66 @@ node tmp/mask-hole-verify.mjs --engine=chromium
 
 ---
 
+## 零之前·第十五轮：面板与"洞"错位（两套视口坐标系）+ 外观弹窗被切
+
+用户（Android Chromium、PWA）：「现在去除遮罩的地方和弹窗真正大小不匹配，请确保这块去除的地方能够自适应屏幕大小，同时外观的弹窗也保证不被遮挡居中屏幕」。
+
+两件事，两个根因，互相独立：
+
+### ① 面板与洞用的是**两套坐标系**
+
+* 面板的定位层是 `absolute; inset: 0` ⇒ 包含块是**初始包含块（布局视口）**；
+* 遮罩原来是 `position: fixed` ⇒ 基准是**可见视口**。
+
+手机浏览器里这两个视口**不重合**（地址栏 / 系统栏的高度差），于是"挖掉的洞"与"面板"整体错开 ——
+用户看到的就是"所有面板和挖洞大小都不匹配"（其实是错位，不是尺寸）。
+**本地无头浏览器复现不出来**：那里布局视口与可见视口恒等。
+
+修法：`GlassModal` 里 portal 的根再套一层 `.gs-viewport`（`position: fixed; inset: 0`），
+定位层与遮罩都在它下面；遮罩同步改成 `absolute`。这样两者**共用一个基准**，洞永远跟着面板走。
+
+三条边界都实测：
+
+| 项 | 结果 |
+|---|---|
+| 材质是否被 `fixed` 祖先掐死 | **没有**：面板材质保留率 **0.02**（基线 0.01~0.02）；背景虚化 0.02 |
+| 层级（本层是 fixed ⇒ 自成 stacking context，整棵弹窗的层级由它决定） | 桌面 70 / 手机 130，**镜像 `.gs-layer--dialog` 的 `--gs-z`**；手机 dock 区域在弹窗打开时仍然变暗 −7.0、对比度 0.72＝遮罩依旧压在 dock 之上，点 dock 区域被遮罩接住（弹窗关闭） |
+| 桌面档 | 定位层仍铺满视口、面板仍居中、遮罩 60 / 材质板 70 不变、材质保留率 0.02、背景虚化 0.09 |
+
+### ② 外观弹窗被切：限高跟着 `--app-height`（standalone 下是 `100lvh`）
+
+`--app-height` 在 standalone 下取 **100lvh（大视口）**，它可以比**可见**高度更大；
+而两个弹窗内容层的 `max-height` 原来只减 `--app-height`，于是面板比屏幕还高、上下都被切。
+实测（把它手动调大，1:1 复现用户的样子）：
+
+| `--app-height` | 修前 | 修后 |
+|---|---|---|
+| 1000px | 面板 46→891，**上下各越界 17px** | 46→828，**0 / 0** |
+| 1200px | 面板 46→952，**上下各越界 78px** | 46→828，**0 / 0** |
+
+修法：两处限高改成 `calc(min(100svh, var(--app-height, 100dvh)) - N)` ——
+`svh` 是"动态 UI 全显示时"的高度，三者里最小，用它兜底就不可能超出可见区域。
+
+### 落地验收
+
+```bash
+node tmp/hole-shape-verify.mjs --engine=chromium --only=align   # 洞 vs 面板
+node tmp/hole-shape-verify.mjs --engine=chromium --only=height  # --app-height 调大后仍不溢出
+node tmp/mobile-dialog-verify.mjs --engine=chromium|fallback    # 几何 + 交互 + 保留率
+node tmp/desktop-dialog-check.mjs --engine=chromium
+node tmp/dock-order-check.mjs 5199 chromium                     # 手机 dock 层序
+```
+
+洞与面板对齐的判据（把面板整棵子树藏起来，只留遮罩与条纹，取"锐利区"的包围盒）：
+
+```
+洞   x 23.7  y 47.7  354.0 × 778.3
+面板 x 24    y 46    354   × 782      （差 ≤2px，即边缘抗锯齿）
+对照：关掉 mask ⇒ 整屏皆糊，检测不到锐利区 ✔
+```
+
+---
+
 ## 零、库的原生材质为什么一点都画不出来（本轮根因）
 
 **症状**：弹窗、菜单、dock 全都只剩一圈发丝白边，内部完全透明。

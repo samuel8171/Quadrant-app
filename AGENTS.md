@@ -385,6 +385,19 @@ vs 把 `--gs-mask-blur` 置 0 时的 95.3（原样页面）。
 不支持 `mask` 的引擎整条声明被丢弃 ⇒ 退回"铺满整屏"，与改前一致（安全降级）。
 复现：`node tmp/mask-hole-verify.mjs --engine=fallback|chromium`。
 
+**坑 E —— 浮层与"漆"必须共用一套视口坐标系；弹窗还要套一层 fixed 的视口盒（2026-09-26 第十五轮）。**
+定位层是 `absolute; inset: 0` ⇒ 包含块是**初始包含块（布局视口）**；而遮罩原本是 `position: fixed`
+⇒ 基准是**可见视口**。手机浏览器里这两个视口不重合（地址栏/系统栏的高度差），于是"面板"与
+"挖掉的洞"整体错位 —— 用户报"所有面板和挖洞大小不匹配"（**本地无头复现不出来**：那里两个视口恒等）。
+修法：`GlassModal` portal 的根套一层 `.gs-viewport{position:fixed;inset:0}`，定位层与遮罩都在它下面，
+遮罩同步改 `absolute`；材质**不受影响**（fixed/z-index 只有挂在这一层自己身上才致命，挂外层祖先安全 ——
+实测保留率仍 0.02）。⚠️ 该层是 fixed ⇒ **自成 stacking context，整棵弹窗的层级由它自己的 z 决定**
+（桌面 70 / 手机 130，镜像 `.gs-layer--dialog` 的 `--gs-z`；手机 dock(100) 与菜单(50/110) 的相对顺序不变）。
+
+**坑 F —— 弹窗限高别只减 `--app-height`。** 它在 standalone 下是 **100lvh（大视口）**，可以比**可见**高度更大
+⇒ 面板比屏幕还高、上下都被切（实测：设 1000px 时上下各越界 17px、1200px 时各 78px）。
+两处内容层限高写成 `calc(min(100svh, var(--app-height, 100dvh)) - N)`（`svh` 最小，兜底不可能超出可见区域）。
+
 ```
 # 开发服务器
 ./node_modules/.bin/vite --config vite.web.config.ts --port 5199 --host 127.0.0.1 --strictPort
