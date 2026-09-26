@@ -77,34 +77,41 @@ export default function GlassModal({
   /*
    * 挂到 body，而不是留在调用者所在的 DOM 位置 —— 定位层的包含块必须是视口。
    * 反例与实测数据见文件头「为什么要 portal 到 body」。
+   *
+   * 外面再套一层 `.gs-viewport`（fixed; inset:0）：定位层是 absolute，
+   * 它单独挂在 body 下时包含块是**初始包含块（布局视口）**，而遮罩原来是 fixed
+   * （挂在**可见视口**）—— 手机浏览器里这两个视口不重合，面板与"挖掉的洞"就会整体错位
+   * （用户原话："所有面板和挖洞大小都不匹配"）。视口盒把两者钉在同一个基准上。
    */
   return createPortal(
-    <GlassSurface
-      center={{ top: '50%', left: '50%' }}
-      contentWidth={contentWidth}
-      padding={padding}
-      layerClassName="gs-layer--dialog"
-      panelClassName={`modal glass-host ${className}`.trim()}
-      /* 限高滚动见 glass.css §七：shrink-to-fit 的面板需要自己给出上限 */
-      contentClassName="gs-dialog-body"
-      anim={closing ? 'out' : 'in'}
-      layerPrefix={
-        <div
-          className={`modal-mask${closing ? ' closing' : ''}`}
-          /*
-           * 用「目标是不是遮罩本身」判定，而不是靠面板 stopPropagation。
-           * 定位层是 pointer-events: none、不参与命中测试，所以面板外的空白处
-           * 目标必然是遮罩自身；面板内的任何元素都不会等于 currentTarget。
-           * 这样面板的 DOM 结构怎么改都不会误关弹窗。
-           */
-          onClick={(e) => {
-            if (e.target === e.currentTarget) onMaskClick?.()
-          }}
-        />
-      }
-    >
-      {children}
-    </GlassSurface>,
+    <div className="gs-viewport">
+      <GlassSurface
+        center={{ top: '50%', left: '50%' }}
+        contentWidth={contentWidth}
+        padding={padding}
+        layerClassName="gs-layer--dialog"
+        panelClassName={`modal glass-host ${className}`.trim()}
+        /* 限高滚动见 glass.css §七：shrink-to-fit 的面板需要自己给出上限 */
+        contentClassName="gs-dialog-body"
+        anim={closing ? 'out' : 'in'}
+        layerPrefix={
+          <div
+            className={`modal-mask${closing ? ' closing' : ''}`}
+            /*
+             * 用「目标是不是遮罩本身」判定，而不是靠面板 stopPropagation。
+             * 定位层是 pointer-events: none、不参与命中测试，所以面板外的空白处
+             * 目标必然是遮罩自身；面板内的任何元素都不会等于 currentTarget。
+             * 这样面板的 DOM 结构怎么改都不会误关弹窗。
+             */
+            onClick={(e) => {
+              if (e.target === e.currentTarget) onMaskClick?.()
+            }}
+          />
+        }
+      >
+        {children}
+      </GlassSurface>
+    </div>,
     document.body
   )
 }

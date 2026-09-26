@@ -1263,7 +1263,17 @@ body {
  * 加一个修饰类（如 `.modal-mask.strong`）单独覆盖。
  */
 .modal-mask {
-  position: fixed;
+  /*
+   * ⚠️ `absolute` 而不是 `fixed`（2026-09-26 第十四轮，改之前先读这条）。
+   *
+   * 遮罩必须与"面板"处在**同一个坐标系**里，否则挖出来的洞会整体偏掉：
+   *   · 面板的定位层是 `absolute`，包含块＝初始包含块（**布局**视口）；
+   *   · 遮罩若是 `fixed`，基准是**可见**视口。
+   * 手机浏览器里这两个视口常常差一个地址栏/系统栏的高度，于是"所有面板和挖洞都不匹配"
+   * （用户原话）。现在 GlassModal 外面套了一层 `.gs-viewport`（fixed; inset:0），
+   * 两者都相对它定位 ⇒ 同一个基准，洞永远跟着面板走。
+   */
+  position: absolute;
   inset: 0;
   z-index: 60;
   background: rgba(0, 0, 0, 0.2);
