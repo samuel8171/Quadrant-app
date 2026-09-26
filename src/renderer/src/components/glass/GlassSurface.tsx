@@ -305,9 +305,25 @@ export default function GlassSurface({
     return () => el.removeEventListener('animationend', onAnimationEnd)
   }, [anim, laid])
 
-  const plateStyle = {
+  /*
+   * 玻璃几何（尺寸 + 中心）定义在**定位层**上，不是材质板自己身上。
+   *
+   * 理由：同一层里还有别的浮层要读它 —— 弹窗遮罩要用这组数在自身上挖一个
+   * "面板形状的洞"（虚化与染色只留在四周，见 theme.css 的 `.modal-mask`）。
+   * 定义在层上，两处从同一个数出发；定义在板上，遮罩就只能再算一遍，迟早算歪。
+   * 自定义属性会继承，材质板读到的值逐字不变。
+   *
+   * 中心用 `center` 原样写进来（`--gs-cx/--gs-cy`）：洞的位置必须跟着锚点走，
+   * 这样将来出现非居中的浮层（贴底抽屉之类）也不用改遮罩的样式。
+   */
+  const layerVars = {
     '--gs-panel-w': box ? `${box.w}px` : '0px',
     '--gs-panel-h': box ? `${box.h}px` : '0px',
+    '--gs-cx': center.left,
+    '--gs-cy': center.top
+  } as CSSProperties
+
+  const plateStyle = {
     ...(filterId ? { '--gs-fid': `url("#${filterId}")` } : {}),
     // 首次量到尺寸前不显示：此时材质板是 0×0，露出来只会在错误的形状上闪一下
     ...(box ? null : { visibility: 'hidden' })
@@ -379,6 +395,7 @@ export default function GlassSurface({
       ref={layerRef}
       className={`gs-layer ${layerClassName}`.trim()}
       data-glass-engine={engine}
+      style={layerVars}
     >
       {/*
        * 遮罩之类的"背景漆"：**必须在这一层之内、锚点之前**。

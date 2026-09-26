@@ -29,6 +29,34 @@ from PIL import Image
 out = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("tmp/glassMaterial")
 manifest = json.loads((out / "cases.json").read_text(encoding="utf-8"))
 
+"""
+"极弱"门槛的来历（2026-09-25 第十三轮重标，别凭直觉改回去）
+
+原先写死 1.67，是"暗色背景上材质开/关"的经验值。第十三轮给 `.modal-mask` 加了
+`backdrop-filter: blur(20px)`（面板以外的整片背景要虚化）之后，这个门槛的语义变了：
+
+  · 面板采到的背景本身**已经糊过一道** ⇒ 材质板再糊一道能拿走的对比度天然更少；
+  · 于是弹窗那两行的 Δmean 掉到 1.2~2.1，且方向从"模糊"变成"染色"主导
+    （grad 开/关几乎相同：3.74 vs 3.72；而菜单那行仍是 6.63 vs 9.88）；
+  · 同一个弹窗在中点冻结时读 1.55、不冻结时读 2.08 —— 1.67 这个门槛落在
+    同一测量的自然波动之内，太紧。
+
+所以：“空心”仍卡 0.35（那才是要拦的故障：弹窗全透明），"极弱"下调到 0.8
+（低于实测最低值 1.21，留出余量）。而"材质真的在糊"改由新增的那行正证据承担：
+`弹窗 · 遮罩不虚化（材质自身贡献）` —— 探针把 `--gs-mask-blur` 临时置 0，
+让材质板面对锐利背景，这一行不随"背景被预先糊过"漂移。
+
+**2026-09-26 第十四轮之后，这层稀释被从根上消掉了**：遮罩改成一个"与面板等大小的洞"，
+虚化与染色只留四周，面板身后的背景不再被预先糊过。于是：
+
+  * 弹窗那几行回到 3.3~7.8、最低 1.80（dock），且 `grad 开 < grad 关` 重新成立
+    （"已糊化"三个字回来了）—— 0.8 这个门槛现在留有余量；
+  * `弹窗 · 遮罩不虚化` 与 `弹窗 · 材质开 vs 关` **读数逐位相同**（都是 7.75）——
+    这正是洞生效的旁证：遮罩的虚化对面板身后已经没有任何影响。
+    该行保留作**回归哨兵** —— 哪天洞被破坏，两行会重新分叉、数值掉回 1~2。
+"""
+WEAK = 0.8
+
 fails = []
 
 
@@ -48,8 +76,8 @@ def grad(a):
 
 print(f"输出目录 {out}")
 print()
-print(f"{'场景':34s} {'Δmean':>8s} {'Δmax':>6s} {'变化像素%':>9s} {'grad开':>7s} {'grad关':>7s}  判读")
-print("-" * 104)
+print(f"{'场景':38s} {'Δmean':>8s} {'Δmax':>6s} {'变化像素%':>9s} {'grad开':>7s} {'grad关':>7s}  判读")
+print("-" * 108)
 
 for c in manifest["cases"]:
     p = c["box"]
@@ -64,7 +92,7 @@ for c in manifest["cases"]:
     if dm < 0.35:
         verdict = "❌ 材质无输出（空心）"
         fails.append(f"{c['label']}：Δmean={dm:.2f}")
-    elif dm < 1.67:
+    elif dm < WEAK:
         verdict = "⚠️ 极弱"
         fails.append(f"{c['label']}：Δmean={dm:.2f} 偏弱")
     else:
@@ -75,7 +103,7 @@ for c in manifest["cases"]:
     if frac < 3.0:
         verdict += " · 但变化像素不足 3%"
         fails.append(f"{c['label']}：变化像素只有 {frac:.1f}%")
-    print(f"{c['label']:34s} {dm:8.2f} {dmax:6d} {frac:8.1f}% {ga:7.2f} {gb:7.2f}  {verdict}")
+    print(f"{c['label']:38s} {dm:8.2f} {dmax:6d} {frac:8.1f}% {ga:7.2f} {gb:7.2f}  {verdict}")
 
 print()
 print("【几何：材质板 vs 玻璃可见面】")

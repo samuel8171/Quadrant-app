@@ -13,3 +13,6 @@ docs/.qa-*/
 .workbuddy/
 # 探针/取证脚本的临时产物（截图、中间报告等）
 tmp/
+
+# electron-vite 构建时的临时配置副本（构建被中断时会残留）
+electron.vite.config.*.mjs

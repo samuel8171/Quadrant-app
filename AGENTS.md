@@ -19,6 +19,18 @@
   - **坑 4 · message 尾部换行**：`$(git log --format=%B)` 吃掉全部行尾换行，而 commit 对象要求末尾恰有一个 `\n`（本地 3487 B vs 远端 3486 B）。改走 base64 传递。
   - **坑 5 · author/committer**：API 默认用 token 持有者 + 当前时间，sha 必不同。要显式传 `{name, email, date}` 复刻本地身份（当前提交者是 `Codex <codex@local>`）。
   - **沙箱拦子进程**：Node 里 `execFileSync('git', …)` 报 `EBUSY (-4082)`，绝对路径也一样。所以 git 操作全在 `.sh` 侧完成，结果经环境变量传给 `.mjs`。
+  - **坑 6 · `npm ci` 会挡住整个 CI**：`liquid-glass-react@1.1.1` 的 peer 是 `react >= 19`，
+    而项目在 React 18.3.1 ⇒ 干净环境里 `npm ci` 直接 ERESOLVE 失败（**网页端部署从
+    2026-09-24 起一直失败的真因**）。本地 `node_modules` 已存在所以看不出来。
+    已在仓库根用 `.npmrc` 的 `legacy-peer-deps=true` 固化。**改依赖后先想这条。**
+  - **坑 7 · API 建的"树"在按 sha 读的路径上不可靠**（`GET /git/trees/<sha>` 对**未被任何
+    提交引用**的树返回 404；blob 不受影响），而 GitHub 校验"父树的子项"就走这条读路径
+    ⇒ 父树 POST 报 `tree.sha X is not a valid tree`(422)，整条链建不起来。
+    **解法：每建完一棵树立刻用一个孤儿提交（`parents: [远端顶点]`，不进任何分支）让它
+    reachable**，父树随即 201。另外：`git ls-tree -r -t` **不列根树**（漏掉则建提交 422）；
+    密集调用会零星 500（空体）、提交接口的 422 也常是瞬态 ⇒ 都要退避重试；
+    `git diff-tree --raw` 列数不定别切列（先 `--name-only` 再 `git rev-parse HEAD:<path>`）；
+    `git ls-tree -r -t | awk` 里 sha 在 `$3`。参考实现：`tmp/push2.{sh,py}`。
 - **带斜杠的标签名会静默失败**：`git tag -a "archive/xxx" ...` 返回退出码 0，但不会在 `.git/refs/tags/` 下创建子目录，标签实际不存在。改用扁平命名（如 `archive-xxx`），或先创建再 `git verify-tag` 确认。
 - 验收标签必须按 ref 全路径查询：`git rev-parse refs/tags/<name>`，`git tag -l` 的输出偶尔滞后。
 - **切换分支后必须核验工作区完整性**：曾出现 `git checkout -b` 只更新索引、约 30 个文件未写入磁盘的情况（`git status` 显示大批 ` D`）。核验方法：`git diff HEAD --stat` 应为空；修复用 `git restore --worktree --source=HEAD .`。
@@ -295,6 +307,55 @@ node scripts/pwa-height-probe.mjs --out docs/probes/pwa-height.md
 （0.55→0.15 保留率 0.30→0.48，到 0 就是 0.66 死）。结构改对后浓度才是亮度旋钮，
 取 0.20 时弹窗板内亮度 74.4 对上菜单 76.2。
 
+> **2026-09-25 第十三轮：遮罩加上了背景虚化，两处新踩的坑。**
+
+**坑 A —— 浮层的定位层，包含块必须是视口；弹窗一律 portal 到 `document.body`。**
+`.gs-layer { position: absolute; inset: 0 }` 的尺寸与原点都来自**最近的定位祖先**，
+所以 `center: { top: '50%', left: '50%' }` 是不是屏幕中心，取决于弹窗被渲染在哪儿。
+手机档的 `aside.sidebar` 是 `position: fixed; height: 66px` 的**贴底导航条**，
+而「外观设置 / 云同步登录 / 确认框」三个弹窗恰好挂在它里面 ⇒ 定位层的实测矩形
+就是那条导航条（**12,798 377×66**），锚点落在 (200.5, **831**) 而不是 (201, **437**)，
+面板 440→**1222**（下越界 348px），内容的滚动条被推出屏外 ⇒ 用户报"下半部分全被遮住"。
+修法写在 `GlassModal` 里（`createPortal(..., document.body)`）：body 与 #root 都不是定位祖先，
+包含块退化为初始包含块（文档不滚动 ⇒ 等价视口）。层级不受影响（正 z 的遮罩 60/120、
+材质板 70/130 仍压过手机导航条 100），React 事件仍沿组件树冒泡。
+**以后往任何定位容器里塞浮层之前，先问一句：(0,0) 是不是屏幕左上角。**
+
+**坑 B —— 降级档（iOS）的几何选择器必须带 `data-glass-engine` 前缀，别和 `.modal` 平权重。**
+`.gs-fallback` 的选择器权重 (0,1,0) 与 `.modal` **相等**，而 `.modal` 里也有
+`border-radius` / `box-shadow` / `width` / `padding` ⇒ 谁赢只由打包后的源序决定。
+第十三轮就翻在这上面：`.modal.glass-host { border-radius: 0 }`（本来只为清**库面板**的老壳）
+把降级档面板与它的 `::after` 镜面描边一起变成了**直角**，用户描述为"弹窗边框有一圈方形白色"
+（实测可见面计算圆角 **0px**，应为 32px）。
+⇒ 规则：**圆角/投影只清库面板那一档**（`.modal.glass-host:not(.gs-fallback)`），
+降级档自己的几何写成 `.gs-layer[data-glass-engine='fallback'] .gs-fallback`（0,2,0）。
+判据：`getComputedStyle(face).borderRadius === '32px'` **且** `getComputedStyle(face,'::after')`
+也是 32px —— 后者才是那圈白线的直接来源。
+
+**坑 C —— 遮罩虚化会让"材质保留率"的语义漂移，别把新读数当成材质坏了。**
+`--gs-mask-blur`（默认 20px）虚化的是面板以外的整片背景，面板采到的背景因此
+**先被糊过一道**：材质板再糊一道能拿走的对比度天然更少 ⇒ 同一块板、同一组条纹，
+"材质开/关"的保留率从 0.02 抬到 0.29、Δmean 从 4+ 掉到 1.2~2.1，且方向变成染色主导
+（`grad` 开/关几乎相同）。
+判"材质有没有输出"要**在锐利背景下量**：`scripts/glass-material-probe.mjs` 为此新增一行
+`弹窗 · 遮罩不虚化（材质自身贡献）`（把 `--gs-mask-blur` 临时置 0，实测 Δmean 6.01、
+grad 3.76→5.35）；判"材质空心"的 0.35 门槛不变，"极弱"门槛据实测从 1.67 下调到 0.8
+（理由写在 `scripts/glass-material-judge.py` 的 `WEAK` 旁）。
+`tmp/mobile-dialog-verify.mjs` 也按这个口径出图（同一次运行里既量"遮罩虚化"也量"不虚化"）。
+
+**坑 D —— 遮罩铺满整屏 ⇒ 面板正后面也被糊了一道、还压暗了（2026-09-26 第十四轮：在遮罩上挖洞）。**
+遮罩是**铺满视口**的，而材质板排在它之后，所以"透过玻璃看背景"看的其实是「遮罩 × 页面」：
+对比度掉、亮度掉，折射要的高频细节也被一起糊掉（位移滤镜能搬的只有边缘梯度）。
+判据（把材质板自身材质关掉，只留遮罩）：面板内同一片条纹 std **2.2**（被遮罩糊平）
+vs 把 `--gs-mask-blur` 置 0 时的 95.3（原样页面）。
+修法是给 `.modal-mask` 加 8 层 `mask` 挖一个**与面板等大小、等圆角**的洞
+（四条带 + 四个角块，**全部 `add`**，不用 `mask-composite: subtract` —— Safari 支持面更窄），
+几何读 `.gs-layer` 上的 `--gs-panel-w/h` 与 `--gs-cx/--gs-cy`。
+结果：面板内 119.0（锐利，53 倍）、面板外仍是 3.5（照旧糊）、透射亮度 **+16~17%**、
+圆角弧外糊/弧内锐（证明是圆角洞不是包围盒）、交互不变（**`mask` 不参与命中测试**）。
+不支持 `mask` 的引擎整条声明被丢弃 ⇒ 退回"铺满整屏"，与改前一致（安全降级）。
+复现：`node tmp/mask-hole-verify.mjs --engine=fallback|chromium`。
+
 ```
 # 开发服务器
 ./node_modules/.bin/vite --config vite.web.config.ts --port 5199 --host 127.0.0.1 --strictPort
@@ -304,6 +365,12 @@ PY313="C:/Users/Samuel/AppData/Local/Programs/Python/Python313/python.exe"
 #    条纹插在被测浮层之前 + 同状态抓"材质开/关"两张 + 算保留率，见第七轮的那两组脚本
 node tmp/menu-fix-verify.mjs && "$PY313" tmp/menu-fix-judge.py        # 菜单（含层级命中测试）
 node tmp/dialog-oracle.mjs  && "$PY313" tmp/dialog-judge.py           # 弹窗（内容隐藏 + 双采样盒）
+
+# ①'' 手机端弹窗三问：居中 / 圆角 / 背景虚化（第十三轮）
+node tmp/mobile-dialog-fix.mjs --engine=fallback      # 复现 + 几何 + 祖先链 + 抓图
+node tmp/mobile-dialog-verify.mjs --engine=fallback   # 量化验收（几何断言 + 交互 + 保留率）
+node tmp/mobile-dialog-verify.mjs --engine=chromium
+node tmp/desktop-dialog-check.mjs --engine=chromium   # 桌面档复核（portal 改动也影响桌面）
 
 # ①' 系统级验收 —— 只在要"屏幕上真正长什么样"时用（会置顶窗口，别在开会时跑）
 node scripts/glass-material-screen.mjs --out tmp/glassScreen
