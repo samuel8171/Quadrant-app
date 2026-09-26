@@ -11,6 +11,35 @@
 ## git 操作（沙箱限制）
 
 - **推送必须走 `bash scripts/api-push.sh`，不要用 `git push`。** 本机 git-over-HTTPS 通道已废：直连 `github.com:443` 不通，配置代理 `127.0.0.1:7897` 是死端口，环境变量代理 `127.0.0.1:14829` 只扛得住 `ls-remote`（小请求 200 / 0.6s），push 几 MB 会 `schannel: server closed abruptly` 或 `CONNECT tunnel failed, response 502`。`api.github.com` 直连稳定，故改用 Git Data API。
+
+  > ⚠️ **2026-09-26 第十四轮订正：`scripts/api-push.sh` 不可靠，实战走下面这套两步。**
+  >
+  > api-push.sh / api-push.mjs 的"自底向上补对象"迭代器会卡在子树上传停滞
+  > （`src` 与根树 POST 422，报错只给状态码、看不出成因）。**可靠的两步是**：
+  >
+  > ```bash
+  > # ① 补 blob（差异集＝"树等价的本地基准"..HEAD）
+  > bash scripts/api-push-blobs.sh          # 内部：git diff-tree → base64 → POST /git/blobs
+  > # ② 补树 + 建提交 + 更新 ref
+  > bash scripts/api-push-trees.sh          # 内部：POST /git/trees（每建一棵立刻用孤儿提交让它
+  >                                          # reachable）+ POST /git/commits + PATCH /git/refs
+  > ```
+  >
+  > 各约 1 分 40 秒，都要后台跑。两条只有这两条是**新踩**的：
+  >
+  > * **中间提交的树也要在远端存在**：`api-push-trees.py` 只走 HEAD 那棵树，
+  >   所以要推的提交链里每个提交的树都得先建 —— 最省事的做法是
+  >   **`git reset --soft <基准> && 重新提交成一个**（本地少几个提交，内容逐字节不变）。
+  >   2026-09-26 就是这么过的：三个提交合并成一个，`POST /git/commits` 立刻 201。
+  > * **远端顶点不在本地仓库里时，`git rev-list <remote>..HEAD` 会报 unknown revision**
+  >   （API 建的提交从来没被 fetch 下来过）。改用"树等价的本地基准"来枚举提交：
+  >   `LOCAL_BASE=<本地那个树与远端顶点相同的提交> bash scripts/api-push-trees.sh`
+  >   （`remote.txt` 仍取 API 的真实顶点，作为第一个提交的 parent）。
+  >
+  > 结果预期：远端 sha 与本地**不同**（parent 不同），但**树逐字节相同** ——
+  > 用 `GET /git/trees/<sha>?recursive=1` 比对几个 blob 的 sha 即可确认
+  > （2026-09-26 实测 `theme.css` 7871882303、`GlassSurface.tsx` b2a7de823a 两边一致）。
+  > 代价是本地/远端历史持续分叉（`api-push.sh` 的祖先检查会拒推），这是已知代价。
   - 用法：`bash scripts/api-push.sh --dry-run` 校验条件，`bash scripts/api-push.sh` 实推。**约 3 分 40 秒**（逐个探测约 213 个 blob 的存在性），必须用后台方式跑，前台会超时。
   - 脚本保证远端 commit sha 与本地**逐字节一致**，不做本地改写；推前会校验「远端顶点 == 本地 HEAD 的 parent」，不一致就拒绝（防误覆盖）。
   - **坑 1 · 根树要显式补**：`git ls-tree -r -t HEAD` 不列根树（它没有 path），漏掉就 `422 Tree SHA does not exist`。
