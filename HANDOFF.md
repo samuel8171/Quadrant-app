@@ -68,7 +68,14 @@
 > 验收：**39/39 结构断言 + 两引擎 `mobile-dialog-verify` 全绿**（挖洞与面板仍逐边对齐）、
 > 两份 tsc、两套构建（产物里是 `height:max(100%,var(--app-height, 0px))`）。
 > ⚠️ **真机行为仍需你在手机上确认**：本机没有 iOS，这条只能验到结构层面。
-> **尚未提交推送。**
+>
+> **已推送**：本地 `68e2bbf` → 远端 main **`dd7be56e`**（树逐字节相同 `fbb520b6`；sha 不同是已知代价，
+> parent 指向上一轮远端顶点 `fddfa203`）。走定点两步（`BASE_COMMIT=33ba6d7` → `LOCAL_BASE=33ba6d7`，
+> 新建 10 棵树，约 2 分 17 秒）。**CI #22 与 Deploy web app #35 均 success**；
+> 线上产物 `assets/index-rICmiBb8.css` + `index-CG777Pr0.js` 与本地 `dist-web` 哈希一致，
+> 里面既有 `.gs-viewport{…height:max(100%,var(--app-height, 0px))…}`，
+> 也有 `calc(50% + (var(--safe-top, 0px) - var(--safe-bottom, 0px)) / 2)`。
+> ⇒ **手机上强制刷新（清缓存）后即可验收**。
 
 > ### ✅ 第十七轮（2026-09-27）：弹窗材质死了两天 —— 第十五轮那个 `fixed` 视口盒
 >
