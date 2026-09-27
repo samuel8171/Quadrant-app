@@ -835,6 +835,97 @@ if (moreVisible) {
   check('窄屏下目标卡的「…」按钮可见', false, '未找到可见的 .goal-more')
 }
 
+/* ------------------------------------------------------------------ 场景五 */
+console.log('\n【场景五】视口盒必须盖满「应用盒」（iOS standalone 错位的回归）')
+
+/*
+ * 背景（2026-09-27 第十八轮，用户手机截图）：
+ *   iOS standalone 下**布局视口比屏幕矮一个状态栏安全区**（本项目实测过 59~62px），
+ *   而视口盒原先是 `absolute; inset: 0` ⇒ 尺寸＝布局视口 ⇒
+ *     · 遮罩在离屏幕底 62px 处整齐结束（用户："下方一小截变透明"）；
+ *     · 面板在矮盒子里居中 ⇒ 整体高 31px，顶边钻到状态栏下面（"外观菜单上方被遮挡"）。
+ *   修法：高度取 `max(100%, --app-height)` —— `--app-height` 是这个项目"应用有多高"的
+ *   唯一真源，standalone 下等于整屏。
+ *
+ * 本机是桌面浏览器，两者天然相等、复现不出来。所以这里**把 `--app-height` 调大**
+ * （模拟"应用盒比布局视口高"这一结构事实），再断言视口盒与遮罩跟着长高。
+ */
+{
+  const vp5 = await browser.newContext({
+    viewport: { width: 390, height: 844 },
+    deviceScaleFactor: 2,
+    colorScheme: 'dark'
+  })
+  const p5 = await vp5.newPage()
+  p5.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`))
+  await p5.addInitScript(
+    ([k, v]) => window.localStorage.setItem(k, v),
+    [DATA_KEY, JSON.stringify(seedData())]
+  )
+  await p5.goto(`${base}?page=quadrant&sidebar=1&strict=0`, { waitUntil: 'load' })
+  await p5.waitForSelector('.sidebar', { timeout: 20000 })
+  await p5.click('aside.sidebar button[title="外观设置"]')
+  await p5.waitForSelector('.gs-layer--dialog .modal-mask', { timeout: 10000 })
+  await p5.waitForTimeout(600)
+
+  const readBoxes = () =>
+    p5.evaluate(() => {
+      const R = (el) => {
+        if (!el) return null
+        const b = el.getBoundingClientRect()
+        return { top: Math.round(b.top), h: Math.round(b.height), bottom: Math.round(b.bottom) }
+      }
+      return {
+        vh: window.innerHeight,
+        app: R(document.querySelector('.app')),
+        box: R(document.querySelector('.gs-viewport')),
+        mask: R(document.querySelector('.gs-layer--dialog .modal-mask')),
+        anchorTop: Math.round(
+          document.querySelector('.gs-layer--dialog .gs-anchor').getBoundingClientRect().top
+        )
+      }
+    })
+
+  const before = await readBoxes()
+  console.log(
+    `  改前（--app-height = 视口）：app ${before.app.h} / 盒 ${before.box.h} / 遮罩 ${before.mask.h}`
+  )
+
+  /* 模拟 iOS：应用盒比布局视口高一截 */
+  await p5.evaluate(() => document.documentElement.style.setProperty('--app-height', '1200px'))
+  await p5.waitForTimeout(500)
+  const after = await readBoxes()
+  console.log(
+    `  应用盒 1200 时：app ${after.app.h} / 盒 ${after.box.h}（底 ${after.box.bottom}）/ 遮罩底 ${after.mask.bottom}`
+  )
+  check(
+    '视口盒盖满应用盒（--app-height 大于视口时跟着长高）',
+    after.box.h >= after.app.h - 1 && after.box.bottom >= after.app.bottom - 1,
+    `应用盒 ${after.app.h}，视口盒 ${after.box.h}（底 ${after.box.bottom} vs ${after.app.bottom}）`
+  )
+  check(
+    '遮罩跟着盖满应用盒（否则底部会露出一条不压暗的边）',
+    after.mask.h >= after.app.h - 1 && Math.abs(after.mask.bottom - after.app.bottom) <= 2,
+    `遮罩 ${after.mask.h}（底 ${after.mask.bottom}），应用盒底 ${after.app.bottom}`
+  )
+
+  /* 安全区不对称时，面板中心要跟着平移 (safe-top − safe-bottom)/2 */
+  const centerBefore = after.anchorTop
+  await p5.evaluate(() => {
+    document.documentElement.style.setProperty('--safe-top', '60px')
+    document.documentElement.style.setProperty('--safe-bottom', '20px')
+  })
+  await p5.waitForTimeout(400)
+  const withInsets = await readBoxes()
+  const expectShift = (60 - 20) / 2
+  check(
+    '面板中心按安全区不对称量平移 (safe-top − safe-bottom)/2',
+    Math.abs(withInsets.anchorTop - centerBefore - expectShift) <= 1,
+    `实测平移 ${withInsets.anchorTop - centerBefore}px，应 ${expectShift}px`
+  )
+  await vp5.close()
+}
+
 /* ------------------------------------------------------------------ 汇总 */
 console.log('\n【错误收集】')
 const allErrors = [...errors, ...fbErrors, ...dErrors].filter(

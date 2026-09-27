@@ -44,6 +44,14 @@
   --safe-top: env(safe-area-inset-top, 0px);
 
   /*
+   * 底部安全区（Home Indicator）。与 `--safe-top` 一起构成"安全区"这一对：
+   * **玻璃弹窗要按两者的差来居中**（见 GlassModal 的 center 注释）——
+   * 只按 50% 居中时，矮屏 + 高面板会让面板顶边钻到状态栏下面（用户报过"上方被遮挡"）。
+   * 抽成变量是为了不再各处写 `env(safe-area-inset-bottom)`（本文件里已经有 5 处内联）。
+   */
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+
+  /*
    * 应用视口高度。默认 100dvh（Safari 标签页里它是唯一正确的「可视区」单位）。
    *
    * 但 PWA standalone 模式下 100dvh 是错的：iOS 会在冷启动时把

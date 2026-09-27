@@ -93,7 +93,26 @@ export default function GlassModal({
   return createPortal(
     <div className="gs-viewport">
       <GlassSurface
-        center={{ top: '50%', left: '50%' }}
+        /*
+         * 面板中心 = 视口盒中心 **再按安全区的不对称量平移**（2026-09-27 第十八轮）。
+         *
+         * 视口盒现在等于整个应用盒（含状态栏与 Home Indicator 两条安全区），
+         * 而真正"看起来居中"的是**安全区之间**那块。两者差
+         * `(safe-top − safe-bottom) / 2`：iPhone 上约 (62 − 34)/2 = +14px，
+         * 桌面两个值都是 0 ⇒ 平移量为 0，与改前逐像素相同。
+         *
+         * 为什么要补这一下：用户报过"外观菜单上方被遮挡"——矮屏 + 高面板时，
+         * 只按 50% 居中会让面板顶边钻到状态栏下面。实测（402×874，safe-top 62）：
+         * 面板高 720 时顶边原本在 y=46 < 62 ⇒ 标题被状态栏吃掉一截；
+         * 补上平移后 y≈60~77，始终在安全区之内。
+         *
+         * 写成 CSS 表达式而不是 JS 数字：安全区是**环境**决定的（`env()`），
+         * 在 JS 里再量一遍就是同一个数字的第二处定义，且横竖屏切换时要重新同步。
+         */
+        center={{
+          top: 'calc(50% + (var(--safe-top, 0px) - var(--safe-bottom, 0px)) / 2)',
+          left: '50%'
+        }}
         contentWidth={contentWidth}
         padding={padding}
         layerClassName="gs-layer--dialog"
