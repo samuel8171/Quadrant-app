@@ -273,6 +273,132 @@ check('设置面板含 6 个滑块 + 7 个模式/引擎按钮', modal.sliderCoun
 check('折射预览条内嵌了一块玻璃', modal.previewGlass, modal.previewGlass ? '已渲染' : '未找到')
 console.log(`  有效模糊读数：「${modal.effective.trim().slice(0, 60)}」`)
 
+/*
+ * ⭐ ⑤ 材质板的祖先链上不许出现"合成面"（2026-09-27 第十七轮新增）
+ *
+ * 规则：`position: fixed`（或 sticky）与**非 auto 的 `z-index`** 出现在材质板到
+ * `documentElement` 之间的**任一祖先**上，都会把那一层变成合成面；当同一层里还有
+ * 库那棵含 `mix-blend-mode` 的元素时，材质板的背景采样会被读空 —— 现象是弹窗整块透明、
+ * 只剩 0.34 的染色（保留率 0.662 = 1 − 0.34）。
+ *
+ * 这条规则第十三轮加的 `.gs-viewport{position:fixed;z-index:70}` 撞了个正着，
+ * 于是**桌面端与网页端的弹窗材质死了两天**（只有"全效果档"发病：降级档不渲染库，
+ * 没有那个前提），而当时本探针 34 项**全绿** —— 因为没有一项看过祖先链。
+ * 排查时不要只看定位层自己：**从材质板一路走到 documentElement**。
+ *
+ * 例外：`.gs-layer--dock`（手机底栏）不查。它挂在 `aside.sidebar`（手机档 fixed+z100）
+ * 里，而 sidebar 的背景是**不透明的** `rgb(26,29,35)` —— 材质板身后本来就没有可糊的东西，
+ * 保不保留都是同一个观感，属于设计取舍而不是缺陷（2026-09-27 实测，见 tmp/dbg-dock-real.mjs）。
+ */
+const ancestorAudit = await page.evaluate(() => {
+  const bad = []
+  for (const layer of document.querySelectorAll('.gs-layer')) {
+    // 例外一：手机底栏 —— 它的祖先 `aside.sidebar` 是 fixed+z100，但 sidebar 的底色是
+    // 不透明的 rgb(26,29,35)，材质板身后没有可糊的东西，属于设计取舍（见上面注释）。
+    if (layer.classList.contains('gs-layer--dock')) continue
+    // 例外二：嵌在别层里的子浮层（设置面板的折射预览条就是 `.gs-layer--preview`）。
+    // 它的祖先必然包含库根节点（带着宿主自己的 `--gs-z`），那不是可选的修饰；
+    // 而预览条贴在面板正文上，身后本来是平的，同样没有可糊的对象。
+    if (layer.parentElement?.closest('.gs-layer')) continue
+    const r = layer.getBoundingClientRect()
+    if (!r.width || !r.height) continue
+    for (let n = layer; n && n !== document.documentElement; n = n.parentElement) {
+      const cs = getComputedStyle(n)
+      const z = cs.zIndex
+      if (cs.position === 'fixed' || cs.position === 'sticky' || (z !== 'auto' && z !== '')) {
+        bad.push(
+          `${n.tagName.toLowerCase()}.${String(n.className || '').trim().split(/\s+/)[0]}(pos=${cs.position} z=${z})`
+        )
+      }
+    }
+  }
+  return bad
+})
+check(
+  '材质板祖先链上没有合成面（fixed / 非 auto 的 z-index）',
+  ancestorAudit.length === 0,
+  ancestorAudit.join(' | ') || '干净'
+)
+
+/*
+ * ⭐ ⑥ 弹窗材质**真的在糊页面**（不是只糊了自己那一面）
+ *
+ * 判据用「对比度保留率」而不是像素差：材质板的染色（0.34）本身就会产生很大的像素差，
+ * 所以"材质开/关像素差 > 0"在材质完全失效时同样成立 —— 那正是这一条能抓出缺陷、
+ * 而历史断言抓不出的原因。做法：把高频条纹插在**弹窗之前**（页面侧），
+ * 再用同一个采样盒抓"材质开/关"两张，比 std。≈0 糊平（活），≈0.66 只剩染色（死）。
+ */
+{
+  const plateSel = '.gs-layer--dialog .gs-plate'
+  await page.evaluate(() => {
+    document.getElementById('probeStripeBackdrop')?.remove()
+    const d = document.createElement('div')
+    d.id = 'probeStripeBackdrop'
+    d.style.cssText =
+      'position:fixed;inset:0;pointer-events:none;' +
+      'background:repeating-linear-gradient(0deg,#0b0f16 0 6px,#e8f1ff 6px 12px)'
+    // 插成 body 的第一个子节点：树序在页面与弹窗之前 ⇒ 它才是"身后的东西"
+    document.body.insertBefore(d, document.body.firstChild)
+    const st = document.createElement('style')
+    st.id = 'probeRetentionCss'
+    // 页面容器自带不透明底色，会盖住条纹；只在探针里临时让开，测完立刻恢复
+    st.textContent =
+      '.quadrant-viewport{background:transparent!important}' +
+      '.gs-layer--dialog .gs-content{visibility:hidden!important}'
+    document.head.appendChild(st)
+  })
+  await page.waitForTimeout(420)
+  const stdOf = async (clip) => {
+    const b64 = (await page.screenshot({ clip })).toString('base64')
+    return page.evaluate(async (b) => {
+      const bmp = await createImageBitmap(await (await fetch('data:image/png;base64,' + b)).blob())
+      const g = new OffscreenCanvas(bmp.width, bmp.height).getContext('2d')
+      g.drawImage(bmp, 0, 0)
+      const d = g.getImageData(0, 0, bmp.width, bmp.height).data
+      let s = 0
+      let s2 = 0
+      const n = bmp.width * bmp.height
+      for (let i = 0; i < d.length; i += 4) {
+        const v = (d[i] + d[i + 1] + d[i + 2]) / 3
+        s += v
+        s2 += v * v
+      }
+      const mean = s / n
+      return +Math.sqrt(Math.max(0, s2 / n - mean * mean)).toFixed(2)
+    }, b64)
+  }
+  const clip = await page.evaluate((sel) => {
+    const b = document.querySelector(sel).getBoundingClientRect()
+    return {
+      x: Math.round(b.x) + 10,
+      y: Math.round(b.y) + 10,
+      width: Math.round(b.width) - 20,
+      height: Math.round(b.height) - 20
+    }
+  }, plateSel)
+  const onStd = await stdOf(clip)
+  await page.evaluate((sel) => {
+    const p = document.querySelector(sel)
+    p.dataset.probeBackup = p.style.cssText
+    p.style.setProperty('backdrop-filter', 'none', 'important')
+    p.style.setProperty('-webkit-backdrop-filter', 'none', 'important')
+    p.style.setProperty('background', 'transparent', 'important')
+  }, plateSel)
+  await page.waitForTimeout(360)
+  const offStd = await stdOf(clip)
+  await page.evaluate((sel) => {
+    const p = document.querySelector(sel)
+    p.style.cssText = p.dataset.probeBackup || ''
+    p.removeAttribute('data-probeBackup')
+    document.getElementById('probeStripeBackdrop')?.remove()
+    document.getElementById('probeRetentionCss')?.remove()
+  }, plateSel)
+  await page.waitForTimeout(300)
+  const retention = offStd ? onStd / offStd : 1
+  console.log(`  弹窗材质保留率 ${retention.toFixed(3)}（材质开 std ${onStd} / 关 std ${offStd}）`)
+  check('弹窗材质真的糊住了身后页面（保留率 < 0.35）', retention < 0.35, `实测 ${retention.toFixed(3)}`)
+}
+
 await page.screenshot({ path: `${outDir}/02-settings-chromium.png` })
 
 // ---- 拖动位移强度滑块，确认即时生效且不报错

@@ -184,6 +184,12 @@ for f in GEOS:
 print()
 print("【设置要真的接得上】")
 for w in manifest.get("wiring", []):
+    if "refractOk" in w:
+        ok = w.get("refractOk") is True
+        print(f"  材质链里不许出现 url(（backdrop-filter 只允许 blur/saturate）：{'✅' if ok else '❌'} {w}")
+        if not ok:
+            fails.append("backdrop-filter 里出现了 url( —— 它会把 blur() 的结果整个替换掉（模糊消失）")
+        continue
     ok = w.get("varOk") and w.get("bdfOk")
     print(f"  模糊量滑块 → --gs-blur 与材质板 backdrop-filter 同步：{'✅' if ok else '❌'} {w}")
     if not ok:
@@ -197,14 +203,21 @@ print()
 print("【本节能证明什么、不能证明什么（2026-09-25 第七轮重写，旧文案已作废）】")
 print("  能证明：材质板挂在正确的位置、几何与可见面逐边重合、染色与圆角生效、")
 print("          定位层是 absolute 且 z-index:auto（这两条一破材质就死）、设置滑块真的驱动 --gs-blur。")
+print("  ⚠️ 第十七轮更正：**这条规则管整条祖先链**，不止定位层自己 ——")
+print("     `fixed` / 非 auto 的 `z-index` 出现在材质板到 body 之间的任一祖先上，材质都会只剩染色。")
 print("  **不能**证明磨砂（backdrop-filter）真的画出来了 —— 本脚本量的是结构。")
 print("  ⚠️ 旧文案曾说「CDP 截图不忠实地渲染 backdrop-filter，只能用真实屏幕抓图」，")
 print("     第七轮已推翻：**页面级** `page.screenshot({ clip })` 是忠实的")
 print("     （实测材质开 std 0.4 / 材质关 119.0，与真实屏幕同向同量级）。")
 print("     唯一不可信的是**元素级** `locator().screenshot()`（连 opacity:0.95 正对照都判穿透）。")
-print("  量磨砂请用「保留率」那套（条纹插在浮层之前 + 同状态开/关两张 + 两个采样盒）：")
-print("     node tmp/menu-fix-verify.mjs      # 菜单")
-print("     node tmp/dialog-final-verify.mjs  # 弹窗（含交互与手机档几何）")
+print("  量磨砂请用「保留率」那套（条纹插在**页面侧、浮层之前** + 同状态开/关两张）：")
+print("     node scripts/liquid-glass-probe.mjs   # ⭐ 已内置：弹窗材质保留率 < 0.35（第十七轮）")
+print("     node tmp/mobile-dialog-verify.mjs --engine=chromium|fallback")
+print("  判据：**≈0.66 正好 = 1 − 染色 0.34 ⇒ 只剩染色（死）**；≤0.2 才算活。")
+print("  ⚠️ 第十七轮补充两条口径（都踩过）：")
+print("     · 「材质开/关像素差 > 0」抓不出缺陷 —— 染色本身就会产生大量像素差；")
+print("     · 条纹插在**同一层里**只证明「材质板能糊自己这一面」，证明不了它能糊身后的页面")
+print("       （手机 dock 就栽在这条上：0.01 vs 0.997）。")
 print("  要「屏幕上真正长什么样」才用系统级抓图：")
 print("     node scripts/glass-material-screen.mjs && python scripts/glass-material-screen.py")
 print()

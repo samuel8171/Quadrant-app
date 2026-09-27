@@ -30,6 +30,35 @@ export const MENU_ROW_FALLBACK = 34
 export const MENU_PAD = 6
 /** 菜单外宽。各断点一致，故不需要读 CSS */
 export const MENU_WIDTH = 176
+/** 菜单与屏幕边缘之间至少留出的空隙（硬约束的余量） */
+export const MENU_MARGIN = 8
+
+/**
+ * 把某个轴上"玻璃体中心点"的位置写成一个**结构上不可能越界**的 CSS 表达式。
+ *
+ * ---------- 为什么不在 TS 里算好数字 ----------
+ *
+ * 菜单的包含块是定位层 `.gs-layer`（`absolute; inset:0`），也就是**初始包含块＝视口**；
+ * 而 `%` 在 top/left 上分别按包含块的高 / 宽解析。所以 `100%` 字面上就是视口的那条边 ——
+ * 拿它当上下限，无论视口多小、指针多靠边，玻璃盒都出不去。
+ *
+ * 换成 TS 读 `innerWidth/innerHeight` 算数字有三个代价：
+ * ① 同一个"视口尺寸"出现第二处定义（与 CSS 分叉）；② 手机浏览器里 `innerWidth`
+ * 给的是**布局视口**，而这条表达式跟随的是它自己所在的包含块，天然一致；
+ * ③ 测量式做法要在渲染后再纠正，必然多一帧（"先错位再纠正"的闪动）。
+ *
+ * 次序写成 `max(下限, min(目标, 上限))`：当视口比玻璃盒还小时，
+ * 结果是"贴左边 / 贴上边"，玻璃盒宁可溢出也**不会**被挤到负坐标上消失。
+ *
+ * @param target 该轴上的目标中心位置（任意 CSS 长度表达式的字符串）
+ * @param half   玻璃体在该轴上的半尺寸
+ * @param margin 与边缘的最小间隙
+ */
+export function clampMenuCenter(target: string, half: number, margin = MENU_MARGIN): string {
+  const lo = `${(half + margin).toFixed(1)}px`
+  const hi = `calc(100% - ${(half + margin).toFixed(1)}px)`
+  return `max(${lo}, min(${target}, ${hi}))`
+}
 
 /**
  * 读回当前断点下的菜单行高。
@@ -64,6 +93,12 @@ export interface MenuGeometry {
 
 /**
  * 由「鼠标位置 + 行数 + 行高」推出玻璃体的中心点与内容宽。
+ *
+ * 两个轴都过 `clampMenuCenter`：菜单是**指针跟随**的，指针完全可能落在屏幕右下角，
+ * 而菜单尺寸与指针位置无关 —— 不钳制就一定有越界（实测：锚点 (259,767) 的 3 项菜单
+ * 右边界 435 > 视口宽 402、下边界 875 > 视口高 874）。
+ * 钳制放在这里而不是调用点：三处菜单都从这个函数拿几何，改一处即全部生效。
+ *
  * @param x 菜单左上角目标位置的视口横坐标
  * @param y 菜单左上角目标位置的视口纵坐标
  * @param rows 菜单项数量
@@ -71,9 +106,13 @@ export interface MenuGeometry {
  */
 export function menuGeometry(x: number, y: number, rows: number, rowH: number): MenuGeometry {
   const height = rows * rowH + MENU_PAD * 2
+  const width = MENU_WIDTH
   return {
-    center: { top: `${y + height / 2}px`, left: `${x + MENU_WIDTH / 2}px` },
-    contentWidth: `${MENU_WIDTH - MENU_PAD * 2}px`,
+    center: {
+      top: clampMenuCenter(`${(y + height / 2).toFixed(1)}px`, height / 2),
+      left: clampMenuCenter(`${(x + width / 2).toFixed(1)}px`, width / 2)
+    },
+    contentWidth: `${width - MENU_PAD * 2}px`,
     padding: `${MENU_PAD}px`
   }
 }

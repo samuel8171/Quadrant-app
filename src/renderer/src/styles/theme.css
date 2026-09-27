@@ -2683,6 +2683,32 @@ body {
   }
 }
 
+/*
+ * 材质板专用的淡入淡出（2026-09-27 第十六轮）。
+ *
+ * 它和 pop-in / pop-out 的曲线、时长完全一致，**只少一个 `transform`** ——
+ * 材质板带 `backdrop-filter`，对它逐帧改缩放会让浏览器每帧重算背景采样，
+ * 这是移动端玻璃卡顿的典型来源；纯 alpha 变化则只是复用已算好的结果。
+ * 为什么"少一个 transform"仍要单独一份关键帧，见 glass.css §三。
+ */
+@keyframes plate-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes plate-fade-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
 /* ---------- week / day horizontal shift ---------- */
 
 .week-slide-left {

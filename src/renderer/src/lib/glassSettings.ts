@@ -86,7 +86,7 @@ export const GLASS_SLIDERS: GlassSlider[] = [
     max: 200,
     step: 1,
     suffix: '',
-    hint: '边缘把身后像素搬运的幅度，折射感的来源。0 等于关掉折射。',
+    hint: '折射位移。⚠️ 目前不接线：Chromium 的 backdrop-filter 一旦挂上位移滤镜，会把前面的模糊整个替换掉（桌面端弹窗变透明就是这个原因），所以材质暂时只有「模糊 + 饱和」。',
     chromiumOnly: true
   },
   {
@@ -114,7 +114,7 @@ export const GLASS_SLIDERS: GlassSlider[] = [
     max: 10,
     step: 0.1,
     suffix: '',
-    hint: '边缘的 RGB 分离。仅在折射明显时才看得出来。',
+    hint: '边缘的 RGB 分离。与「位移强度」同一条链，目前同样未接线。',
     chromiumOnly: true
   },
   {

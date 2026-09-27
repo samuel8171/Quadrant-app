@@ -292,6 +292,22 @@ export default function GlassSurface({
    */
   useLayoutEffect(() => {
     if (anim !== 'in' || !laid) return
+    /*
+     * ⭐ 只有 Chromium 档需要这一下（2026-09-27 第十六轮补的条件）。
+     *
+     * 派发 `window.resize` 的唯一目的是纠正**库**内部那份被 scale(0.94) 污染的
+     * `glassSize`（见上）。降级档根本不渲染库、没有 glassSize 要纠正，
+     * 于是这一发 `resize` 的全部作用只剩下：让全应用每一个 resize 监听在
+     * "玻璃刚落地"这一帧集中跑一遍 —— 其中 `useMenuRowHeight` 要读计算样式、
+     * 本组件的 `laid` 要 `getClientRects()`，两者都会**强制整页布局**；
+     * 手机档还有 `PresetPanel` / `ReviewPage` 的处理器。它们恰好落在入场动画
+     * 结束的那一瞬间，是"浮层出现时卡一下"最可疑的来源。
+     *
+     * 判定用 `engine` 而不是"库里有没有 svg"：引擎分流是这里唯一的真源
+     * （`.gs-layer[data-glass-engine]` 与它同源），不会随渲染时机漂移。
+     */
+    if (engine !== 'chromium') return
+
     // 显式取 HTMLElement：`Element` 的事件表里没有 `animationend`
     const el = hostRef.current?.querySelector<HTMLElement>('.gs-anim')
     if (!el) return
@@ -303,7 +319,7 @@ export default function GlassSurface({
 
     el.addEventListener('animationend', onAnimationEnd)
     return () => el.removeEventListener('animationend', onAnimationEnd)
-  }, [anim, laid])
+  }, [anim, laid, engine])
 
   /*
    * 玻璃几何（尺寸 + 中心）定义在**定位层**上，不是材质板自己身上。

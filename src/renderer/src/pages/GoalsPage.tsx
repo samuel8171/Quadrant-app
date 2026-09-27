@@ -14,7 +14,7 @@ import {
 import type { Goal, Subtask } from '../../../shared/types'
 import ConfirmDialog from '../components/ConfirmDialog'
 import GlassSurface from '../components/glass/GlassSurface'
-import { MENU_PAD, useMenuRowHeight } from '../components/glass/glassMenu'
+import { clampMenuCenter, MENU_PAD, useMenuRowHeight } from '../components/glass/glassMenu'
 import GoalDetailDialog from '../components/GoalDetailDialog'
 import { useClosing } from '../hooks/useClosing'
 import {
@@ -275,9 +275,16 @@ function OverflowMenu({
        * 底边距底部 `12px + 导航条高 + 安全区`——与改动前 `.context-menu`
        * 手机档的 `bottom` 表达式逐字一致，改一处要同步另一处。
        * 全程 CSS 表达式，不需要测量，因此不会出现"先错位再纠正"的闪动。
+       *
+       * 外面再套一层 `clampMenuCenter`：这条例子里 `panelH/2` 是"往上退"的量，
+       * 菜单项一多（或横屏这类矮视口）就会退到屏幕上方之外 —— 它的底边约束是硬的，
+       * 但**上边不是**。钳制后最多与顶部保持 8px 间距，绝不会有一半菜单跑出屏幕。
        */
       center={{
-        top: `calc(100% - 12px - var(--mobile-nav-height) - env(safe-area-inset-bottom) - ${panelH / 2}px)`,
+        top: clampMenuCenter(
+          `calc(100% - 12px - var(--mobile-nav-height) - env(safe-area-inset-bottom) - ${panelH / 2}px)`,
+          panelH / 2
+        ),
         left: '50%'
       }}
       /* 改动前是 left/right 各 12px，故内容宽 = 100vw − 24 − 两侧内边距 */

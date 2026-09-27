@@ -235,6 +235,25 @@ const browser = await chromium.launch({ executablePath, headless: true })
 
   const info = await page.evaluate(SAMPLE, '.gs-layer--dialog .gs-plate')
   printSample('· 弹窗材质板（打开后 430ms）：', info)
+  /*
+   * ⭐ 材质链里**不许出现 `url(`** —— 反向断言（2026-09-27 第十六轮改成这个方向）。
+   *
+   * 这条原来是反着写的（"必须含 url(，证明折射接线生效"），而它此前**只存在于文档里、
+   * 脚本里没有实现**，所以没人发现那条规则其实被一段写坏了的注释整条丢弃了。
+   * 等真把规则修活之后，桌面端立刻报"弹窗整块变透明、模糊没了"：
+   * `backdrop-filter` 里的 `url(#滤镜)` 是一张完整的滤镜图，而其图不消费 `SourceGraphic`
+   * （库的滤镜从 `feImage` 起手）⇒ 它的输出**替换**掉前面 `blur()` 的结果。
+   *
+   * 所以现在守的是反方向：材质板只允许 `blur() saturate()`，
+   * 一旦有人再把 `url()` 接回来，这一行会立刻转红。
+   *
+   * （写这段注释时同样踩过一次：正文里不能出现注释终止符本身。）
+   */
+  wiring.push({
+    refractOk: !/url\(/.test(info.backdropFilter),
+    refractBdf: info.backdropFilter,
+    refractClass: info.hasRefractClass
+  })
   // 再等一会儿看尺寸会不会收敛（ResizeObserver 是否跟上了后续布局变化）
   await page.waitForTimeout(1200)
   const later = await page.evaluate(SAMPLE, '.gs-layer--dialog .gs-plate')
