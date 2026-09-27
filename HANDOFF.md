@@ -61,7 +61,15 @@
 > `.gs-viewport{position:absolute}`）、结构断言 **36/36**、材质判据全绿、
 > 两引擎 `mobile-dialog-verify` 全绿；桌面端真实 Electron（Chromium 126）修前 0.662 → 修后 **0.074**；
 > 并在真实 Electron 里复刻了用户那张"事件详细信息"截图，对照图
-> `tmp/deskDiag/dialog-before-after.png`。**尚未提交推送。**
+> `tmp/deskDiag/dialog-before-after.png`（已收进 `docs/probes/liquid-glass-shots/`）。
+>
+> **已推送**：本地 `ca7abc2` → 远端 main **`9802e447`**（树逐字节相同 `727ec2a3`；
+> sha 不同是已知代价，parent 指向远端旧顶点 `252e2ab6`）。
+> 走的是定点两步：`BASE_COMMIT=3dd3e39 bash scripts/api-push-blobs.sh` →
+> `LOCAL_BASE=3dd3e39 bash scripts/api-push-trees.sh`（新建 14 棵树）。
+> **CI #20 与 Deploy web app #33 均 success**；线上产物已换成
+> `assets/index-1-A-KKbN.css`（与本地 `dist-web` 哈希一致），里面有
+> `.gs-viewport{position:absolute;…}`、**0 处** `position:fixed`。
 >
 > ⚠️ 顺带查明并**判定为不需要修**的一项：手机 dock 材质板保留率 0.997（两档都死），
 > 但它挂在 `aside.sidebar`（手机档 fixed + z100）里，而 sidebar 底色是**不透明**的
