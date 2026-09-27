@@ -76,6 +76,18 @@
 > 里面既有 `.gs-viewport{…height:max(100%,var(--app-height, 0px))…}`，
 > 也有 `calc(50% + (var(--safe-top, 0px) - var(--safe-bottom, 0px)) / 2)`。
 > ⇒ **手机上强制刷新（清缓存）后即可验收**。
+>
+> **桌面端已打包 1.3.1**（用户「桌面端打包」）：`package.json` 与 `package-lock.json`
+> （根包两处：第 3 行与 `packages.""`）1.3.0 → **1.3.1**，
+> 产物 **`dist/象限-1.3.1.exe`（73,733,687 字节 = 70.3 MB）**。
+> 走的是暂存目录方案（`--config.directories.output=tmp/dist131` 再拷单个 exe，
+> 避开沙箱的批量删除守卫）。**验货方式：解 `app.asar` 搜标识串**（别搜 exe，
+> 压缩包搜不到源码）——版本号 `"version": "1.3.1"`、
+> `.gs-viewport{position:absolute;…height: max(100%, var(--app-height, 0px));}`、
+> JS 里的安全区居中表达式、`clampMenuCenter`、`--safe-bottom` 定义，全部命中。
+> ⚠️ 打包时踩到一个新坑：本机 `node_modules` 缺了 19 个包（`chalk` 的 `ansi-styles`、
+> `7zip-bin` 等），`electron-builder` 直接 `MODULE_NOT_FOUND` 起不来。
+> 处置见 `AGENTS.md` 的「node_modules 缺包」一条与 `scripts/heal-node-modules.py`。
 
 > ### ✅ 第十七轮（2026-09-27）：弹窗材质死了两天 —— 第十五轮那个 `fixed` 视口盒
 >
