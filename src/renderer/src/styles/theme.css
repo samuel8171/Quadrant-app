@@ -3539,6 +3539,24 @@ body {
   border-radius: var(--radius-md);
 }
 
+.settle-backfill-item {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.settle-backfill-item + .settle-backfill-item {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--border);
+}
+
+.settle-backfill-date {
+  margin-right: 6px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
 .settle-backfill-q {
   margin: 0;
   font-size: 13px;

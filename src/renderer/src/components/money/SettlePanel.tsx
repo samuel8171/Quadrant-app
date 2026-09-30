@@ -10,9 +10,9 @@ import type {
 import { addDays, dateKey, parseDateKey } from '../../../../shared/dateKey'
 import {
   costOfEntry,
-  latestOpenNight,
   leisureDelta,
   nightMinutesOf,
+  openNightsBefore,
   pendingDays
 } from '../../../../shared/money'
 import { QUADRANT_META } from '../../lib/quadrantMath'
@@ -24,6 +24,10 @@ import { useAppStore } from '../../state/appStore'
  * 每一天依次问三件事：① 计划内事件逐条「做了吗 / 实际多久」；② 有没有计划外的事；
  * ③ 深夜补记（见 `DayForm` 与 `confirmNight`）。每条实时显示它产生的 TC / LT，
  * 让规则当场可解释，而不是结算完给一个黑箱数字。
+ *
+ * ③ 补记**一次问遍所有**早于当天的未收尾深夜（最早优先），而不是只问最新的那一个：
+ * 只挑最新会让更旧的那个永远选不中、把它所在的那一周永久堵死。判定住在
+ * `openNightsBefore`（shared 纯函数），面板只负责逐条渲染与逐条清理。
  *
  * 面板**不玻璃化**（不加 `.gs-*`、不加 `backdrop-filter`）：普通面板色 + `var(--border)`
  * 已经够用，而每新增一个玻璃材质宿主都要重新满足「祖先链上不能有 fixed / sticky /
@@ -138,16 +142,31 @@ function buildRows(day: LedgerDay | undefined, events: WeekEvent[]): Row[] {
 /** 有符号数字的显示：奖励 / 惩罚都要能一眼看出方向（0 不带符号）。 */
 const signed = (value: number): string => `${value > 0 ? '+' : ''}${value}`
 
+/**
+ * 深夜补记的问句。目标就是日历上的昨天时用「昨夜」（常态），隔了空洞则点名日期，
+ * 免得用户以为问的是昨天。
+ */
+function nightQuestion(date: string, openDate: string): string {
+  const isYesterday = openDate === dateKey(addDays(parseDateKey(date), -1))
+  return isYesterday
+    ? '昨夜 23:30 之后还在做事吗？（昨天 23:20 结算时深夜窗口还没开）'
+    : `${openDate} 23:30 之后还在做事吗？（那天 23:20 结算时深夜窗口还没开）`
+}
+
+/** 某一天深夜问的默认答案：没做事、持续到 01:00（仅在用户改选「是」后生效）。 */
+const DEFAULT_NIGHT_ANSWER = { worked: false, endMin: 60 }
+
 interface DayFormProps {
   date: string
   day: LedgerDay | undefined
   events: WeekEvent[]
   config: MoneyConfig
   /**
-   * 最近一个「已结算、但仍挂着 `nightPending`」的日账本（必须早于 `date`）。
-   * **不要求它是日历上的昨天** —— 见 `latestOpenNight` 的说明。
+   * **所有**早于 `date` 的「已结算、但仍挂着 `nightPending`」的日账本，最早优先。
+   * 一次结算要把它们逐条问完、逐条清掉 —— 只问最新的那一个会让更旧的永远选不中
+   * （见 `openNightsBefore` 的说明）。空数组表示没有待补记的深夜。
    */
-  openNight: LedgerDay | undefined
+  openNights: LedgerDay[]
   total: number
   onCommitted: () => void
 }
@@ -157,7 +176,7 @@ function DayForm({
   day,
   events,
   config,
-  openNight,
+  openNights,
   total,
   onCommitted
 }: DayFormProps): JSX.Element {
@@ -170,14 +189,11 @@ function DayForm({
   const [newTitle, setNewTitle] = useState('')
   const [newMin, setNewMin] = useState('30')
   const [newQuadrant, setNewQuadrant] = useState<Quadrant>(2)
-  const [nightWorked, setNightWorked] = useState(false)
-  const [nightEndMin, setNightEndMin] = useState(60)
+  // 每个未收尾深夜各自一份答案（key = 那一天自己的日期），默认「否」。
+  const [nightAnswers, setNightAnswers] = useState<
+    Record<string, { worked: boolean; endMin: number }>
+  >(() => Object.fromEntries(openNights.map((night) => [night.date, DEFAULT_NIGHT_ANSWER])))
 
-  const needsBackfill = openNight !== undefined
-  // 补记目标的日期（无目标时为空串，仅用于文案）。
-  const openDate = openNight?.date ?? ''
-  // 补记目标是不是日历上的昨天 —— 只影响文案：常态是昨天（夜里问昨夜），隔了空洞才点名日期。
-  const openIsYesterday = openDate === dateKey(addDays(parseDateKey(date), -1))
   const needed = rows.filter((r) => r.kind === 'planned')
   const extra = rows.filter((r) => r.kind === 'unplanned')
   const totalCost = rows.reduce((sum, r) => sum + rowCost(r, config), 0)
@@ -185,6 +201,16 @@ function DayForm({
 
   const patchRow = (id: string, patch: Partial<Row>): void => {
     setRows((rs) => rs.map((r) => (r.id === id ? { ...r, ...patch } : r)))
+  }
+
+  const patchNightAnswer = (
+    openDate: string,
+    patch: Partial<{ worked: boolean; endMin: number }>
+  ): void => {
+    setNightAnswers((answers) => ({
+      ...answers,
+      [openDate]: { ...(answers[openDate] ?? DEFAULT_NIGHT_ANSWER), ...patch }
+    }))
   }
 
   const addUnplanned = (): void => {
@@ -210,13 +236,20 @@ function DayForm({
     setNewTitle('')
   }
 
-  /** 回答「最近一个未收尾的深夜」那一问（若有）；radio 默认「否」，由用户改。 */
-  const answerOpenNight = (): void => {
-    if (!openNight) return
-    confirmNight(openNight.date, {
-      worked: nightWorked,
-      endMin: nightWorked ? nightEndMin : undefined
-    })
+  /**
+   * 回答**所有**未收尾的深夜那一问（最早优先），逐条清掉各自的 `nightPending`。
+   *
+   * 从最早开始答是有意义的：`confirmNight` 会重算那一天的快照，而更旧的那一天可能是
+   * `carriedOverdraft` 依赖的前一日；先答旧的，后答的那一天读到的就是已经落定的前一日。
+   */
+  const answerOpenNights = (): void => {
+    for (const night of openNights) {
+      const answer = nightAnswers[night.date] ?? DEFAULT_NIGHT_ANSWER
+      confirmNight(night.date, {
+        worked: answer.worked,
+        endMin: answer.worked ? answer.endMin : undefined
+      })
+    }
   }
 
   const commitEntries = (entries: LedgerEntry[]): void => {
@@ -226,9 +259,9 @@ function DayForm({
      * `commitDaySettlement` 结算完会立刻补一次周结算，而周结算只读各日的冻结快照。
      * 若先结算当天、再补记那一天的深夜，被补记那天的 spentTC 是在本周已经冻结之后才变的 ——
      * 那一周的账会永久少掉这笔深夜做事（周快照一经写入不许改）。
-     * 反过来先补记，本周的账在滚动那一刻就已经是最终值。
+     * 反过来先补记（所有未收尾的深夜都先答完），本周的账在滚动那一刻就已经是最终值。
      */
-    answerOpenNight()
+    answerOpenNights()
     commitDaySettlement(date, entries)
     onCommitted()
   }
@@ -245,11 +278,12 @@ function DayForm({
    * 于是「把一周每天都清空」也解不开 —— 最后一天始终挂着 `nightPending`。现在补上最后一步：
    * 一天既然什么都没做，当晚 23:30 之后也不可能有做事，于是对**当天自己**再调
    * `confirmNight(date, { worked: false })`，把这一天的深夜问记成「否」、清掉 `nightPending`。
+   * 更早的未收尾深夜同样先由 `answerOpenNights` 逐条答掉（它们也在 ③ 里被问过）。
    * 面板里临时录入的计划外条目一并丢弃 —— 那天什么都没做，也就没有计划外的事。
    */
   const commitNothingDone = (): void => {
     const entries = needed.map((r) => toEntry({ ...r, done: false, actualMin: 0 }, config))
-    answerOpenNight()
+    answerOpenNights()
     commitDaySettlement(date, entries)
     confirmNight(date, { worked: false })
     onCommitted()
@@ -363,45 +397,59 @@ function DayForm({
         </div>
       </div>
 
-      {needsBackfill && (
+      {openNights.length > 0 && (
         <div className="settle-section settle-backfill">
-          <h3 className="settle-section-title">③ 补记{openIsYesterday ? '昨天' : ` ${openDate}`}</h3>
-          <p className="settle-backfill-q">
-            {openIsYesterday
-              ? '昨夜 23:30 之后还在做事吗？（昨天 23:20 结算时深夜窗口还没开）'
-              : `${openDate} 23:30 之后还在做事吗？（那天 23:20 结算时深夜窗口还没开）`}
-          </p>
-          <div className="settle-backfill-answer">
-            <label>
-              <input
-                type="radio"
-                name={`night-${date}`}
-                checked={!nightWorked}
-                onChange={() => setNightWorked(false)}
-              />
-              否
-            </label>
-            <label>
-              <input
-                type="radio"
-                name={`night-${date}`}
-                checked={nightWorked}
-                onChange={() => setNightWorked(true)}
-              />
-              是，持续到
-            </label>
-            <select
-              value={nightEndMin}
-              disabled={!nightWorked}
-              onChange={(e) => setNightEndMin(Number(e.target.value))}
-            >
-              {[0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330, 360].map((m) => (
-                <option key={m} value={m}>
-                  {String(Math.floor(m / 60)).padStart(2, '0')}:{String(m % 60).padStart(2, '0')}
-                </option>
-              ))}
-            </select>
-          </div>
+          <h3 className="settle-section-title">
+            ③ 补记
+            {openNights.length > 1 ? ` ${openNights.length} 个深夜（最早优先）` : ''}
+          </h3>
+          {openNights.map((night) => {
+            const answer = nightAnswers[night.date] ?? DEFAULT_NIGHT_ANSWER
+            return (
+              <div key={night.date} className="settle-backfill-item">
+                <p className="settle-backfill-q">
+                  {openNights.length > 1 && (
+                    <b className="settle-backfill-date">{night.date}</b>
+                  )}
+                  {nightQuestion(date, night.date)}
+                </p>
+                <div className="settle-backfill-answer">
+                  <label>
+                    <input
+                      type="radio"
+                      name={`night-${date}-${night.date}`}
+                      checked={!answer.worked}
+                      onChange={() => patchNightAnswer(night.date, { worked: false })}
+                    />
+                    否
+                  </label>
+                  <label>
+                    <input
+                      type="radio"
+                      name={`night-${date}-${night.date}`}
+                      checked={answer.worked}
+                      onChange={() => patchNightAnswer(night.date, { worked: true })}
+                    />
+                    是，持续到
+                  </label>
+                  <select
+                    value={answer.endMin}
+                    disabled={!answer.worked}
+                    onChange={(e) =>
+                      patchNightAnswer(night.date, { endMin: Number(e.target.value) })
+                    }
+                  >
+                    {[0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330, 360].map((m) => (
+                      <option key={m} value={m}>
+                        {String(Math.floor(m / 60)).padStart(2, '0')}:
+                        {String(m % 60).padStart(2, '0')}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            )
+          })}
         </div>
       )}
 
@@ -442,7 +490,8 @@ export default function SettlePanel({ onClose }: Props): JSX.Element | null {
   const date = pending[0]
   const day = money.days.find((d) => d.date === date)
   const events = weekEvents.filter((event) => event.date === date)
-  const openNight = latestOpenNight(money.days, date)
+  // 所有早于这一天的未收尾深夜，最早优先 —— 一次结算全部问完（不是只问最新的那一个）。
+  const openNights = openNightsBefore(money.days, date)
 
   const handleCommitted = (): void => {
     const fresh = useAppStore.getState().data.money
@@ -469,7 +518,7 @@ export default function SettlePanel({ onClose }: Props): JSX.Element | null {
           day={day}
           events={events}
           config={money.config}
-          openNight={openNight}
+          openNights={openNights}
           total={pending.length}
           onCommitted={handleCommitted}
         />

@@ -8,9 +8,9 @@ import {
   dayLimitOf,
   ensureLedgerDays,
   ensureWeekRollover,
-  latestOpenNight,
   leisureDelta,
   nightMinutesOf,
+  openNightsBefore,
   penaltyTierOf,
   pendingDays,
   selectMoneyStats,
@@ -1162,21 +1162,27 @@ describe('ensureWeekRollover 推迟含深夜待补记的周', () => {
 })
 
 // ============================================================================
-// Task 8（第四轮）：深夜补记不再依赖「日历上的昨天」
+// Task 8（第五轮）：一次结算问遍所有未收尾的深夜，而不是只问最新的那一个
 // ============================================================================
 
 /**
- * `latestOpenNight` 是「结算某天时该回头问哪一夜」的判定，取代了此前的「严格 `date − 1`」。
+ * `openNightsBefore` 是「结算某天时该回头问哪些夜」的判定，取代了第四轮的 `latestOpenNight`。
  *
- * 为什么必须换掉：`ensureLedgerDays` 只为**计划过的**日子建日账本记录，没计划的日子是空洞。
- * 死等昨天时，一旦昨天没记录，前一个未收尾的深夜就永远没人问、`nightPending` 永远是 true，
- * 而 `ensureWeekRollover` 用的是 `break` 不是 `skip` —— 那一周以及之后的每一周都被永久堵死。
+ * 第四轮把「严格 `date − 1`」换成「`date` 之前**最近**的一个未收尾深夜」，修好了跨空洞的死锁，
+ * 却漏出同一类的另一个状态：**同一天之前并存两个未收尾的深夜时，只问最新的那一个**。
+ * 更旧的那个再也选不中（每次结算都清掉一个更新的、又把自己变成一个更新的），于是它所在的那一周
+ * 被 `ensureWeekRollover` 的 `break` 永久推迟，后面的周跟着一起堵死，`currentQuota` 永远返回配置值。
+ * 本轮的修法：**一次结算问遍所有早于它的未收尾深夜**，最早优先；`openNightsBefore` 是这条判定的唯一真源。
  */
-describe('latestOpenNight', () => {
-  it('取 date 之前「已结算且 nightPending」里日期最新的那一个', () => {
+describe('openNightsBefore', () => {
+  it('返回 date 之前所有「已结算且 nightPending」的日子，按最早优先', () => {
     const older = settledDay('2026-09-24', [mkEntry({ actualMin: 60, plannedMin: 60, done: true })])
     const newer = settledDay('2026-09-26', [mkEntry({ actualMin: 60, plannedMin: 60, done: true })])
-    expect(latestOpenNight([older, newer], '2026-09-29')?.date).toBe('2026-09-26')
+    // 入参故意乱序：返回值必须自己排好，不依赖调用方
+    expect(openNightsBefore([newer, older], '2026-09-29').map((d) => d.date)).toEqual([
+      '2026-09-24',
+      '2026-09-26'
+    ])
   })
 
   it('跳过未结算的日账本（`nightPending` 虽为 true，但它还没到问深夜的时候）', () => {
@@ -1184,7 +1190,9 @@ describe('latestOpenNight', () => {
     const settledOpen = settledDay('2026-09-24', [
       mkEntry({ actualMin: 60, plannedMin: 60, done: true })
     ])
-    expect(latestOpenNight([settledOpen, unsettled], '2026-09-29')?.date).toBe('2026-09-24')
+    expect(openNightsBefore([settledOpen, unsettled], '2026-09-29').map((d) => d.date)).toEqual([
+      '2026-09-24'
+    ])
   })
 
   it('跳过已答完（nightPending === false）的，以及 date 当天 / 之后的记录', () => {
@@ -1192,19 +1200,19 @@ describe('latestOpenNight', () => {
       mkEntry({ actualMin: 60, plannedMin: 60, done: true })
     ])
     const sameDay = settledDay('2026-09-29', [mkEntry({ actualMin: 60, plannedMin: 60, done: true })])
-    expect(latestOpenNight([answered, sameDay], '2026-09-29')).toBeUndefined()
+    expect(openNightsBefore([answered, sameDay], '2026-09-29')).toEqual([])
   })
 })
 
-describe('跨空洞也能收尾的深夜（Critical 回归）', () => {
+describe('跨空洞也能收尾的深夜（第四轮 Critical 回归）', () => {
   it('只在周六、周二有计划、周日 / 周一没记录时，周二仍能问出周六那一夜，并让周六那周结算', () => {
     // 周六已结算但仍挂着 nightPending；周二还没结算；周日 / 周一**没有记录**（空洞）
     const sat = settledDay('2026-09-26', [mkEntry({ actualMin: 120, plannedMin: 120, done: true })])
     const tue = unsettledDay('2026-09-29', [mkEntry({ actualMin: 60, plannedMin: 60, done: true })])
     const days = [sat, tue]
 
-    // 结算周二时挑「最近一个未收尾的深夜」→ 必须挑到周六，而不是不存在的前一天
-    expect(latestOpenNight(days, '2026-09-29')?.date).toBe('2026-09-26')
+    // 结算周二时要问的深夜必须是周六，而不是不存在的前一天
+    expect(openNightsBefore(days, '2026-09-29').map((d) => d.date)).toEqual(['2026-09-26'])
 
     // 还没答之前：周六所在的 09-21 周被推迟（nightPending 未清，且是 break 不是 skip）
     const before = ensureWeekRollover(
@@ -1222,6 +1230,70 @@ describe('跨空洞也能收尾的深夜（Critical 回归）', () => {
     expect(after.weeks.map((w) => w.weekStart)).toEqual(['2026-09-21'])
     expect(after.weeks[0].spentTC).toBe(20)
     expect(after.weeks[0].penaltyTier).toBe(0)
+  })
+})
+
+describe('两个同时未收尾的深夜（第五轮要修的类）', () => {
+  it('两个都早于待结算日时，一次结算把两个都问到、都清掉，更旧那个所在的那一周随即结算', () => {
+    // 09-25（周五，上一周 09-21）与 09-29（周二，本周 09-28）都还挂着 nightPending；
+    // 待结算日是 09-30（周三），两个深夜都早于它。
+    const fri: LedgerDay = {
+      ...settledDay('2026-09-25', [mkEntry({ actualMin: 60, plannedMin: 60, done: true })]),
+      nightPending: true
+    }
+    const tue: LedgerDay = {
+      ...settledDay('2026-09-29', [mkEntry({ actualMin: 60, plannedMin: 60, done: true })]),
+      nightPending: true
+    }
+    const wed = unsettledDay('2026-09-30', [mkEntry({ actualMin: 60, plannedMin: 60, done: true })])
+    const days = [fri, tue, wed]
+    const state: MoneyState = { enabled: true, config: DEFAULT_MONEY_CONFIG, days, weeks: [] }
+
+    // 判定：两个都在，最早优先 —— 不是只挑最近的那一个
+    expect(openNightsBefore(days, '2026-09-30').map((d) => d.date)).toEqual([
+      '2026-09-25',
+      '2026-09-29'
+    ])
+
+    // 一个都没答之前：09-21 那一周被推迟
+    expect(ensureWeekRollover(state, '2026-09-30').weeks).toEqual([])
+
+    // 只清最新的那一个（第四轮的实际行为）：09-25 没被问到，它那周仍然被推迟 —— 这正是要修的缺陷
+    const onlyNewestCleared = days.map((d) =>
+      d.date === '2026-09-29' ? { ...d, nightPending: false } : d
+    )
+    expect(ensureWeekRollover({ ...state, days: onlyNewestCleared }, '2026-09-30').weeks).toEqual([])
+
+    // 两个都清掉之后：09-21 那一周结算，且只结算它（本周还没结束，本来就不结算）
+    const bothCleared = days.map((d) => (d.settledAt !== null ? { ...d, nightPending: false } : d))
+    const next = ensureWeekRollover({ ...state, days: bothCleared }, '2026-09-30')
+    expect(next.weeks.map((w) => w.weekStart)).toEqual(['2026-09-21'])
+    expect(next.weeks[0].spentTC).toBe(10)
+    expect(next.weeks[0].penaltyTier).toBe(0)
+  })
+
+  it('复刻缺陷现场：较旧的一天在较新的一天之后才被结算 —— 并存不是死局，下一个更晚的结算会把两个一起问', () => {
+    // 先结算了 09-29（较新、仍挂着 nightPending），随后 09-28（较旧）才作为未结算日出现并被结算。
+    // 结算 09-28 时，09-29 并不早于它 —— 那一刻什么也不问，09-28 也以 nightPending 落账（两个并存）。
+    const tue: LedgerDay = {
+      ...settledDay('2026-09-29', [mkEntry({ actualMin: 60, plannedMin: 60, done: true })]),
+      nightPending: true
+    }
+    const mon: LedgerDay = {
+      ...settledDay('2026-09-28', [mkEntry({ actualMin: 60, plannedMin: 60, done: true })]),
+      nightPending: true
+    }
+    const days = [mon, tue]
+
+    // 结算 09-28 时没有可问的深夜（09-29 不早于它）—— 于是两个并存
+    expect(openNightsBefore(days, '2026-09-28')).toEqual([])
+
+    // 但并存不是死局：下一个更晚的结算（09-30）会把两个一起问到，最早优先 ——
+    // 较旧的那个不再永远选不中（第四轮只挑最新，会把它永久留在账本里堵住周滚动）
+    expect(openNightsBefore(days, '2026-09-30').map((d) => d.date)).toEqual([
+      '2026-09-28',
+      '2026-09-29'
+    ])
   })
 })
 
@@ -1244,7 +1316,7 @@ describe('「那天我什么都没做」释放被推迟的周', () => {
     }
 
     // 周里不再有未收尾的深夜：下一个待结算日挑不到任何补记目标
-    expect(latestOpenNight(state.days, '2026-09-30')).toBeUndefined()
+    expect(openNightsBefore(state.days, '2026-09-30')).toEqual([])
 
     const next = ensureWeekRollover(state, '2026-09-30')
     expect(next.weeks.map((w) => w.weekStart)).toEqual(['2026-09-21'])

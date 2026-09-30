@@ -824,8 +824,9 @@ export const useAppStore = create<AppState>((set, get) => ({
    * 结算完再补一次周结算，这是推迟机制**闭环**的一半：`ensureWeekRollover` 只有在
    * 「这一周的日账本全部已结算、且没有任何 `nightPending`」时才结算该周。因此
    * - 「先结算了旧日账本、此前无周可补」时，这一天才让某个已结束的周第一次变得可结算；
-   * - 「上周还挂着 `nightPending`」时，这一天的日结会在面板里先问过深夜那一问（见
-   *   `confirmNight`），把上周的标记清掉，这里的重跑随即把上周补结算掉。
+   * - 「上周还挂着 `nightPending`」时，这一天的日结会在面板里先把那些未收尾的深夜
+   *   （可能是多个，见 `openNightsBefore`）逐条问过（见 `confirmNight`），把标记清掉，
+   *   这里的重跑随即把上周补结算掉。
    * `ensureWeekRollover` 幂等，后续每次调用都原对象返回，所以只触发一次。
    */
   commitDaySettlement: (date, entries) => {
@@ -888,10 +889,11 @@ export const useAppStore = create<AppState>((set, get) => ({
    * `settledAt` 沿用旧值：补记不改变「这一天是什么时候结算的」。
    * 无论答「是」还是「否」，都把 `nightPending` 置 false —— 这一问已经问过了。
    *
-   * `previousDate` **不要求是日历上的昨天**：面板会挑「正在结算的那一天之前、最近的
-   * 一个待收尾深夜」来问（见 `SettlePanel`）。materialization 只为计划过的日子建记录，
-   * 未计划的日子是空洞；若死等「昨天」，一旦昨天没记录，前一个未收尾的深夜就永远没人问、
-   * 那一周也就永远结算不了。
+   * `previousDate` **不要求是日历上的昨天**：面板会挑出「正在结算的那一天之前、**所有**
+   * 还挂着 `nightPending` 的已结算日」逐个来问（见 `SettlePanel` 与 `openNightsBefore`）。
+   * materialization 只为计划过的日子建记录，未计划的日子是空洞；若死等「昨天」，一旦昨天
+   * 没记录，前一个未收尾的深夜就永远没人问、那一周也就永远结算不了。也正因为要问「所有」，
+   * 这个 action 一次只清一天 —— 面板逐条调用它，谁也不会被落下。
    *
    * 面板的「那天我什么都没做」也会对**当天自己**调用它并传 `worked: false`：一天既然
    * 什么都没做，当晚 23:30 之后自然也没有做事，顺手把这一天自己的深夜问记成「否」。

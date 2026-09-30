@@ -385,11 +385,18 @@ export function ensureLedgerDays(
  *   就会用错误的前序额度算下去，错得很安静。
  *
  * **推迟是有意的取舍，不是疏忽**：被罚的那一周，其缩水后的额度会**晚一点**才生效 ——
- * 在新的一周里，`nightPending` 没清完之前，本周仍按配置额度运行；等上一周最后一个
- * `nightPending` 清掉，滚动立即补上，额度随即收敛到正确值。我们**宁可要一个有界、
- * 能自愈的延迟，也不要一个安静的账本错误** —— 未来的读者必须能看出这是选择，不是 bug。
- * 闭环由调用方负责：`commitDaySettlement` 与 `confirmNight` 每次清 `nightPending` 后
- * 都会重跑 `rolloverMoneyWeek`，所以推迟最多持续到「下一个能清标记的日子」，不会拖到重启。
+ * 在新的一周里，那个 `nightPending` 没清完之前，本周仍按配置额度运行；等它清掉，滚动立即
+ * 补上，额度随即收敛到正确值。我们**宁可要一个延迟，也不要一个安静的账本错误** ——
+ * 未来的读者必须能看出这是选择，不是 bug。
+ *
+ * **延迟的上界（本设计依赖的不变量）**：面板每结算一天 `D`，都会先清掉**所有**早于 `D` 的
+ * 未收尾深夜（见 `openNightsBefore`：一次问遍，不是只问最新的那一个）。所以一个挂着
+ * `nightPending` 的日账本，会在**下一次晚于它的日结**时被清掉；它一被清掉，它所在的那一周
+ * （以及此前所有可结算的周）立刻由这里补上。闭环由调用方负责：`commitDaySettlement` 与
+ * `confirmNight` 每次清 `nightPending` 后都会重跑 `rolloverMoneyWeek`，所以被推迟的周不必等重启。
+ *
+ * **这条上界是「下一个晚于它的日结」，不是墙钟时间上的有界**（如实说明）：用户若从此不再结算
+ * 任何更晚的一天，推迟就会一直持续下去；但此时也不再有任何更新的账目等着被滚动。
  *
  * 中间没有任何数据的周按空周结算（`spentTC = 0`）：`[].some(...) === false` 是假言真值，
  * 所以「一个记录都没有的周」无需任何特判就会走原路径。
@@ -681,27 +688,30 @@ export function pendingDays(money: MoneyState, today: string): string[] {
 }
 
 /**
- * 结算 `date` 时该回头问哪一个「深夜」：`date` **之前**、已结算（`settledAt !== null`）、
- * 且 `nightPending === true` 的日账本里，取日期**最新**的那一个；没有就返回 `undefined`。
+ * 结算 `date` 时该回头问**哪些**「深夜」：`days` 里所有 `date` **之前**、已结算
+ * （`settledAt !== null`）、且 `nightPending === true` 的日账本，按日期**最早优先**返回；
+ * 一个都没有就是空数组。
  *
- * **不要求它是日历上的昨天** —— 这条是修一个 Critical 的关键。`ensureLedgerDays` 只为
- * **计划过的**日子补日账本记录，没计划的日子是空洞。若死等「昨天」，一旦昨天没记录
- * （例如只在周六、周二有计划，周日 / 周一都没有），前一天那个未收尾的深夜就永远没人问，
- * `D.nightPending` 永远是 true；而 `ensureWeekRollover` 用的是 `break` 不是 `skip`，
- * 于是 **D 所在的周以及之后的每一周都被永久堵死**，`currentQuota` 永远返回配置值，
- * 整条周额度 / 惩罚链静默失效 —— 比它想防的「少报」更糟。
+ * **返回全部，而不是只返回最新的那一个** —— 这一点是修一个 Critical 的关键。第四轮的版本
+ * 只挑最新，修好了「跨空洞死锁」，却留下同一类的另一个状态：**同一天之前并存两个未收尾的
+ * 深夜时，更旧的那一个永远选不中** —— 每次结算都清掉一个更新的、又在被结算的那一天新增一个
+ * 更新的，更新的始终存在；更旧的那个于是永远轮不到，它所在的那一周被 `ensureWeekRollover`
+ * 的 `break` 永久推迟，后面的周跟着一起堵死，`currentQuota` 永远返回配置值。问遍全部就没有
+ * 「选不中」这回事：任何一次晚于它的结算都会把它清掉。
  *
- * 取「最新」而非「最早」：问刚刚过去的那一夜最符合直觉。更旧的若真的存在，也会在后续
- * 逐日结算里被逐个问到（面板每次结算清掉一个、又新增一个，正常路径下同时最多只有一个
- * 未收尾的深夜），所以「只挑最新」不会漏。
+ * **不要求它是日历上的昨天**（第四轮引入，保留）：`ensureLedgerDays` 只为**计划过的**日子补
+ * 日账本，没计划的日子是空洞。若死等「昨天」，一旦昨天没记录（例如只在周六、周二有计划，
+ * 周日 / 周一都没有），前一天那个未收尾的深夜就永远没人问，同样会永久堵死周滚动。
  *
- * 纯函数：只读入参，日期键定长 `YYYY-MM-DD`，直接字典序比较即可。
+ * **本函数与 `ensureWeekRollover` 共同依赖的不变量**：面板每结算一天，都会先清掉**所有**
+ * 早于它的未收尾深夜（逐条问、逐条清）。因此一次结算之后，账本里不会再留下「比被结算日更早
+ * 的未收尾深夜」；被推迟的周由此有界 —— 上界是「下一个晚于那个深夜的日结」，不是墙钟时间。
+ *
+ * 纯函数：只读入参；日期键定长 `YYYY-MM-DD`，比较与排序都靠字典序，不解析回 `Date`，
+ * 也不依赖调用方已经按升序排好。
  */
-export function latestOpenNight(days: LedgerDay[], date: string): LedgerDay | undefined {
-  let best: LedgerDay | undefined
-  for (const day of days) {
-    if (day.settledAt === null || !day.nightPending || day.date >= date) continue
-    if (!best || day.date > best.date) best = day
-  }
-  return best
+export function openNightsBefore(days: LedgerDay[], date: string): LedgerDay[] {
+  return days
+    .filter((day) => day.settledAt !== null && day.nightPending && day.date < date)
+    .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
 }
