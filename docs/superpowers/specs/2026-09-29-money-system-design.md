@@ -307,8 +307,13 @@ weekOver = max(0, spentTC(周) − W)
 
 ### 7.4 象限事件的计费询问
 
-完成象限事件时弹出**两行内联气泡**（非模态）：是否计费 / 小时数（默认预填预估）。
+完成象限事件时弹出**两行内联气泡**（非模态）：是否计费 / 小时数（默认预填）。
 默认「不计费」，一键确认。四象限页是高频拖拽区，模态会打断操作。
+
+> ⚠️ **前置缺口**：`QuadrantEvent` 目前**没有任何「完成」动作**（只有 `deadline` 与 `escalateAt`）。
+> 因此本任务必须先在其右键 / 长按菜单里新增一个「标记完成」入口作为气泡的触发点。
+> **不得**给 `QuadrantEvent` 加 `done` 字段 —— 完成状态只存在于账本 `LedgerEntry` 里。
+> 四象限页有多次因手势问题返工的历史（见 `AGENTS.md`），新入口必须实测不破坏既有拖拽与长按。
 
 ### 7.5 周结算触发
 
@@ -326,9 +331,16 @@ weekOver = max(0, spentTC(周) − W)
 区块内容来自最新的 `WeekSettlement`：周花费 / 额度、超支额与档位、计划 vs 实际时长、
 未完成数、计划外事项数与时长、深夜做事总时长、超限天数，以及 `notes` 里的自动结论。
 
-导出 Word（`src/main/reviewDoc.ts`）与 txt（`platformApi.saveReview`）时，账本摘要作为**追加的一段**。
+导出 Word（`src/main/reviewDoc.ts`）与 txt（`platformApi.saveReview`）时，账本摘要作为**追加的一段**
+—— 但**不在导出层实现**。做法是在 `ReviewPage` 一处把摘要拼进 `reviewEdit.text`
+（`composeReviewText(text, week)`），导出链一行不改。
 
-> 关闭开关时该区块不渲染，导出内容与改动前逐字节一致（第 4.3 节第 4 条）。
+> 「同源」因此退化为「只有一个调用点」，且关闭态的字节一致**自动成立**：
+> `composeReviewText(text, undefined)` 原样返回 `text`。
+> 备选方案（给 `ReviewExport` 加字段）会牵动 `main/index.ts:40` 的 IPC 契约与两个消费点，
+> 全是新增同步点，**已否决**。
+
+> 关闭开关时该区块不渲染，导出内容与改动前逐字节一致（见 4.3 第 4 条）。
 
 ---
 

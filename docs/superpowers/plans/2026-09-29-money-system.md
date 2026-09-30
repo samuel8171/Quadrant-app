@@ -45,12 +45,13 @@
 ### Task 1: 持久化与开关字段
 
 **Files:**
+- Create: `src/shared/money.ts`（本任务只放常量 `DEFAULT_MONEY_CONFIG`）
 - Modify: `src/shared/types.ts`
 - Modify: `src/shared/defaults.ts`
 - Modify: `src/main/dataCodec.ts`
 - Modify: `src/renderer/src/lib/platformApi.ts`
 - Modify: `scripts/verify-integrity.mjs:387-456`（两处复刻）
-- Test: `tests/dataCodec.test.ts`, `tests/platformApi.test.ts`, `tests/defaults.test.ts`（若不存在则新建）
+- Test: `tests/dataCodec.test.ts`, `tests/platformApi.test.ts`, `tests/syncMeta.test.ts`
 
 **Interfaces:**
 - Consumes: 无
@@ -153,7 +154,6 @@ Expected: PASS
 - [ ] **Step 10: 验证体检脚本**
 
 ```bash
-./node_modules/.bin/... 无需
 python -c "import json,os;os.makedirs('tmp/vi-probe',exist_ok=True);json.dump({'version':2,'goals':[],'events':[],'weekPresets':[],'weekEvents':[],'weekCounterOffset':0},open('tmp/vi-probe/plan.json','w'))"
 node scripts/verify-integrity.mjs --appdata tmp/vi-probe
 ```
@@ -162,8 +162,14 @@ Expected: 「运行数据」组 pass；**不出现**关于 `money` 的 FAIL 或 
 - [ ] **Step 11: `isEmptyData` 计入金钱数据**
 
 在 `src/shared/defaults.ts` 的 `isEmptyData` 里追加条件：`money` 存在且 `days` 或 `weeks` 非空时，
-本函数返回 `false`。补测试：仅含一条已结算日的 `money` + 四个数组全空 → `isEmptyData` 为 `false`。
-文件头注释同步说明「金钱账本也算用户数据」。
+本函数返回 `false`。文件头注释同步说明「金钱账本也算用户数据」。
+
+补测试：**追加到 `tests/syncMeta.test.ts`** —— 该文件已经覆盖 `isEmptyData`（`:207-209`），
+不要新建 `tests/defaults.test.ts`。新增用例：仅含一条已结算日的 `money` + 四个数组全空 → `isEmptyData` 为 `false`。
+注意既有断言 `isEmptyData(data({ weekCounterOffset: 120 }))` 仍应为 `true`（无 `money` 字段），必须保持通过。
+
+⚠️ 这个改动有真实行为后果：`syncMeta.ts:57` 用它决定 `adopt-cloud`，`appStore.ts:150/158` 用它做云端覆盖保护。
+只加「钱账本也算数据」这一条，不要顺带改别的判据。
 
 - [ ] **Step 12: 跑全部相关测试**
 
@@ -394,6 +400,12 @@ git commit -m "feat(money): add daily settlement with overdraft carry and floor"
 档位表（spec 6.5，逐字）：未超支 → tier 0，下周 100%/100%；
 超支 ≤10% → tier 1，85%/85%；10%–30% → tier 2，70%/60%；>30% → tier 3，50%/40%。
 
+**测试夹具用一个 helper，不要两个**：`mkWeek(over?: { spent?: number; weekStart?: string; nextWeekTC?: number; nextWeekLT?: number })`
+返回 `settleWeek` 的入参（内部造 7 天的 `LedgerDay`，默认 `spent = 300`）。
+断言里的 `overLimitDays: 1` / `unplannedCount: 1` / `unplannedMin: 45` / `missCount: 1` / `nightMin: 30`
+由这个默认夹具的形状决定 —— 实现者自行构造能同时满足这五个数的一组条目即可，夹具内部结构不作硬性规定。
+另需一个 `mkSettledWeek(over?)` 直接返回一个**已算好的** `WeekSettlement`，供跨周滚动与 T10 使用。
+
 - [ ] **Step 1: 写失败测试**
 
 ```ts
@@ -532,7 +544,14 @@ Expected: FAIL —— `selectMoneyStats is not a function`
 - [ ] **Step 3: 实现**
 
 按当前周（`mondayOf(today)` 起 7 天）过滤 `days`，逐日算 `limit`（用前一日 `overdraft`，无前一日则 0）与 `ratio`；
-`limit <= 0` 时 `ratio` 取 0。`quality` 由条目分类：`!done` → `missed`；
+`limit <= 0` 时 `ratio` 取 0。
+
+**`weekday` 用裸单字，并且由 `shared/money.ts` 自己定义常量** ——
+`weekRules.WEEKDAY_NAMES` 是 `['周一', '周二', …]`（带「周」前缀）且住在 `renderer/`，
+两个原因都使它不能被 `shared/` 使用。在 `shared/money.ts` 里定义
+`const WEEKDAY_LABELS = ['一','二','三','四','五','六','日']`。
+
+`quality` 由条目分类：`!done` → `missed`；
 `kind === 'unplanned'` 不计入任何一类；`actualMin <= plannedMin` → `efficient`；
 `actualMin > plannedMin * 1.5` → `inefficient`；否则 `normal`。`penaltyTier` 用当前周的实时 `spentTC` 预演。
 
@@ -789,45 +808,56 @@ git commit -m "feat(money): add quadrant cost bubble with night multiplier"
 **Files:**
 - Create: `src/renderer/src/components/money/WeekLedger.tsx`
 - Modify: `src/renderer/src/pages/ReviewPage.tsx`
-- Modify: `src/main/reviewDoc.ts`（导出 Word 时追加账本段）
-- Modify: `src/renderer/src/lib/platformApi.ts`（txt 导出追加同一段）
-- Test: `tests/reviewDoc.test.ts`
+- Test: `tests/money.test.ts`
 
 **Interfaces:**
 - Consumes: `WeekSettlement`（Task 4）
 - Produces:
-  - `moneySummaryLines(week: WeekSettlement | undefined): string[]`（在 `shared/money.ts`）
+  - `composeReviewText(text: string, week: WeekSettlement | undefined): string`（在 `shared/money.ts`）
   - `WeekLedger({ week })` 组件
 
-- [ ] **Step 1: 写失败测试 —— 关闭态必须产出零行**
+**为什么要推翻「改 `reviewDoc.ts` + `platformApi.saveReview` 两处」的原方案**：
+`ReviewExport` 的字段是 `{ completion, quality, stress, text }`，**不带 money 数据**。
+要让它带上就得再加字段，于是又要牵动 `main/index.ts:40` 的 IPC 契约、`main/review.ts:11`
+与 `renderer/lib/platformApi.ts:134` 两个消费点 —— 全是新增同步点。
 
-在 `tests/money.test.ts` 追加：
+改为**在 `ReviewPage` 一处把账本摘要拼进 `text`**：导出链一行不改，
+「同源」退化成「只有一个调用点」，而关闭态的字节一致**自动成立**
+（`composeReviewText(text, undefined)` 必须原样返回 `text`）。这是最简解。
+
+- [ ] **Step 1: 写失败测试**
 
 ```ts
-it('没有周结算记录时产出零行，导出内容与无该功能时一致', () => {
-  expect(moneySummaryLines(undefined)).toEqual([])
+it('没有周结算记录时原样返回正文字符串', () => {
+  expect(composeReviewText('今天还行', undefined)).toBe('今天还行')
 })
 
-it('有关闭开关但保留账本时同样产出零行', () => {
-  expect(moneySummaryLines(undefined)).toEqual([])
+it('有关闭开关（账本仍在）但不传周结算时同样原样返回', () => {
+  expect(composeReviewText('今天还行', undefined)).toBe('今天还行')
 })
 
-it('有周结算时产出包含关键数字的行', () => {
-  const lines = moneySummaryLines(mkSettledWeek({ spent: 420 }))
-  expect(lines.length).toBeGreaterThanOrEqual(2)
-  expect(lines.join('\n')).toContain('420')
-  expect(lines.join('\n')).toContain('超支')
+it('有周结算时追加一段，且包含关键数字', () => {
+  const out = composeReviewText('今天还行', mkSettledWeek({ spent: 420 }))
+  expect(out.startsWith('今天还行')).toBe(true)
+  expect(out).toContain('420')
+  expect(out).toContain('超支')
+})
+
+it('空正文也能正常追加，不留前导空行', () => {
+  expect(composeReviewText('', mkSettledWeek({ spent: 420 })).startsWith('\n')).toBe(false)
 })
 ```
 
 - [ ] **Step 2: 跑测试确认失败**
 
 Run: `./node_modules/.bin/vitest run tests/money.test.ts`
-Expected: FAIL —— `moneySummaryLines is not a function`
+Expected: FAIL —— `composeReviewText is not a function`
 
-- [ ] **Step 3: 实现 `moneySummaryLines`**
+- [ ] **Step 3: 实现 `composeReviewText`**
 
-只从**已结算且属于上一周**的 `WeekSettlement` 生成文本行。`undefined` 或 `penaltyTier === 0 且 spentTC === 0` 时返回 `[]`。
+内部先把 `WeekSettlement` 渲染成若干文本行（关闭态为 0 行）。
+**`week` 为 `undefined` 时必须原样返回 `text`，一个字符都不动** —— 这是关闭态导出逐字节一致的唯一保证点。
+有内容时以 `\n\n` 分隔追加；正文为空时不留前导空行。
 
 - [ ] **Step 4: 跑测试确认通过**
 
@@ -839,21 +869,23 @@ Expected: PASS
 在 `ReviewPage` 的三档滑动条**之上**新增「本周账本」区块（spec 8）。展示 `WeekSettlement` 的
 周花费/额度、超支额与档位、计划 vs 实际时长、未完成数、计划外数与时长、深夜总时长、超限天数，以及 `notes`。
 
-- [ ] **Step 6: 导出追加（两处，必须同源）**
+- [ ] **Step 6: 在 ReviewPage 接入（唯一调用点）**
 
-`reviewDoc.ts` 的 `buildReviewDocx` 与 `platformApi.saveReview` 的 txt 拼接，
-都改为在末尾追加 `moneySummaryLines(...)` 的结果。**两处必须调用同一个函数**，不得各写一份文案。
+`ReviewPage.saveWord`（`:60-68`）在调用 `getPlatformApi().saveReview` 之前，
+把 `reviewEdit.text` 换成 `composeReviewText(reviewEdit.text, latestWeek)`。
+`latestWeek` 取 `data.money?.weeks.at(-1)`，**且仅当 `data.money?.enabled` 为真时才取**。
+**不要在 `reviewDoc.ts` 或 `platformApi.saveReview` 里加任何代码** —— 这是本任务的硬约束。
 
-- [ ] **Step 7: 写回归测试 —— 关闭态逐字节一致（Review Focus 第 5 条）**
+- [ ] **Step 7: 关闭态字节一致（Review Focus 第 5 条）**
 
-在 `tests/reviewDoc.test.ts` 追加：构造同一份 `ReviewExport`，
-分别在「无 money」「有 money 但 enabled=false」两种输入下导出，断言产出的**字节完全相等**。
+在 `tests/money.test.ts` 追加：对同一份正文，`composeReviewText(text, undefined)` 与
+「功能从未启用时」的取值完全相同（即 `toBe(text)`），并用 `Buffer.byteLength` 断言字节数相等。
 
 - [ ] **Step 8: 跑测试确认通过**
 
-Run: `./node_modules/.bin/vitest run tests/reviewDoc.test.ts`
 Run: `./node_modules/.bin/vitest run tests/money.test.ts`
-Expected: 全部 PASS
+Run: `./node_modules/.bin/vitest run tests/reviewDoc.test.ts`
+Expected: 全部 PASS —— 后者全绿正是「导出链未被改动」的证据
 
 - [ ] **Step 9: 全量回归**
 
