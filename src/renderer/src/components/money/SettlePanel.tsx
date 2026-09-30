@@ -129,8 +129,8 @@ function buildRows(day: LedgerDay | undefined, events: WeekEvent[]): Row[] {
   return rows
 }
 
-const fmtTCDelta = (value: number): string => `${value > 0 ? '+' : ''}${value}`
-const fmtLTDelta = (value: number): string => `${value > 0 ? '+' : ''}${value}`
+/** 有符号数字的显示：奖励 / 惩罚都要能一眼看出方向（0 不带符号）。 */
+const signed = (value: number): string => `${value > 0 ? '+' : ''}${value}`
 
 interface DayFormProps {
   date: string
@@ -246,7 +246,7 @@ function DayForm({
               )}
               <span className="settle-row-cost">
                 <b>{rowCost(row, config)}</b> 币
-                <em>{fmtLTDelta(rowDelta(row, config))} LT</em>
+                <em>{signed(rowDelta(row, config))} LT</em>
               </span>
             </li>
           ))}
@@ -275,7 +275,7 @@ function DayForm({
               </span>
               <span className="settle-row-cost">
                 <b>{rowCost(row, config)}</b> 币
-                <em>{fmtLTDelta(rowDelta(row, config))} LT</em>
+                <em>{signed(rowDelta(row, config))} LT</em>
               </span>
               <button
                 type="button"
@@ -362,7 +362,7 @@ function DayForm({
 
       <footer className="settle-foot">
         <span className="settle-total">
-          这一天：<b>{totalCost}</b> 币 · {fmtTCDelta(totalDelta)} LT
+          这一天：<b>{totalCost}</b> 币 · {signed(totalDelta)} LT
         </span>
         <button type="button" className="settle-commit" onClick={commit}>
           {total > 1 ? '结算这一天，下一天 →' : '结算这一天'}
