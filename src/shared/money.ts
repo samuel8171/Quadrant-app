@@ -1,4 +1,13 @@
-import type { LedgerDay, LedgerEntry, LedgerEntryKind, MoneyConfig } from './types'
+import { addDays, dateKey, mondayOf, parseDateKey } from './dateKey'
+import type {
+  LedgerDay,
+  LedgerEntry,
+  LedgerEntryKind,
+  MoneyConfig,
+  MoneyState,
+  PenaltyTier,
+  WeekSettlement
+} from './types'
 
 /**
  * 计费与结算参数的默认值（spec 第 11 节）。
@@ -154,3 +163,212 @@ export function settleDay(input: {
     nightPending: true
   }
 }
+
+/**
+ * 档位 → 下周额度的折扣比例（spec 6.5 的表格逐字抄录）。
+ *
+ * 用查表而不是连续公式：更好解释、更好调参，也天然不会把下周罚到归零
+ * （守住「不能封锁」的红线）。
+ */
+const TIER_SCALE: Record<PenaltyTier, { tc: number; lt: number }> = {
+  0: { tc: 1, lt: 1 },
+  1: { tc: 0.85, lt: 0.85 },
+  2: { tc: 0.7, lt: 0.6 },
+  3: { tc: 0.5, lt: 0.4 }
+}
+
+/**
+ * 超支比例落在哪一档（spec 6.5）。
+ *
+ * 边界**下含**：`weekOver / weekTC` 恰好等于 0.10 是档位 1、恰好等于 0.30 是档位 2。
+ * 这里不需要 epsilon —— `105 / 350` 与字面量 `0.3` 舍入到同一个 double，
+ * `<=` 直接成立。
+ *
+ * `weekTC` 为 0 时不特判：比例算成 Infinity，自然落到档位 3（额度为零却还有花费，
+ * 只能是最重的一档）；而 `weekOver <= 0` 已经先行返回档位 0。
+ */
+export function penaltyTierOf(weekOver: number, weekTC: number): PenaltyTier {
+  if (weekOver <= 0) return 0
+  const ratio = weekOver / weekTC
+  if (ratio <= 0.1) return 1
+  if (ratio <= 0.3) return 2
+  return 3
+}
+
+/**
+ * 对一周做结算（spec 6.5 / 7.5），产出复盘页要用的全部汇总。
+ *
+ * **入参 `days` 就是这一周的日子**：调用方给几天就汇总几天，缺失的日按零计
+ * （`ensureWeekRollover` 只挑出落在本周区间内的日账本，因此缺席的日不产生任何贡献）。
+ *
+ * **日快照是唯一真源**：`spentTC` 逐日相加 `day.spentTC`，不重新遍历条目算钱 ——
+ * 与 `settleDay` 里「快照优于条目镜像字段」同一条规矩。计数与时长类字段
+ * （`plannedMin` / `actualMin` / `doneCount` / `missCount` / `unplannedCount` /
+ * `unplannedMin` / `nightMin`）只能来自条目，没有快照可读。
+ *
+ * `overLimitDays` 比的是**日软上限** `weekTC / 7`（spec 6.2 的 D），
+ * 而不是 `day.dayLimit` —— 后者已经含了前一日透支，连续透支的日子会被重复计数，
+ * 一周里「几天超限」就失去意义。
+ *
+ * **空周（`spentTC === 0`）把下周额度重置回配置值**，而不是按档位乘算。
+ * 这是 spec 7.5 的要求，也是惩罚**不跨周累积**的实现：中间隔了空周，
+ * 上一周的惩罚就在那一周被清偿，不会一路衰减着传下去。
+ */
+export function settleWeek(input: {
+  weekStart: string
+  weekEnd: string
+  days: LedgerDay[]
+  weekTC: number
+  weekLT: number
+  config: MoneyConfig
+}): WeekSettlement {
+  let spentTC = 0
+  let plannedMin = 0
+  let actualMin = 0
+  let doneCount = 0
+  let missCount = 0
+  let unplannedCount = 0
+  let unplannedMin = 0
+  let nightMin = 0
+  let overLimitDays = 0
+
+  const daySoftCap = input.weekTC / 7
+  for (const day of input.days) {
+    spentTC += day.spentTC
+    if (day.spentTC > daySoftCap) overLimitDays++
+
+    for (const entry of day.entries) {
+      plannedMin += entry.plannedMin ?? 0
+      actualMin += entry.actualMin
+      // done / miss 是对全部条目的一条划分：doneCount + missCount === 条目总数
+      if (entry.done) doneCount++
+      else missCount++
+      if (entry.kind === 'unplanned') {
+        unplannedCount++
+        unplannedMin += entry.actualMin
+      }
+      nightMin += entry.nightMin
+    }
+  }
+
+  const weekOver = Math.max(0, spentTC - input.weekTC)
+  const penaltyTier = penaltyTierOf(weekOver, input.weekTC)
+  const scale = TIER_SCALE[penaltyTier]
+  const isCleanWeek = spentTC === 0
+  const nextWeekTC = isCleanWeek ? input.config.weeklyTC : input.weekTC * scale.tc
+  const nextWeekLT = isCleanWeek ? input.config.weeklyLT : input.weekLT * scale.lt
+
+  // notes 恒为 2–4 条：前两条必有（结论 + 执行情况），后两条按有无比重的数据才出现
+  const notes: string[] = [
+    penaltyTier === 0
+      ? `本周花费 ${spentTC} / ${input.weekTC} 币，未超支，下周额度不打折`
+      : `本周花费 ${spentTC} / ${input.weekTC} 币，超支 ${weekOver} 币，` +
+        `下周时币 ×${Math.round(scale.tc * 100)}%、娱币 ×${Math.round(scale.lt * 100)}%`,
+    unplannedCount > 0
+      ? `完成 ${doneCount} 件，没做 ${missCount} 件，计划外 ${unplannedCount} 件 ${unplannedMin} 分钟`
+      : `完成 ${doneCount} 件，没做 ${missCount} 件，无计划外事项`
+  ]
+  if (overLimitDays > 0) notes.push(`有 ${overLimitDays} 天超出日额度 ${daySoftCap} 币`)
+  if (nightMin > 0) notes.push(`深夜做事 ${nightMin} 分钟`)
+
+  return {
+    weekStart: input.weekStart,
+    weekEnd: input.weekEnd,
+    weekTC: input.weekTC,
+    spentTC,
+    weekOver,
+    plannedMin,
+    actualMin,
+    doneCount,
+    missCount,
+    unplannedCount,
+    unplannedMin,
+    nightMin,
+    overLimitDays,
+    penaltyTier,
+    nextWeekTC,
+    nextWeekLT,
+    notes
+  }
+}
+
+/**
+ * 当前周的额度（spec 5 的派生式）：`weeks` 最后一条的 `nextWeekTC` / `nextWeekLT`；
+ * 一条结算都没有时回退到配置值。
+ *
+ * 这里就是「刻意不设 `balance` 字段」的兑现处：额度与余额永远现算、从不落盘，
+ * 因此不可能与账本不一致。
+ */
+export function currentQuota(state: MoneyState): { weekTC: number; weekLT: number } {
+  const last = state.weeks[state.weeks.length - 1]
+  if (!last) return { weekTC: state.config.weeklyTC, weekLT: state.config.weeklyLT }
+  return { weekTC: last.nextWeekTC, weekLT: last.nextWeekLT }
+}
+
+/**
+ * 补齐跨周结算（spec 7.5）：从「最后一次结算的下一周」一路补到「上一个已结束的周」，
+ * 逐周调用 `settleWeek`。**本周不结算** —— 它还没结束。
+ *
+ * 中间没有任何数据的周按空周结算（`spentTC = 0`），其 `nextWeekTC` / `nextWeekLT`
+ * 被重置回配置值，于是惩罚不会跨过空周继续衰减，这也是「干净的一周洗掉惩罚」的机制。
+ *
+ * 每一周的额度取值链是 `currentQuota` → 本周结算的 `nextWeekTC` → 下一周的 `weekTC`，
+ * 所以逐周补结算与「每周一打开应用一次」的结果完全一致。
+ *
+ * 没有待补的周时**原对象返回**：调用方（appStore）把它写回 state，
+ * 返回值恒等意味着不会触发无谓的重渲染与落盘。
+ */
+export function ensureWeekRollover(state: MoneyState, today: string): MoneyState {
+  const thisMonday = mondayOf(parseDateKey(today))
+  const lastCompletedMonday = addDays(thisMonday, -7)
+  const firstUnsettled = firstUnsettledMonday(state, lastCompletedMonday)
+  if (firstUnsettled === null) return state
+
+  const weeks = [...state.weeks]
+  let quota = currentQuota(state)
+  for (
+    let cursor = firstUnsettled;
+    cursor.getTime() <= lastCompletedMonday.getTime();
+    cursor = addDays(cursor, 7)
+  ) {
+    const weekStart = dateKey(cursor)
+    const weekEnd = dateKey(addDays(cursor, 6))
+    const settlement = settleWeek({
+      weekStart,
+      weekEnd,
+      // 日账本按 date 升序，日期键可直接字典序比区间
+      days: state.days.filter((day) => day.date >= weekStart && day.date <= weekEnd),
+      weekTC: quota.weekTC,
+      weekLT: quota.weekLT,
+      config: state.config
+    })
+    weeks.push(settlement)
+    quota = { weekTC: settlement.nextWeekTC, weekLT: settlement.nextWeekLT }
+  }
+
+  return { ...state, weeks }
+}
+
+/**
+ * 第一个待结算的周一；没有待结算的周时返回 `null`。
+ *
+ * - `weeks` 非空 → 最后一次结算的下一周；
+ * - `weeks` 为空但已有日账本 → **最早那天所在周**。少了这条分支，开关开启后
+ *   `weeks` 会永远空着（每次都无周可补），已经结算过的日账本永远进不了周结算；
+ * - 两者都没有 → `null`：从未产生过账本，不虚构历史。
+ *
+ * 起始周晚于 `lastCompletedMonday` 时同样返回 `null`，即本周及以后不结算。
+ */
+function firstUnsettledMonday(state: MoneyState, lastCompletedMonday: Date): Date | null {
+  const last = state.weeks[state.weeks.length - 1]
+  let start: Date
+  if (last) {
+    start = addDays(mondayOf(parseDateKey(last.weekStart)), 7)
+  } else if (state.days.length > 0) {
+    start = mondayOf(parseDateKey(state.days[0].date))
+  } else {
+    return null
+  }
+  return start.getTime() <= lastCompletedMonday.getTime() ? start : null
+}
+

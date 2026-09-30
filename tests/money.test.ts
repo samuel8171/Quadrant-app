@@ -1,12 +1,17 @@
 import { describe, expect, it } from 'vitest'
-import type { LedgerEntry } from '../src/shared/types'
+import type { LedgerDay, LedgerEntry, MoneyState, WeekSettlement } from '../src/shared/types'
+import { addDays, dateKey, parseDateKey } from '../src/shared/dateKey'
 import {
   DEFAULT_MONEY_CONFIG,
   costOfEntry,
+  currentQuota,
   dayLimitOf,
+  ensureWeekRollover,
   leisureDelta,
   nightMinutesOf,
-  settleDay
+  penaltyTierOf,
+  settleDay,
+  settleWeek
 } from '../src/shared/money'
 
 // ============================================================================
@@ -47,6 +52,139 @@ function mkEntry(over: Partial<LedgerEntry> = {}): LedgerEntry {
 
 // ============================================================================
 // <<<< mkEntry 共用辅助结束 <<<<
+// ============================================================================
+
+// ============================================================================
+// >>>> Task 4/10 共用夹具 mkWeek / mkSettledWeek（扩展时请在这两个标记行之间追加）>>>>
+// ============================================================================
+
+/** 夹具周的周一：2026-09-07（周日为 2026-09-13）。 */
+const FIXTURE_WEEK_START = '2026-09-07'
+
+/**
+ * 把一笔时币摊成若干条计划内条目，逐条 `costOfEntry` 之和**恰好**等于 `cost`。
+ *
+ * `actualMin` 取 `cost × 6` 分钟且不含深夜：`round(6c / 60 × 10) === c`，是精确逆运算。
+ * 单条封顶 600 分钟（域模型 `MAX_DURATION_MIN`），所以按 100 币一段拆分。
+ */
+function fillerEntries(cost: number): LedgerEntry[] {
+  const out: LedgerEntry[] = []
+  for (let left = cost; left > 0; left -= 100) {
+    const minutes = Math.min(left, 100) * 6
+    out.push(mkEntry({ actualMin: minutes, plannedMin: minutes, done: true }))
+  }
+  return out
+}
+
+/** 285 分钟里 30 分钟落在深夜：round((255 + 45) / 6) = 50 币。 */
+function nightEntry(): LedgerEntry {
+  return mkEntry({ kind: 'planned', actualMin: 285, plannedMin: 300, nightMin: 30, done: true })
+}
+
+/** 45 分钟的计划外事项：round(7.5) = 8 币，且不参与娱币。 */
+function unplannedEntry(): LedgerEntry {
+  return mkEntry({ kind: 'unplanned', actualMin: 45, plannedMin: null, done: true })
+}
+
+/** 有事情没做：花费 0。 */
+function missedEntry(): LedgerEntry {
+  return mkEntry({ kind: 'planned', actualMin: 0, plannedMin: 60, done: false })
+}
+
+/**
+ * 造 `settleWeek` 的入参：一周 7 天的 `LedgerDay`，默认总花费 `spent = 300`。
+ *
+ * 默认形状被五个聚合断言钉死：
+ * - 单日花费 110 / 50 / 50 / 50 / 40 / 0 / 0 —— 只有周一超过日软上限 50 ⇒ `overLimitDays = 1`；
+ * - 一条计划外 45 分钟 ⇒ `unplannedCount = 1`、`unplannedMin = 45`；
+ * - 一条 `done: false` ⇒ `missCount = 1`；
+ * - 一条 30 分钟深夜 ⇒ `nightMin = 30`。
+ *
+ * 每天的 `spentTC` 与当天条目 `costOfEntry` 之和**严格相等**（`spent` 与 300 的差额全部
+ * 记在周一的填充条目上），`dayLimit` / `overdraft` 则按 `dayLimitOf` 的规则逐日滚动 ——
+ * 与 `settleDay` 的算法一致。
+ *
+ * 这个滚动不是装饰：周一的 110 币把后面几天的 `dayLimit` 压到保底 10，于是「只算周一超限」
+ * 与「凡 `spentTC > dayLimit` 就算超限」（后者会数出 5 天）在这里分道扬镳，
+ * `overLimitDays === 1` 因此钉住了「比的是日软上限 `weekTC / 7`」这一种解释。
+ *
+ * `spent` 低于 300 会让周一的填充量变成负数；本任务只用到 300 及以上。
+ */
+function mkWeek(
+  over: { spent?: number; weekStart?: string; nextWeekTC?: number; nextWeekLT?: number } = {}
+): Parameters<typeof settleWeek>[0] {
+  const spent = over.spent ?? 300
+  const weekStart = over.weekStart ?? FIXTURE_WEEK_START
+  const monday = parseDateKey(weekStart)
+
+  const daySpends = [110 + (spent - 300), 50, 50, 50, 40, 0, 0]
+  const days: LedgerDay[] = []
+  let previousOverdraft = 0
+  for (let i = 0; i < daySpends.length; i++) {
+    const daySpend = daySpends[i]
+    const date = dateKey(addDays(monday, i))
+    const dayLimit = dayLimitOf(previousOverdraft, DEFAULT_MONEY_CONFIG)
+    const overdraft = Math.max(0, daySpend - dayLimit)
+    const entries =
+      i === 0
+        ? [nightEntry(), unplannedEntry(), ...fillerEntries(daySpend - 58)]
+        : i === 5
+          ? [missedEntry()]
+          : fillerEntries(daySpend)
+    days.push({
+      date,
+      settledAt: `${date}T23:20:00.000Z`,
+      entries,
+      dayLimit,
+      spentTC: daySpend,
+      overdraft,
+      deltaLT: 0,
+      nightPending: false
+    })
+    previousOverdraft = overdraft
+  }
+
+  return {
+    weekStart,
+    weekEnd: dateKey(addDays(monday, 6)),
+    days,
+    weekTC: over.nextWeekTC ?? 350,
+    weekLT: over.nextWeekLT ?? 10,
+    config: DEFAULT_MONEY_CONFIG
+  }
+}
+
+/**
+ * 一个**已算好**的 `WeekSettlement`，供跨周滚动与 Task 10 复用。
+ *
+ * 默认即一份空周结果：花费 0、档位 0、下周额度回到配置值 350 / 10。
+ */
+function mkSettledWeek(over: Partial<WeekSettlement> = {}): WeekSettlement {
+  const weekStart = over.weekStart ?? FIXTURE_WEEK_START
+  return {
+    weekStart,
+    weekEnd: dateKey(addDays(parseDateKey(weekStart), 6)),
+    weekTC: 350,
+    spentTC: 0,
+    weekOver: 0,
+    plannedMin: 0,
+    actualMin: 0,
+    doneCount: 0,
+    missCount: 0,
+    unplannedCount: 0,
+    unplannedMin: 0,
+    nightMin: 0,
+    overLimitDays: 0,
+    penaltyTier: 0,
+    nextWeekTC: 350,
+    nextWeekLT: 10,
+    notes: [],
+    ...over
+  }
+}
+
+// ============================================================================
+// <<<< Task 4/10 共用夹具结束 <<<<
 // ============================================================================
 
 // ============================================================================
@@ -254,5 +392,159 @@ describe('settleDay', () => {
         0
       )
     ).toBe(day.spentTC)
+  })
+})
+
+// ============================================================================
+// Task 4：周结算、档位惩罚与跨周滚动
+// ============================================================================
+
+describe('penaltyTierOf', () => {
+  it('档位边界', () => {
+    expect(penaltyTierOf(0, 350)).toBe(0)
+    expect(penaltyTierOf(35, 350)).toBe(1) // 恰好 10%
+    expect(penaltyTierOf(36, 350)).toBe(2)
+    expect(penaltyTierOf(105, 350)).toBe(2) // 恰好 30%
+    expect(penaltyTierOf(106, 350)).toBe(3)
+  })
+})
+
+describe('settleWeek', () => {
+  it('各档位对应的下周额度', () => {
+    expect(settleWeek(mkWeek({ spent: 300 })).nextWeekTC).toBe(350)
+    expect(settleWeek(mkWeek({ spent: 385 })).nextWeekTC).toBeCloseTo(297.5)
+    expect(settleWeek(mkWeek({ spent: 420 })).nextWeekTC).toBeCloseTo(245)
+    expect(settleWeek(mkWeek({ spent: 460 })).nextWeekTC).toBeCloseTo(175)
+  })
+
+  it('未超支时娱币不打折', () => {
+    expect(settleWeek(mkWeek({ spent: 300 })).nextWeekLT).toBe(10)
+  })
+
+  it('档位 2 的娱币打折比例是 60%', () => {
+    expect(settleWeek(mkWeek({ spent: 420 })).nextWeekLT).toBeCloseTo(6)
+  })
+
+  it('周汇总的字段来自日账本', () => {
+    const w = settleWeek(mkWeek({ spent: 300 }))
+    expect(w.spentTC).toBe(300)
+    expect(w.weekOver).toBe(0)
+    expect(w.penaltyTier).toBe(0)
+    expect(w.overLimitDays).toBe(1)
+    expect(w.unplannedCount).toBe(1)
+    expect(w.unplannedMin).toBe(45)
+    expect(w.missCount).toBe(1)
+    expect(w.nightMin).toBe(30)
+  })
+
+  it('缺失的日按零计', () => {
+    const input = mkWeek({ spent: 300 })
+    // 只留周一到周四：110 + 50 + 50 + 50 = 260，周六那条「没做」也跟着缺失
+    const partial = settleWeek({ ...input, days: input.days.slice(0, 4) })
+    expect(partial.spentTC).toBe(260)
+    expect(partial.missCount).toBe(0)
+    expect(partial.nightMin).toBe(30)
+    expect(partial.unplannedMin).toBe(45)
+  })
+
+  it('notes 是 2–4 条可解释结论', () => {
+    const w = settleWeek(mkWeek({ spent: 300 }))
+    expect(w.notes.length).toBeGreaterThanOrEqual(2)
+    expect(w.notes.length).toBeLessThanOrEqual(4)
+    expect(w.notes.join(' ')).toContain('深夜')
+    expect(w.notes.join(' ')).toContain('计划外')
+  })
+
+  it('超支时给出的档位与百分比逐字对应 spec 6.5', () => {
+    const w = settleWeek(mkWeek({ spent: 420 }))
+    expect(w.weekOver).toBe(70)
+    expect(w.penaltyTier).toBe(2)
+    expect(w.notes.join(' ')).toContain('70%')
+    expect(w.notes.join(' ')).toContain('60%')
+  })
+})
+
+describe('ensureWeekRollover / currentQuota', () => {
+  it('跨周滚动：缺失的周按空周处理，不惩罚、额度重置', () => {
+    const state: MoneyState = {
+      enabled: true,
+      config: DEFAULT_MONEY_CONFIG,
+      days: [],
+      weeks: [mkSettledWeek({ weekStart: '2026-09-07', nextWeekTC: 245, nextWeekLT: 6 })]
+    }
+    const next = ensureWeekRollover(state, '2026-09-28') // 距今跨了 09-14、09-21 两个周
+    expect(next).not.toBe(state)
+    expect(next.weeks).toHaveLength(3)
+    expect(next.weeks.map((w) => w.weekStart)).toEqual(['2026-09-07', '2026-09-14', '2026-09-21'])
+    expect(next.weeks[1].weekTC).toBeCloseTo(245)
+    expect(next.weeks[2].weekTC).toBe(350)
+    expect(currentQuota(next)).toEqual({ weekTC: 350, weekLT: 10 })
+    // 空周不产生惩罚，也没有账本可写
+    expect(next.weeks[1].penaltyTier).toBe(0)
+    expect(next.weeks[1].spentTC).toBe(0)
+    expect(next.weeks[1].nextWeekLT).toBe(10)
+    // 未被触及的字段原样保留
+    expect(next.enabled).toBe(true)
+    expect(next.days).toEqual([])
+  })
+
+  it('没有待补的周时原对象返回', () => {
+    const state: MoneyState = {
+      enabled: true,
+      config: DEFAULT_MONEY_CONFIG,
+      days: [],
+      weeks: [mkSettledWeek({ weekStart: '2026-09-21' })]
+    }
+    // 09-21 那一周还没结束（本周才刚开始），不结算
+    expect(ensureWeekRollover(state, '2026-09-28')).toBe(state)
+    expect(ensureWeekRollover(state, '2026-09-30')).toBe(state)
+  })
+
+  it('从未产生过账本时不虚构历史', () => {
+    const state: MoneyState = { enabled: true, config: DEFAULT_MONEY_CONFIG, days: [], weeks: [] }
+    expect(ensureWeekRollover(state, '2026-09-28')).toBe(state)
+    expect(currentQuota(state)).toEqual({ weekTC: 350, weekLT: 10 })
+  })
+
+  it('weeks 为空但已有日账本时，从最早那天所在周开始补', () => {
+    const state: MoneyState = {
+      enabled: true,
+      config: DEFAULT_MONEY_CONFIG,
+      days: mkWeek({ weekStart: '2026-09-07' }).days,
+      weeks: []
+    }
+    const next = ensureWeekRollover(state, '2026-09-28')
+    expect(next.weeks.map((w) => w.weekStart)).toEqual(['2026-09-07', '2026-09-14', '2026-09-21'])
+    expect(next.weeks[0].spentTC).toBe(300)
+    expect(next.weeks[0].weekTC).toBe(350)
+    expect(currentQuota(next)).toEqual({ weekTC: 350, weekLT: 10 })
+  })
+
+  it('惩罚跨周不累积：中间的空周把额度清回配置值', () => {
+    // 第 1 周超支落档位 2（下周 245 / 6），第 2、3 周空 → 额度回 350 / 10
+    const first = settleWeek(mkWeek({ spent: 420 }))
+    const state: MoneyState = {
+      enabled: true,
+      config: DEFAULT_MONEY_CONFIG,
+      // 账本只落在最后一个待补的周（09-28），中间的 09-14 / 09-21 是真·空周
+      days: mkWeek({ spent: 300, weekStart: '2026-09-28' }).days,
+      weeks: [first]
+    }
+    const next = ensureWeekRollover(state, '2026-10-05')
+    expect(next.weeks).toHaveLength(4) // 09-07、09-14、09-21、09-28
+    expect(next.weeks[1].weekTC).toBeCloseTo(245)
+    expect(next.weeks[1].spentTC).toBe(0)
+    expect(next.weeks[2].weekTC).toBe(350)
+    expect(next.weeks[2].penaltyTier).toBe(0)
+    // 09-28 这一周有账本（300 币），不再享受空周重置，但未超支所以也不打折
+    expect(next.weeks[3].spentTC).toBe(300)
+    expect(next.weeks[3].weekTC).toBe(350)
+    expect(next.weeks[3].nextWeekTC).toBe(350)
+    expect(currentQuota(next)).toEqual({ weekTC: 350, weekLT: 10 })
+  })
+
+  it('currentQuota 在没有任何结算时回退到配置值', () => {
+    const state: MoneyState = { enabled: true, config: DEFAULT_MONEY_CONFIG, days: [], weeks: [] }
+    expect(currentQuota(state)).toEqual({ weekTC: 350, weekLT: 10 })
   })
 })
