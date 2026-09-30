@@ -1,0 +1,965 @@
+# 金钱系统 Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** 给「象限」加入一套「时间就是金钱」的双货币激励系统，覆盖四象限 / 周计划 / 周日复盘，并新增「我的」页作为其小组件仪表盘。
+
+**Architecture:** 计费与结算全部实现为 `src/shared/money.ts` 中的**无副作用纯函数**，数据落在一个新增的可选字段 `AppData.money` 上（每天一条日账本记录）。界面分三层：周计划页的「待结算卡片」是唯一日常入口，象限页有轻量计费气泡，复盘页与「我的」页只读地派生展示。整个子系统由一个**启动时读取的开关**控制，关闭时金钱子树根本不被实例化。
+
+**Tech Stack:** TypeScript 5.5 + React 18.3 + Zustand 4.5 + Electron 31 / Vite 5；**零新增依赖**，可视化全部手写 SVG + CSS Grid。
+
+**Spec:** `docs/superpowers/specs/2026-09-29-money-system-design.md`
+
+## Global Constraints
+
+- **不新增任何 npm 依赖。** 图表、栅格、拖拽全部手写。
+- **测试必须逐文件跑**：`./node_modules/.bin/vitest run tests/<file>.test.ts`。多路径会触发沙箱 EPERM。基线 **204/204**。
+- **不要用 `npm run <script>`** —— 本终端会报 `/usr/bin/env: bash` 找不到。一律直接调 `./node_modules/.bin/<bin>`。
+- 类型检查：`./node_modules/.bin/tsc --noEmit -p tsconfig.web.json` 与 `./node_modules/.bin/tsc --noEmit -p tsconfig.node.json`。
+- 若 `electron-vite build` 因沙箱批量删除被拦，先用 Python `shutil.rmtree('out/main')`、`shutil.rmtree('out/preload')` 清一次再构建。
+- **CI 锁 Node 20**。纯逻辑模块**不得**与「顶层有副作用」的模块同住一个文件（`cloudValidation.ts:3-15` 记录了这次教训）。
+- **新增持久化字段必须同步 5 个文件**（spec 9.1）：`shared/types.ts`、`main/dataCodec.ts`、`renderer/lib/platformApi.ts`、`shared/defaults.ts`、`scripts/verify-integrity.mjs`（该脚本内有 **2 处**复刻：`validAppData` 与 `firstViolation`）。
+- **关闭态零副作用**（spec 4.3）：`money === undefined` 或 `enabled === false` 时，不渲染任何金钱 UI、不写任何金钱数据、复盘导出与改动前**逐字节一致**。`money` 字段在关闭时**必须保留**，不得清除。
+- **参数默认值原样使用**（spec 11）：`weeklyTC 350`、`tcPerHour 10`、`minCapRatio 0.2`、`nightStartMin 1410`、`nightEndMin 360`、`nightMultiplier 1.5`、`weeklyLT 10`、`rewardLT 0.5`、`penaltyLT 0.5`、`missPenaltyLT 1`。
+- **注释正文里绝不能出现注释终止符本身**（CSS/JS 通用，本项目已复发两次 —— 一次让 `.gs-plate.gs-refract` 整条规则被解析器丢弃）。
+- 提交信息沿用仓库既有风格（`feat:` / `fix:` / `test:` 前缀）。
+
+## Review Focus
+
+以下是 spec 隐含、但没有哪个任务的测试会主动覆盖、且最可能在真实使用中咬人的输入。
+每一条都在下面对应任务的测试里被钉住。
+
+1. **跨周未结算** —— 用户出差两周后打开应用，`days` 里堆了 10 个未结算日且跨了两个周边界。
+   期望：按最早优先逐日结算；中间的完整周各结算一次，空周按零花费、不惩罚处理。
+2. **源事件已被删除** —— 日结时不慎删掉了对应的周计划事件，`sourceId` 悬空。
+   期望：账本靠 `title` 快照仍可完整阅读，不抛错、不出现空白行。
+3. **`plannedMin` 为 `null` 或 `0`** —— 计划外条目没有计划时长，或用户填了 0。
+   期望：娱币判定返回 0（正常），不做除零比较，不产生 `NaN`。
+4. **恰好在 23:30 结束** —— 事件的推断结束时刻正好等于 `nightStartMin`。
+   期望：**不算**深夜（区间左闭右开），倍率不生效。
+5. **`enabled: false` 但账本数据仍在** —— 用户关掉开关后再导出复盘。
+   期望：导出内容与从未启用过该功能时**逐字节一致**。
+
+---
+
+### Task 1: 持久化与开关字段
+
+**Files:**
+- Modify: `src/shared/types.ts`
+- Modify: `src/shared/defaults.ts`
+- Modify: `src/main/dataCodec.ts`
+- Modify: `src/renderer/src/lib/platformApi.ts`
+- Modify: `scripts/verify-integrity.mjs:387-456`（两处复刻）
+- Test: `tests/dataCodec.test.ts`, `tests/platformApi.test.ts`, `tests/defaults.test.ts`（若不存在则新建）
+
+**Interfaces:**
+- Consumes: 无
+- Produces: 类型 `MoneyConfig` / `LedgerEntryKind` / `LedgerEntry` / `LedgerDay` / `PenaltyTier` / `WeekSettlement` / `MoneyState`；`AppData.money?: MoneyState`
+  - `src/shared/money.ts`：常量 `DEFAULT_MONEY_CONFIG: MoneyConfig`
+  - `main/dataCodec.normalizeMoney(raw: unknown): MoneyState | undefined`
+  - `renderer/lib/platformApi`: 模块内 `validMoney(value: unknown): boolean`
+  - `shared/defaults`: `defaultData()` 不含 `money`；`isEmptyData(data: AppData): boolean` 计入金钱数据
+
+字段定义以 spec 第 5 节为准，逐字抄写。要点：`MoneyState` **没有** `balance` 字段。
+
+- [ ] **Step 1: 写失败测试 —— 往返保真与老数据不变**
+
+在 `tests/dataCodec.test.ts` 末尾追加：
+
+```ts
+it('无 money 字段的 v2 数据往返后逐字节不变', () => {
+  const raw = { version: 2, goals: [], events: [], weekPresets: [], weekEvents: [], weekCounterOffset: 0 }
+  expect(parseData(JSON.parse(JSON.stringify(raw)))).toEqual(raw)
+})
+
+it('money 为非对象时被丢弃为 undefined，不影响其余字段', () => {
+  const out = parseData({ ...baseData, money: 42 })
+  expect(out.money).toBeUndefined()
+  expect(out.goals).toEqual(baseData.goals)
+})
+
+it('合法 money 往返保真（含一天已结算记录）', () => {
+  const out = parseData(JSON.parse(JSON.stringify(sampleDataWithMoney)))
+  expect(out.money).toEqual(sampleDataWithMoney.money)
+})
+```
+
+`baseData` / `sampleDataWithMoney` 是本文件已有的构造辅助，按现有风格定义。
+
+- [ ] **Step 2: 跑测试确认失败**
+
+Run: `./node_modules/.bin/vitest run tests/dataCodec.test.ts`
+Expected: FAIL —— `parseData` 返回的对象里没有 `money`（`out.money` 为 `undefined`，第三条断言失败）
+
+- [ ] **Step 3: 在 `src/shared/types.ts` 补类型并接上 `normalizeMoney`**
+
+在 `types.ts` 的 `AppData` 里加 `money?: MoneyState`，并逐字抄写 spec 第 5 节的全部类型。
+`dataCodec.ts` 中新增 `normalizeMoney`：非 record 或无 `boolean` 类型的 `enabled` → 返回 `undefined`；
+`config` 逐键用 `Number.isFinite` 校验、非法回退到 `DEFAULT_MONEY_CONFIG` 的同名值；
+`days` / `weeks` 逐项做结构过滤（字段不全的项丢弃，不使整份数据失效）。
+在 `parseData` 的返回对象里加上 `...(money ? { money } : {})`。
+
+> 本步顺带创建 `src/shared/money.ts`，在其中导出 `DEFAULT_MONEY_CONFIG`（逐字抄写 spec 第 11 节的默认值）。
+> Task 2 起的各任务只往这个文件继续追加函数，不新建模块。
+
+- [ ] **Step 4: 跑测试确认通过**
+
+Run: `./node_modules/.bin/vitest run tests/dataCodec.test.ts`
+Expected: PASS（含既有全部用例）
+
+- [ ] **Step 5: 写失败测试 —— `money === undefined` 必须合法**
+
+在 `tests/platformApi.test.ts` 追加：
+
+```ts
+it('money === undefined 的数据是合法的（否则老数据会被静默重置）', async () => {
+  const api = createWebPlatformApi(fakeStorage(JSON.stringify(baseData)))
+  expect(await api.loadData()).toEqual(baseData)
+})
+
+it('money 存在但 enabled 不是布尔时整份数据被拒', async () => {
+  const bad = { ...baseData, money: { enabled: 'yes', config: {}, days: [], weeks: [] } }
+  const api = createWebPlatformApi(fakeStorage(JSON.stringify(bad)))
+  expect(await api.loadData()).toEqual(defaultData())
+})
+
+it('含合法 money 的数据通过校验', async () => {
+  const api = createWebPlatformApi(fakeStorage(JSON.stringify(sampleDataWithMoney)))
+  expect((await api.loadData()).money).toEqual(sampleDataWithMoney.money)
+})
+```
+
+- [ ] **Step 6: 跑测试确认失败**
+
+Run: `./node_modules/.bin/vitest run tests/platformApi.test.ts`
+Expected: FAIL —— `validAppData` 对未知字段整体放行，第三条会失败；第二条也会失败（`money` 存在时不校验，被当合法）
+
+- [ ] **Step 7: 在 `platformApi.ts` 实现 `validMoney` 并接入 `validAppData`**
+
+`validMoney` 只校验 spec 第 5 节列出的字段类型，宽严程度与既有 `validPhotos` 一致（可选字段放行、存在则必须合规）。
+接入方式为 `(data.money === undefined || validMoney(data.money))`。
+
+- [ ] **Step 8: 跑测试确认通过**
+
+Run: `./node_modules/.bin/vitest run tests/platformApi.test.ts`
+Expected: PASS
+
+- [ ] **Step 9: 同步 `scripts/verify-integrity.mjs` 的两处复刻**
+
+在 `:390-421` 区域加 `validMoney` 与 `validAppData` 里的 `(d.money === undefined || validMoney(d.money))`；
+在 `:424-456` 的 `firstViolation` 里加对应的分支，返回 `` `money 不合规（检查 enabled/config/days/weeks）` ``。
+注意该文件的 `hasStringFields` / `num` / `quad` 辅助位于各自作用域内，按现有写法复用。
+
+- [ ] **Step 10: 验证体检脚本**
+
+```bash
+./node_modules/.bin/... 无需
+python -c "import json,os;os.makedirs('tmp/vi-probe',exist_ok=True);json.dump({'version':2,'goals':[],'events':[],'weekPresets':[],'weekEvents':[],'weekCounterOffset':0},open('tmp/vi-probe/plan.json','w'))"
+node scripts/verify-integrity.mjs --appdata tmp/vi-probe
+```
+Expected: 「运行数据」组 pass；**不出现**关于 `money` 的 FAIL 或 WARN。
+
+- [ ] **Step 11: `isEmptyData` 计入金钱数据**
+
+在 `src/shared/defaults.ts` 的 `isEmptyData` 里追加条件：`money` 存在且 `days` 或 `weeks` 非空时，
+本函数返回 `false`。补测试：仅含一条已结算日的 `money` + 四个数组全空 → `isEmptyData` 为 `false`。
+文件头注释同步说明「金钱账本也算用户数据」。
+
+- [ ] **Step 12: 跑全部相关测试**
+
+Run: `./node_modules/.bin/vitest run tests/dataCodec.test.ts`
+Run: `./node_modules/.bin/vitest run tests/platformApi.test.ts`
+Run: `./node_modules/.bin/vitest run tests/defaults.test.ts`
+Expected: 全部 PASS
+
+- [ ] **Step 13: 提交**
+
+```bash
+git add src/shared/types.ts src/shared/defaults.ts src/main/dataCodec.ts src/renderer/src/lib/platformApi.ts scripts/verify-integrity.mjs tests/
+git commit -m "feat(money): add optional money field with validators and sync points"
+```
+
+---
+
+### Task 2: 单条计费与娱币判定
+
+**Files:**
+- Modify: `src/shared/money.ts`（Task 1 已创建，本任务追加）
+- Test: `tests/money.test.ts`
+
+**Interfaces:**
+- Consumes: `MoneyConfig`、`DEFAULT_MONEY_CONFIG`（Task 1）
+- Produces:
+  - `nightMinutesOf(input: { startMin: number; actualMin: number }, config: MoneyConfig): number`
+  - `costOfEntry(input: { actualMin: number; nightMin: number }, config: MoneyConfig): number`
+  - `leisureDelta(input: { kind: LedgerEntryKind; done: boolean; actualMin: number; plannedMin: number | null }, config: MoneyConfig): number`
+
+**为什么 `costOfEntry` 收 `nightMin` 而不是布尔**：spec 6.3 要求**只对落在深夜区间内的那部分分钟数**乘倍率，
+不是整条乘。布尔标记做不到部分倍率，且一旦与分钟数并存就会两者不一致。
+
+- [ ] **Step 1: 写失败测试**
+
+```ts
+it('按实际时长计费：2 小时 × 10 币 = 20', () => {
+  expect(costOfEntry({ actualMin: 120, nightMin: 0 }, DEFAULT_MONEY_CONFIG)).toBe(20)
+})
+
+it('深夜倍率只作用于落在深夜区间的那部分分钟数', () => {
+  // 120 分钟中 60 分钟在深夜：(60 + 60 × 1.5) / 60 × 10 = 25
+  expect(costOfEntry({ actualMin: 120, nightMin: 60 }, DEFAULT_MONEY_CONFIG)).toBe(25)
+  expect(costOfEntry({ actualMin: 120, nightMin: 120 }, DEFAULT_MONEY_CONFIG)).toBe(30)
+})
+
+it('实际时长为 0 时不产生费用', () => {
+  expect(costOfEntry({ actualMin: 0, nightMin: 0 }, DEFAULT_MONEY_CONFIG)).toBe(0)
+})
+
+it('nightMinutesOf：区间左闭右开，恰好 23:30 结束不算深夜', () => {
+  expect(nightMinutesOf({ startMin: 1350, actualMin: 60 }, DEFAULT_MONEY_CONFIG)).toBe(0)   // 22:30 + 60
+  expect(nightMinutesOf({ startMin: 1350, actualMin: 90 }, DEFAULT_MONEY_CONFIG)).toBe(30)  // 22:30 + 90
+  expect(nightMinutesOf({ startMin: 1380, actualMin: 60 }, DEFAULT_MONEY_CONFIG)).toBe(30)  // 23:00 + 60
+})
+
+it('nightMinutesOf：跨零点到次日清晨', () => {
+  // 23:00 开始做 480 分钟 → 落在 [23:30, 06:00) 内的是 390 分钟
+  expect(nightMinutesOf({ startMin: 1380, actualMin: 480 }, DEFAULT_MONEY_CONFIG)).toBe(390)
+})
+
+it('nightMinutesOf：完全在白天为 0', () => {
+  expect(nightMinutesOf({ startMin: 600, actualMin: 120 }, DEFAULT_MONEY_CONFIG)).toBe(0)
+})
+
+it('没做的事扣娱币，不看时长', () => {
+  expect(leisureDelta({ kind: 'planned', done: false, actualMin: 0, plannedMin: 60 }, DEFAULT_MONEY_CONFIG)).toBe(-1)
+})
+
+it('高效完成有奖励，低效完成有惩罚，中间段为 0', () => {
+  expect(leisureDelta({ kind: 'planned', done: true, actualMin: 60, plannedMin: 60 }, DEFAULT_MONEY_CONFIG)).toBe(0.5)
+  expect(leisureDelta({ kind: 'planned', done: true, actualMin: 120, plannedMin: 60 }, DEFAULT_MONEY_CONFIG)).toBe(-0.5)
+  expect(leisureDelta({ kind: 'planned', done: true, actualMin: 80, plannedMin: 60 }, DEFAULT_MONEY_CONFIG)).toBe(0)
+})
+
+it('边界：恰好等于计划时长算高效，恰好 1.5 倍不算低效', () => {
+  expect(leisureDelta({ kind: 'planned', done: true, actualMin: 60, plannedMin: 60 }, DEFAULT_MONEY_CONFIG)).toBe(0.5)
+  expect(leisureDelta({ kind: 'planned', done: true, actualMin: 90, plannedMin: 60 }, DEFAULT_MONEY_CONFIG)).toBe(0)
+})
+
+it('计划外条目不参与娱币（否则随手加一条就能刷币）', () => {
+  expect(leisureDelta({ kind: 'unplanned', done: true, actualMin: 30, plannedMin: null }, DEFAULT_MONEY_CONFIG)).toBe(0)
+})
+
+it('plannedMin 为 null 或 0 时返回 0，不产生 NaN', () => {
+  expect(leisureDelta({ kind: 'planned', done: true, actualMin: 30, plannedMin: null }, DEFAULT_MONEY_CONFIG)).toBe(0)
+  expect(leisureDelta({ kind: 'planned', done: true, actualMin: 30, plannedMin: 0 }, DEFAULT_MONEY_CONFIG)).toBe(0)
+})
+```
+
+- [ ] **Step 2: 跑测试确认失败**
+
+Run: `./node_modules/.bin/vitest run tests/money.test.ts`
+Expected: FAIL —— `costOfEntry is not a function`
+
+- [ ] **Step 3: 实现三个函数**
+
+`nightMinutesOf`：逐分钟判定，不要写闭式公式 —— 深夜区间跨零点（`[1410, 1440) ∪ [0, 360)`），
+闭式容易在跨零点与跨多日两处出错，而 `actualMin` 上限只有 600，逐分钟循环完全可接受。
+对 `i ∈ [0, actualMin)`，取 `m = (startMin + i) mod 1440`，落在区间内则计数。
+
+`costOfEntry`：`dayMin = actualMin - nightMin`，再按 spec 6.3 的公式取整。
+
+`leisureDelta` 判定顺序：`!done` → `missPenaltyLT`；`kind === 'unplanned'` → 0；
+`plannedMin` 非正数或为 `null` → 0；`actualMin <= plannedMin × 1.0` → `+rewardLT`；
+`actualMin > plannedMin × 1.5` → `−penaltyLT`；否则 0。
+
+- [ ] **Step 4: 跑测试确认通过**
+
+Run: `./node_modules/.bin/vitest run tests/money.test.ts`
+Expected: PASS
+
+- [ ] **Step 5: 提交**
+
+```bash
+git add src/shared/money.ts tests/money.test.ts
+git commit -m "feat(money): add per-entry cost and leisure-token delta"
+```
+
+---
+
+### Task 3: 日结算（额度、透支、保底）
+
+**Files:**
+- Modify: `src/shared/money.ts`
+- Test: `tests/money.test.ts`
+
+**Interfaces:**
+- Consumes: `costOfEntry` / `leisureDelta`（Task 2）
+- Produces:
+  - `dayLimitOf(previousOverdraft: number, config: MoneyConfig): number`
+  - `settleDay(input: { date: string; entries: LedgerEntry[]; previousOverdraft: number; settledAt: string; config: MoneyConfig }): LedgerDay`
+
+- [ ] **Step 1: 写失败测试**
+
+```ts
+it('无透支时当日额度等于周额度除以 7', () => {
+  expect(dayLimitOf(0, DEFAULT_MONEY_CONFIG)).toBe(50)
+})
+
+it('透支从次日额度扣除，且不击穿保底线', () => {
+  expect(dayLimitOf(30, DEFAULT_MONEY_CONFIG)).toBe(20)
+  expect(dayLimitOf(999, DEFAULT_MONEY_CONFIG)).toBe(10)   // 50 × 0.2
+})
+
+it('未超限的普通日：透支为 0，花费等于条目之和', () => {
+  const day = settleDay({
+    date: '2026-09-28', previousOverdraft: 0, settledAt: '2026-09-28T23:20:00.000Z',
+    entries: [
+      mkEntry({ actualMin: 120, plannedMin: 120, done: true }),
+      mkEntry({ actualMin: 60, plannedMin: 60, done: true })
+    ],
+    config: DEFAULT_MONEY_CONFIG
+  })
+  expect(day.spentTC).toBe(30)
+  expect(day.overdraft).toBe(0)
+  expect(day.dayLimit).toBe(50)
+})
+
+it('超限日的透支等于花费减额度', () => {
+  const day = settleDay({
+    date: '2026-09-28', previousOverdraft: 0, settledAt: 'x',
+    entries: [mkEntry({ actualMin: 480, plannedMin: 480, done: true })],   // 80 币
+    config: DEFAULT_MONEY_CONFIG
+  })
+  expect(day.overdraft).toBe(30)
+})
+
+it('自修复：透支一天后正常消费，第三天额度恢复', () => {
+  const d1 = settleDay({ date: '2026-09-28', previousOverdraft: 0, settledAt: 'x',
+    entries: [mkEntry({ actualMin: 480, plannedMin: 480, done: true })], config: DEFAULT_MONEY_CONFIG })
+  const d2 = settleDay({ date: '2026-09-29', previousOverdraft: d1.overdraft, settledAt: 'x',
+    entries: [mkEntry({ actualMin: 120, plannedMin: 120, done: true })], config: DEFAULT_MONEY_CONFIG })
+  expect(d2.dayLimit).toBe(20)
+  expect(d2.overdraft).toBe(0)
+  expect(dayLimitOf(d2.overdraft, DEFAULT_MONEY_CONFIG)).toBe(50)
+})
+
+it('deltaLT 是当日全部条目娱币增量之和', () => {
+  const day = settleDay({ date: '2026-09-28', previousOverdraft: 0, settledAt: 'x',
+    entries: [mkEntry({ done: false }), mkEntry({ done: true, actualMin: 30, plannedMin: 60 })],
+    config: DEFAULT_MONEY_CONFIG })
+  expect(day.deltaLT).toBe(-0.5)
+})
+```
+
+`mkEntry` 是本测试文件内的构造辅助，默认 `kind: 'planned'`、`nightMin: 0`、`actualMin: 0`、`plannedMin: 60`。
+
+- [ ] **Step 2: 跑测试确认失败**
+
+Run: `./node_modules/.bin/vitest run tests/money.test.ts`
+Expected: FAIL —— `dayLimitOf is not a function`
+
+- [ ] **Step 3: 实现**
+
+`dayLimitOf` = `Math.max(weeklyTC / 7 * minCapRatio, weeklyTC / 7 - previousOverdraft)`。
+`settleDay` 计算 `dayLimit` → `spentTC`（逐条 `costOfEntry` 求和）→ `overdraft = Math.max(0, spentTC - dayLimit)`
+→ `deltaLT`（逐条 `leisureDelta` 求和），`settledAt` 原样写入，`nightPending` 置 `true`。
+
+- [ ] **Step 4: 跑测试确认通过**
+
+Run: `./node_modules/.bin/vitest run tests/money.test.ts`
+Expected: PASS
+
+- [ ] **Step 5: 提交**
+
+```bash
+git add src/shared/money.ts tests/money.test.ts
+git commit -m "feat(money): add daily settlement with overdraft carry and floor"
+```
+
+---
+
+### Task 4: 周结算、档位惩罚与跨周滚动
+
+**Files:**
+- Modify: `src/shared/money.ts`
+- Test: `tests/money.test.ts`
+
+**Interfaces:**
+- Consumes: `settleDay` 的产物 `LedgerDay`（Task 3）
+- Produces:
+  - `penaltyTierOf(weekOver: number, weekTC: number): PenaltyTier`
+  - `settleWeek(input: { weekStart: string; weekEnd: string; days: LedgerDay[]; weekTC: number; weekLT: number; config: MoneyConfig }): WeekSettlement`
+  - `ensureWeekRollover(state: MoneyState, today: string): MoneyState`
+  - `currentQuota(state: MoneyState): { weekTC: number; weekLT: number }`
+
+档位表（spec 6.5，逐字）：未超支 → tier 0，下周 100%/100%；
+超支 ≤10% → tier 1，85%/85%；10%–30% → tier 2，70%/60%；>30% → tier 3，50%/40%。
+
+- [ ] **Step 1: 写失败测试**
+
+```ts
+it('档位边界', () => {
+  expect(penaltyTierOf(0, 350)).toBe(0)
+  expect(penaltyTierOf(35, 350)).toBe(1)      // 恰好 10%
+  expect(penaltyTierOf(36, 350)).toBe(2)
+  expect(penaltyTierOf(105, 350)).toBe(2)     // 恰好 30%
+  expect(penaltyTierOf(106, 350)).toBe(3)
+})
+
+it('各档位对应的下周额度', () => {
+  expect(settleWeek(mkWeek({ spent: 300 })).nextWeekTC).toBe(350)
+  expect(settleWeek(mkWeek({ spent: 385 })).nextWeekTC).toBeCloseTo(297.5)
+  expect(settleWeek(mkWeek({ spent: 420 })).nextWeekTC).toBeCloseTo(245)
+  expect(settleWeek(mkWeek({ spent: 460 })).nextWeekTC).toBeCloseTo(175)
+})
+
+it('未超支时娱币不打折', () => {
+  expect(settleWeek(mkWeek({ spent: 300 })).nextWeekLT).toBe(10)
+})
+
+it('周汇总的字段来自日账本', () => {
+  const w = settleWeek(mkWeek({ spent: 300 }))
+  expect(w.overLimitDays).toBe(1)
+  expect(w.unplannedCount).toBe(1)
+  expect(w.unplannedMin).toBe(45)
+  expect(w.missCount).toBe(1)
+  expect(w.nightMin).toBe(30)
+})
+
+it('跨周滚动：缺失的周按空周处理，不惩罚、额度重置', () => {
+  const state = { enabled: true, config: DEFAULT_MONEY_CONFIG, days: [], weeks: [
+    mkSettledWeek({ weekStart: '2026-09-07', nextWeekTC: 245, nextWeekLT: 6 })
+  ] }
+  const next = ensureWeekRollover(state, '2026-09-28')   // 距今跨了 09-14、09-21 两个周
+  expect(next.weeks).toHaveLength(3)
+  expect(next.weeks[1].weekTC).toBeCloseTo(245)
+  expect(next.weeks[2].weekTC).toBe(350)
+  expect(currentQuota(next)).toEqual({ weekTC: 350, weekLT: 10 })
+})
+```
+
+- [ ] **Step 2: 跑测试确认失败**
+
+Run: `./node_modules/.bin/vitest run tests/money.test.ts`
+Expected: FAIL —— `penaltyTierOf is not a function`
+
+- [ ] **Step 3: 实现**
+
+`settleWeek` 遍历该周 7 天的 `LedgerDay`（缺失的日按零计），汇总 spec 5 节 `WeekSettlement` 的全部字段；
+`weekOver = Math.max(0, spentTC - weekTC)`；据档位算 `nextWeekTC` / `nextWeekLT`。
+`notes` 生成 2–4 条可解释结论（如「本周 3 天超限」「深夜做事 120 分钟」「有 2 件事没做」）。
+`ensureWeekRollover` 用 `mondayOf`（见下）算出「最后一次结算的下一周」到「上一个已结束的周」，逐周补齐。
+
+> 需要周一计算：复用 `src/renderer/src/lib/weekRules.ts` 的 `mondayOf` / `addDays`。
+> **但这会让 `shared/` 依赖 `renderer/`，方向是错的。** 正确做法是把 `mondayOf` / `addDays` / `dateKey`
+> 这三个纯日期函数**下沉到 `src/shared/`**（新建 `src/shared/dateKey.ts`），让 `weekRules.ts` 改为 re-export。
+> 这一步**不得改变** `weekRules.ts` 的对外签名，既有 `tests/weekRules.test.ts` 必须原样全绿。
+
+- [ ] **Step 4: 跑测试确认通过（含 weekRules 回归）**
+
+Run: `./node_modules/.bin/vitest run tests/money.test.ts`
+Run: `./node_modules/.bin/vitest run tests/weekRules.test.ts`
+Expected: 全部 PASS —— 后者证明日期函数下沉没有破坏既有行为
+
+- [ ] **Step 5: 提交**
+
+```bash
+git add src/shared/money.ts src/shared/dateKey.ts src/renderer/src/lib/weekRules.ts tests/
+git commit -m "feat(money): add weekly settlement, penalty tiers and week rollover"
+```
+
+---
+
+### Task 5: 派生统计（小组件的数据源）
+
+**Files:**
+- Modify: `src/shared/money.ts`
+- Test: `tests/money.test.ts`
+
+**Interfaces:**
+- Consumes: `currentQuota`（Task 4）
+- Produces:
+  - `interface MoneyStats`
+  - `selectMoneyStats(money: MoneyState, today: string): MoneyStats`
+
+`MoneyStats` 字段（供 Task 7 的 6 个小组件消费，逐字实现）：
+`weekStart`、`weekTC`、`spentTC`、`remainingTC`、`weekLT`、`spentLT`、`remainingLT`、
+`daily: { date: string; weekday: string; spentTC: number; limit: number; ratio: number }[]`（恒为 7 项）、
+`nightMin`、`nightRatio`、`quality: { efficient: number; normal: number; inefficient: number; missed: number }`、
+`penaltyTier: PenaltyTier`、`nextWeekTC: number`、`nextWeekLT: number`。
+
+- [ ] **Step 1: 写失败测试**
+
+```ts
+it('daily 恒为 7 项，未结算的日子按零计', () => {
+  const stats = selectMoneyStats(moneyWithTwoSettledDays, '2026-09-30')
+  expect(stats.daily).toHaveLength(7)
+  expect(stats.daily[0].ratio).toBe(0)
+  expect(stats.daily[0].limit).toBeCloseTo(50)
+  expect(stats.daily.map((d) => d.weekday)).toEqual(['一','二','三','四','五','六','日'])
+})
+
+it('余额 = 额度减本周已花', () => {
+  const stats = selectMoneyStats(moneyWithTwoSettledDays, '2026-09-30')
+  expect(stats.remainingTC).toBeCloseTo(stats.weekTC - stats.spentTC)
+})
+
+it('ratio = spentTC / limit，limit 为 0 时不产生 Infinity', () => {
+  const stats = selectMoneyStats(moneyWithZeroLimitDay, '2026-09-30')
+  expect(Number.isFinite(stats.daily[0].ratio)).toBe(true)
+  expect(stats.daily[0].ratio).toBe(0)
+})
+
+it('quality 四类计数与条目一一对应', () => {
+  const stats = selectMoneyStats(moneyWithTwoSettledDays, '2026-09-30')
+  expect(stats.quality.missed).toBe(1)
+  expect(stats.quality.efficient).toBe(1)
+})
+
+it('源事件被删除后仍按 title 快照正常计入，不抛错', () => {
+  // 该账本里的 sourceId 指向一个已不存在的 weekEvent.id
+  const stats = selectMoneyStats(moneyWithDanglingSourceId, '2026-09-30')
+  expect(stats.spentTC).toBeGreaterThan(0)
+  expect(Number.isFinite(stats.remainingTC)).toBe(true)
+  expect(stats.daily.some((d) => d.spentTC > 0)).toBe(true)
+})
+```
+
+- [ ] **Step 2: 跑测试确认失败**
+
+Run: `./node_modules/.bin/vitest run tests/money.test.ts`
+Expected: FAIL —— `selectMoneyStats is not a function`
+
+- [ ] **Step 3: 实现**
+
+按当前周（`mondayOf(today)` 起 7 天）过滤 `days`，逐日算 `limit`（用前一日 `overdraft`，无前一日则 0）与 `ratio`；
+`limit <= 0` 时 `ratio` 取 0。`quality` 由条目分类：`!done` → `missed`；
+`kind === 'unplanned'` 不计入任何一类；`actualMin <= plannedMin` → `efficient`；
+`actualMin > plannedMin * 1.5` → `inefficient`；否则 `normal`。`penaltyTier` 用当前周的实时 `spentTC` 预演。
+
+- [ ] **Step 4: 跑测试确认通过**
+
+Run: `./node_modules/.bin/vitest run tests/money.test.ts`
+Expected: PASS
+
+- [ ] **Step 5: 提交**
+
+```bash
+git add src/shared/money.ts tests/money.test.ts
+git commit -m "feat(money): add derived stats selector for widgets"
+```
+
+---
+
+### Task 6: 「我的」页骨架、导航改造与金钱开关
+
+**Files:**
+- Create: `src/renderer/src/pages/MinePage.tsx`
+- Modify: `src/renderer/src/App.tsx:15`, `App.tsx:91-113`
+- Modify: `src/renderer/src/state/appStore.ts`（`Page` 类型 + `setMoneyEnabled` action）
+- Modify: `src/renderer/src/components/Sidebar.tsx:12-17`, `:148-160`
+- Modify: `src/renderer/src/styles/theme.css:2942`, `:2953`（仅注释）与新增样式
+
+**Interfaces:**
+- Consumes: `MoneyState`（Task 1）
+- Produces: `Page` 类型新增 `'mine'`；`useAppStore` 新增 `setMoneyEnabled(enabled: boolean): void` 与 `rolloverMoneyWeek(): void`
+
+- [ ] **Step 1: 改导航与页面骨架**
+
+`Sidebar.tsx` 的 `NAV` 加入 `{ page: 'mine', label: '我的', icon: User }`（图标从 `lucide-react` 取）；
+「外观」按钮的 `className` 由 `nav-item appearance-button` 改为 `nav-item appearance-button desktop-only`。
+`App.tsx` 的 `PAGE_ORDER` 加入 `'mine'`，并在 `page === 'mine' && <MinePage />`。
+`MinePage.tsx` 先只渲染三个分组标题（金钱 / 设置 / 关于）与金钱开关。
+
+- [ ] **Step 2: 更新两处注释（不改任何尺寸）**
+
+`theme.css:2942` 的「五列：四个页面 + 一个外观设置入口」改为「五列：五个页面（外观入口在手机档隐藏）」；
+`:2953` 的「`--nav-index` 只由页面项给出（0~3）」改为 `0~4`。
+**`grid-template-columns` 与 `--nav-indicator` 的 width 一个字符都不改。**
+
+- [ ] **Step 3: 实现开关与周滚动两个 action**
+
+`setMoneyEnabled(true)`：若 `data.money` 不存在则写入 `{ enabled: true, config: DEFAULT_MONEY_CONFIG, days: [], weeks: [] }`，
+否则只把 `enabled` 置 true；`setMoneyEnabled(false)`：**只改 `enabled`，绝不动 `days` / `weeks`**。
+两种操作都走既有 `saveSoon` 落盘链，并弹出「需要重启生效」的提示。
+
+`rolloverMoneyWeek()`：调用 Task 4 的 `ensureWeekRollover(data.money, todayKey())`，把结果写回 `data.money`。
+**仅当 `data.money?.enabled` 为真时执行**，并在 store 的 `init` 与 `applyCloudData` 之后各调用一次 ——
+后者是必要的，因为从云端拉下来的数据可能已经跨周。
+
+- [ ] **Step 4: 类型检查**
+
+Run: `./node_modules/.bin/tsc --noEmit -p tsconfig.web.json`
+Expected: 无错误
+
+- [ ] **Step 5: 构建并人工验收**
+
+Run: `./node_modules/.bin/electron-vite build`
+Expected: 构建成功。随后启动应用，验收：
+桌面端侧栏出现「我的」且点击可达、外观入口仍在、指示块落到「我的」那一格；
+窗口缩到 767px 以下（或手机端）时**外观入口消失**、底部 5 格依次为目标/四象限/周计划/周日复盘/我的且标签不折行。
+
+> 若 `out/` 因沙箱批量删除被拦：`python -c "import shutil;[shutil.rmtree(p,ignore_errors=True) for p in ('out/main','out/preload')]"`。
+
+- [ ] **Step 6: 提交**
+
+```bash
+git add src/renderer/src/pages/MinePage.tsx src/renderer/src/App.tsx src/renderer/src/state/appStore.ts src/renderer/src/components/Sidebar.tsx src/renderer/src/styles/theme.css
+git commit -m "feat(mine): add Mine page, nav entry and money toggle"
+```
+
+---
+
+### Task 7: 六个金钱小组件
+
+**Files:**
+- Create: `src/renderer/src/components/mine/WidgetShell.tsx` + `BalanceWidget.tsx` / `WeeklySpendWidget.tsx` / `DailyHeatWidget.tsx` / `NightWidget.tsx` / `QualityWidget.tsx` / `PenaltyWidget.tsx`
+- Modify: `src/renderer/src/pages/MinePage.tsx`
+- Modify: `src/renderer/src/styles/theme.css`
+
+**Interfaces:**
+- Consumes: `selectMoneyStats` 与其返回的 `MoneyStats`（Task 5）
+- Produces: 上述 7 个组件，全部只接收 `stats: MoneyStats` 一个 prop
+
+- [ ] **Step 1: 实现 `WidgetShell`**
+
+`WidgetShell({ title, subtitle, span, children })`：一个卡片外壳，桌面跨 `span` 列（hero 传 6，小卡传 3），手机恒为整行。
+**不玻璃化** —— 用普通背景色 + `var(--border)`，理由见 spec 12.4。
+
+- [ ] **Step 2: 逐个实现 6 个组件**
+
+| 组件 | 渲染 |
+| --- | --- |
+| `BalanceWidget` | 两个大数字（`remainingTC` / `remainingLT`）+ 一条 `spentTC / weekTC` 进度条 |
+| `WeeklySpendWidget` | 7 根 SVG 矩形柱，高按 `daily[i].spentTC` 归一化；一条水平基准线在 `limit / max` 处；`spentTC > limit` 的柱换警示色 |
+| `DailyHeatWidget` | 7 个 SVG 方格，填充色按 `ratio` 分 4 档 |
+| `NightWidget` | 一条横向占比条，宽度 = `nightRatio`，旁标 `nightMin` 分钟 |
+| `QualityWidget` | 四段堆叠条（`efficient / normal / inefficient / missed`）+ 图例 |
+| `PenaltyWidget` | 档位徽标 + 两个百分比（`nextWeekTC / weekTC`、`nextWeekLT / weekLT`） |
+
+全部手写 SVG，**不引入任何图表库**。所有 `<path>` 若是连线必须 `fill="none"`。
+
+- [ ] **Step 3: 接进 `MinePage`**
+
+仅当 `data.money?.enabled` 为真时渲染「金钱」分组；否则整组不出现（不占位、不留空标题）。
+
+- [ ] **Step 4: 类型检查与构建**
+
+Run: `./node_modules/.bin/tsc --noEmit -p tsconfig.web.json`
+Run: `./node_modules/.bin/electron-vite build`
+Expected: 均无错误
+
+- [ ] **Step 5: 人工验收**
+
+开启金钱系统并造 3 天账本（含 1 天超限、1 条深夜、1 条未完成），验收：
+6 个组件都渲染出非零数据；桌面 2 行栅格（2 hero + 4 小卡）；窄屏单列堆叠且不横向溢出。
+关闭开关后**整个金钱分组消失**，页面仍剩设置与关于两组。
+
+- [ ] **Step 6: 提交**
+
+```bash
+git add src/renderer/src/components/mine/ src/renderer/src/pages/MinePage.tsx src/renderer/src/styles/theme.css
+git commit -m "feat(mine): add six money widgets rendered from derived stats"
+```
+
+---
+
+### Task 8: 日结卡片与结算面板
+
+**Files:**
+- Create: `src/renderer/src/components/money/SettleCard.tsx`, `SettlePanel.tsx`
+- Modify: `src/renderer/src/pages/WeeklyPage.tsx`
+- Modify: `src/renderer/src/state/appStore.ts`（`settleDay` / `addUnplannedEntry` / `confirmNight`）
+- Test: `tests/money.test.ts`（补一条 pending 判定的纯函数测试）
+
+**Interfaces:**
+- Consumes: `settleDay`（Task 3）、`money.days`（Task 1）
+- Produces:
+  - `pendingDays(money: MoneyState, today: string): string[]`（在 `shared/money.ts`，返回待结算日期升序）
+  - store action：`commitDaySettlement(date: string, entries: LedgerEntry[]): void` /
+    `addUnplannedEntry(date: string, entry: LedgerEntry): void` /
+    `confirmNight(previousDate: string, answer: { worked: boolean; endMin?: number }): void`
+
+- [ ] **Step 1: 写失败测试 —— 待结算判定**
+
+```ts
+it('待结算 = 早于今天且 settledAt 为 null 的日子，按升序', () => {
+  expect(pendingDays(moneyWithMixedDays, '2026-09-30')).toEqual(['2026-09-28', '2026-09-29'])
+})
+
+it('今天尚未结束，不计入待结算', () => {
+  expect(pendingDays(moneyWithTodayOnly, '2026-09-30')).toEqual([])
+})
+```
+
+- [ ] **Step 2: 跑测试确认失败**
+
+Run: `./node_modules/.bin/vitest run tests/money.test.ts`
+Expected: FAIL —— `pendingDays is not a function`
+
+- [ ] **Step 3: 实现 `pendingDays`**
+
+过滤 `days` 中 `settledAt === null` 且 `date < today` 的项，按 `date` 升序返回。今天是本地日期字符串、可直接字典序比较。
+
+- [ ] **Step 4: 跑测试确认通过**
+
+Run: `./node_modules/.bin/vitest run tests/money.test.ts`
+Expected: PASS
+
+- [ ] **Step 5: 实现 `SettleCard` 与 `SettlePanel`**
+
+`SettleCard`：常驻在周计划页顶部，仅在有 `pendingDays` 时出现，文案「有 N 天待结算」。
+`SettlePanel` 按**最早优先**逐日结算，对每一天依次问：
+① 计划内事件逐条 —— 做了吗 / 实际多久（预填计划时长）；
+② 有没有计划外的事 —— 逐条录入标题、时长、象限；
+③ **补记**：若前一日 `nightPending`，附加一问「昨夜 23:30 之后还在做事吗」，
+   答「是」则回写前一日并重算其 `spentTC` / `overdraft` / `deltaLT`，把 `nightPending` 置 false。
+
+每条实时显示它产生的 TC 消耗与 LT 变化。这是全代码库唯一允许修改已结算快照的地方，**必须在代码里显式注释说明**。
+
+- [ ] **Step 6: 类型检查与构建**
+
+Run: `./node_modules/.bin/tsc --noEmit -p tsconfig.web.json`
+Run: `./node_modules/.bin/electron-vite build`
+Expected: 均无错误
+
+- [ ] **Step 7: 人工验收（含 Review Focus 第 1 条）**
+
+造 3 个连续未结算日（含跨一个周日的），打开应用验收：
+卡片出现且显示 N=3；面板按最早优先逐日走完；周计划页与「我的」页的数字随之更新；
+跨周的那一天结算后，周结算被触发一次且不重复。
+
+- [ ] **Step 8: 提交**
+
+```bash
+git add src/renderer/src/components/money/ src/renderer/src/pages/WeeklyPage.tsx src/renderer/src/state/appStore.ts src/shared/money.ts tests/money.test.ts
+git commit -m "feat(money): add settle card, settle panel and night backfill"
+```
+
+---
+
+### Task 9: 象限计费气泡
+
+**Files:**
+- Create: `src/renderer/src/components/money/QuadrantCostBubble.tsx`
+- Modify: `src/renderer/src/pages/QuadrantPage.tsx`（事件完成路径）
+
+**Interfaces:**
+- Consumes: `costOfEntry`（Task 2）
+- Produces: `QuadrantCostBubble({ anchor, onConfirm, onCancel })`
+
+- [ ] **Step 1: 实现气泡**
+
+两行内联气泡（**非模态**）：第一行「是否计费」（默认「不计费」），第二行小时数输入（**不预填**，见 spec 13.1 决策 2）。
+深夜判定用**当前时刻**是否落在 `[nightStartMin, nightEndMin)`（跨零点区间），实时把倍率结果显示在气泡里。
+`onConfirm` 产出一条 `kind: 'planned'`、`quadrant` 取自事件的 `LedgerEntry`，追加进当天的 `days` 记录。
+
+- [ ] **Step 2: 注意 —— 象限事件目前没有「完成」动作**
+
+`QuadrantEvent` 没有 `done` 字段（spec 9.1 的前提）。本任务需要在 `QuadrantPage` 的右键/长按菜单里
+新增一个「标记完成」入口，作为气泡的触发点。**不要**给 `QuadrantEvent` 加字段 —— 完成状态只存在于账本里。
+
+- [ ] **Step 3: 确认点击穿透**
+
+气泡挂在 `EventCard` 之上、四象限画布的 `event-layer` 之内，必须 `pointer-events: auto`，
+且不得让画布的手势（`useCanvasGestures`）在气泡上继续生效。**先看 `useCanvasGestures` 的 `pointerdown` 处理再动手。**
+
+- [ ] **Step 4: 类型检查与构建**
+
+Run: `./node_modules/.bin/tsc --noEmit -p tsconfig.web.json`
+Run: `./node_modules/.bin/electron-vite build`
+Expected: 均无错误
+
+- [ ] **Step 5: 人工验收**
+
+在四象限页触发一次计费：气泡出现、默认不计费、填 2 小时确认后当天账本多一条 20 币的条目；
+**在 23:30 之后**（改系统时间或用探针注入）触发一次，确认显示 1.5 倍；
+气泡打开时拖动画布不应生效。
+
+- [ ] **Step 6: 提交**
+
+```bash
+git add src/renderer/src/components/money/QuadrantCostBubble.tsx src/renderer/src/pages/QuadrantPage.tsx
+git commit -m "feat(money): add quadrant cost bubble with night multiplier"
+```
+
+---
+
+### Task 10: 复盘账本区块、导出追加与关闭态验收
+
+**Files:**
+- Create: `src/renderer/src/components/money/WeekLedger.tsx`
+- Modify: `src/renderer/src/pages/ReviewPage.tsx`
+- Modify: `src/main/reviewDoc.ts`（导出 Word 时追加账本段）
+- Modify: `src/renderer/src/lib/platformApi.ts`（txt 导出追加同一段）
+- Test: `tests/reviewDoc.test.ts`
+
+**Interfaces:**
+- Consumes: `WeekSettlement`（Task 4）
+- Produces:
+  - `moneySummaryLines(week: WeekSettlement | undefined): string[]`（在 `shared/money.ts`）
+  - `WeekLedger({ week })` 组件
+
+- [ ] **Step 1: 写失败测试 —— 关闭态必须产出零行**
+
+在 `tests/money.test.ts` 追加：
+
+```ts
+it('没有周结算记录时产出零行，导出内容与无该功能时一致', () => {
+  expect(moneySummaryLines(undefined)).toEqual([])
+})
+
+it('有关闭开关但保留账本时同样产出零行', () => {
+  expect(moneySummaryLines(undefined)).toEqual([])
+})
+
+it('有周结算时产出包含关键数字的行', () => {
+  const lines = moneySummaryLines(mkSettledWeek({ spent: 420 }))
+  expect(lines.length).toBeGreaterThanOrEqual(2)
+  expect(lines.join('\n')).toContain('420')
+  expect(lines.join('\n')).toContain('超支')
+})
+```
+
+- [ ] **Step 2: 跑测试确认失败**
+
+Run: `./node_modules/.bin/vitest run tests/money.test.ts`
+Expected: FAIL —— `moneySummaryLines is not a function`
+
+- [ ] **Step 3: 实现 `moneySummaryLines`**
+
+只从**已结算且属于上一周**的 `WeekSettlement` 生成文本行。`undefined` 或 `penaltyTier === 0 且 spentTC === 0` 时返回 `[]`。
+
+- [ ] **Step 4: 跑测试确认通过**
+
+Run: `./node_modules/.bin/vitest run tests/money.test.ts`
+Expected: PASS
+
+- [ ] **Step 5: 实现 `WeekLedger` 并接进复盘页**
+
+在 `ReviewPage` 的三档滑动条**之上**新增「本周账本」区块（spec 8）。展示 `WeekSettlement` 的
+周花费/额度、超支额与档位、计划 vs 实际时长、未完成数、计划外数与时长、深夜总时长、超限天数，以及 `notes`。
+
+- [ ] **Step 6: 导出追加（两处，必须同源）**
+
+`reviewDoc.ts` 的 `buildReviewDocx` 与 `platformApi.saveReview` 的 txt 拼接，
+都改为在末尾追加 `moneySummaryLines(...)` 的结果。**两处必须调用同一个函数**，不得各写一份文案。
+
+- [ ] **Step 7: 写回归测试 —— 关闭态逐字节一致（Review Focus 第 5 条）**
+
+在 `tests/reviewDoc.test.ts` 追加：构造同一份 `ReviewExport`，
+分别在「无 money」「有 money 但 enabled=false」两种输入下导出，断言产出的**字节完全相等**。
+
+- [ ] **Step 8: 跑测试确认通过**
+
+Run: `./node_modules/.bin/vitest run tests/reviewDoc.test.ts`
+Run: `./node_modules/.bin/vitest run tests/money.test.ts`
+Expected: 全部 PASS
+
+- [ ] **Step 9: 全量回归**
+
+```bash
+# 逐文件跑，不要合并成多路径（会触发沙箱 EPERM）
+for f in tests/*.test.ts; do ./node_modules/.bin/vitest run "$f" || echo "FAILED: $f"; done
+```
+Expected: 全绿，且总数 = 基线 204 + 本次新增
+
+- [ ] **Step 10: 提交**
+
+```bash
+git add src/renderer/src/components/money/WeekLedger.tsx src/renderer/src/pages/ReviewPage.tsx src/main/reviewDoc.ts src/renderer/src/lib/platformApi.ts src/shared/money.ts tests/
+git commit -m "feat(money): add week ledger block and byte-identical export when disabled"
+```
+
+---
+
+### Task 11: 关闭态与完整性终检
+
+**Files:**
+- 无新增；本任务是验收任务，产出是一份可复现的检查记录
+
+**Interfaces:**
+- Consumes: 全部前置任务
+- Produces: 无
+
+- [ ] **Step 1: 类型检查与生产构建**
+
+Run: `./node_modules/.bin/tsc --noEmit -p tsconfig.web.json`
+Run: `./node_modules/.bin/tsc --noEmit -p tsconfig.node.json`
+Run: `./node_modules/.bin/electron-vite build`
+Run: `./node_modules/.bin/vite build --config vite.web.config.ts`
+Expected: 全部无错误
+
+- [ ] **Step 2: 完整性体检**
+
+Run: `node scripts/verify-integrity.mjs`
+Expected: 无 FAIL；「模型同步」组不出现 `money` 相关的 WARN
+
+- [ ] **Step 3: 造一份「仅有钱账本」的数据，确认不被判为空（Review Focus 第 2 条相关）**
+
+用 `--appdata` 指向临时目录，写入 `{...四类实体全空, money: { enabled: true, days: [一条已结算日], weeks: [] }}`；
+断言 `isEmptyData` 为 `false`（防止该用户的云端数据被当作「空数据」而拒绝上传）。
+
+- [ ] **Step 4: 关闭态全链路验收**
+
+把 `enabled` 置 false 后重启应用，逐条核对 spec 4.3：
+待结算卡片不出现、复盘账本区块不渲染、象限不弹气泡、周结算不跑、
+「我的」页的金钱分组消失、**账面数据仍在**（再开启后数字不变）、复盘导出与改动前逐字节一致。
+
+- [ ] **Step 5: 探针复核两处布局（只读代码发现不了）**
+
+用 `scripts/liquid-glass-probe.mjs` 的场景框架或新写一个薄探针，断言：
+① 手机档 5 格标签均不折行、指示块能滑到第 5 格、`--mobile-nav-height` 仍为 66px；
+② 桌面档 `.sidebar` 在 640px 高时底部（云同步按钮 + 寄语）未被挤压或溢出。
+
+- [ ] **Step 6: 汇总检查记录**
+
+把 Step 1–5 的实际输出与预期逐条对照，记录任何不符。**没有验证过的项不得写成「通过」。**
+
+---
+
+## Self-Review
+
+**Spec 覆盖**
+
+| Spec 节 | 覆盖任务 |
+| --- | --- |
+| 4 开关机制（含 4.3 四条边界） | Task 1（存储）、Task 6（挂载与开关）、Task 10（导出字节一致）、Task 11（终检） |
+| 5 数据模型 | Task 1 |
+| 6.1 两种货币 / 6.2 三层约束 | Task 2、Task 3 |
+| 6.3 计费规则 / 深夜倍率 | Task 2、Task 9 |
+| 6.4 娱币规则 | Task 2 |
+| 6.5 周结算与档位 | Task 4 |
+| 7.1–7.3 日结交互与深夜补记 | Task 8 |
+| 7.4 象限气泡 | Task 9 |
+| 7.5 周结算触发 | Task 4（`ensureWeekRollover`） |
+| 8 复盘汇入 | Task 10 |
+| 9.1 五个同步点 | Task 1 |
+| 10 测试策略 | 各任务的 Step 1 |
+| 11 参数默认值 | Global Constraints + Task 2 |
+| 12 我的页与小组件 | Task 6、Task 7 |
+| 13 决策记录 | Task 9（不预填）、Task 6（不做重启按钮） |
+
+**类型一致性核对**：`MoneyConfig` / `MoneyState` / `LedgerDay` / `LedgerEntry` / `WeekSettlement` 定义在 Task 1，
+Task 2–5、8、10 引用的字段名与之一致；`MoneyStats` 定义在 Task 5，Task 7 只读消费；
+跨任务函数名逐一核对无别名（`dayLimitOf` / `settleDay` / `settleWeek` / `ensureWeekRollover` /
+`currentQuota` / `selectMoneyStats` / `pendingDays` / `moneySummaryLines`）。
+
+**Review Focus 逐条落点**（每条都钉在某个任务的测试里，不是只写在文档里）
+
+| Review Focus 条目 | 钉在哪个任务的测试 |
+| --- | --- |
+| 1 跨周未结算 | Task 4 Step 1 的 `跨周滚动：缺失的周按空周处理` |
+| 2 源事件已被删除 | Task 5 Step 1 的 `源事件被删除后仍按 title 快照正常计入` |
+| 3 `plannedMin` 为 `null` 或 `0` | Task 2 Step 1 的 `plannedMin 为 null 或 0 时返回 0，不产生 NaN` |
+| 4 恰好在 23:30 结束 | Task 2 Step 1 的 `nightMinutesOf：区间左闭右开` |
+| 5 `enabled: false` 但账本仍在 | Task 10 Step 7 的逐字节相等断言 |
+
+**写计划时发现并已inline修正的两处设计缺陷**（spec 已同步改）：
+① `LedgerEntry.lateNight: boolean` 无法表达「部分分钟落在深夜」，改为 `nightMin: number`，
+并新增 `nightMinutesOf` —— 否则 spec 6.3 要求的「只对越界分钟数乘倍率」根本实现不了；
+② `shared/money.ts` 需要 `mondayOf`，但该函数住在 `renderer/lib/weekRules.ts`，
+`shared/` 反向依赖 `renderer/` 是错误方向 ⇒ 见下方架构修正。
+
+**一处需要执行者注意的架构修正**：Task 4 的 Step 3 把 `mondayOf` / `addDays` / `dateKey` 从
+`renderer/lib/weekRules.ts` 下沉到 `shared/dateKey.ts`。这是为了让 `shared/money.ts` 不反向依赖 `renderer/`。
+该步骤用 `tests/weekRules.test.ts` 原样全绿作为回归保证 —— **这是硬性验收条件，不是可选项。**
