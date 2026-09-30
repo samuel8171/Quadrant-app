@@ -167,6 +167,9 @@ export function settleDay(input: {
 /**
  * 档位 → 下周额度的折扣比例（spec 6.5 的表格逐字抄录）。
  *
+ * 系数乘的是**配置的基础额度**（`config.weeklyTC` / `config.weeklyLT`），
+ * 不是本周实发的额度：惩罚只作用于下一周，见 `settleWeek` 的注释。
+ *
  * 用查表而不是连续公式：更好解释、更好调参，也天然不会把下周罚到归零
  * （守住「不能封锁」的红线）。
  */
@@ -206,13 +209,22 @@ export function penaltyTierOf(weekOver: number, weekTC: number): PenaltyTier {
  * （`plannedMin` / `actualMin` / `doneCount` / `missCount` / `unplannedCount` /
  * `unplannedMin` / `nightMin`）只能来自条目，没有快照可读。
  *
- * `overLimitDays` 比的是**日软上限** `weekTC / 7`（spec 6.2 的 D），
- * 而不是 `day.dayLimit` —— 后者已经含了前一日透支，连续透支的日子会被重复计数，
- * 一周里「几天超限」就失去意义。
+ * `overLimitDays` 比的是**日软上限** `config.weeklyTC / 7`（spec 6.2 的 D），
+ * 与 `dayLimitOf` 同源，而不是 `day.dayLimit`，也不是本周缩水后的 `weekTC / 7`：
+ * - 不用 `day.dayLimit`：它已经含了前一日透支，连续透支的日子会被重复计数，
+ *   一周里「几天超限」就失去意义；
+ * - 不用 `weekTC / 7`：日软上限是由**配置的周池**决定的固定值，惩罚周只削减该周的总量，
+ *   不改变每天多少算超限 —— 否则受罚周会把 40 币的一天也算成超限，
+ *   与冻结在 `LedgerDay.dayLimit` 里的数字（50）自相矛盾。
  *
- * **空周（`spentTC === 0`）把下周额度重置回配置值**，而不是按档位乘算。
- * 这是 spec 7.5 的要求，也是惩罚**不跨周累积**的实现：中间隔了空周，
- * 上一周的惩罚就在那一周被清偿，不会一路衰减着传下去。
+ * **惩罚只作用于下一周**：所有档位都是「配置的基础额度 × 档位系数」，
+ * 而不是「本周已缩水的额度 × 档位系数」。档位 0 是 100% / 100%，即回到
+ * `config.weeklyTC` / `config.weeklyLT`；因此空周（`spentTC === 0`）无需任何特判，
+ * 它天然落档位 0 并恢复基础额度，惩罚也就不会一路传下去。
+ *
+ * 由此，入参 `weekLT` 不再参与任何计算：`WeekSettlement` 里没有「本周娱币额度」这个字段，
+ * 而 `nextWeekLT` 已经改成「配置基础额度 × 档位系数」。它保留在签名里是因为这是计划
+ * 既定的接口（`ensureWeekRollover` 与 Task 6 都按它传参），删掉它只会制造无谓的跨任务改动。
  */
 export function settleWeek(input: {
   weekStart: string
@@ -232,7 +244,8 @@ export function settleWeek(input: {
   let nightMin = 0
   let overLimitDays = 0
 
-  const daySoftCap = input.weekTC / 7
+  // 日软上限取 config 而不是本周实发的 weekTC：见函数头注释
+  const daySoftCap = input.config.weeklyTC / 7
   for (const day of input.days) {
     spentTC += day.spentTC
     if (day.spentTC > daySoftCap) overLimitDays++
@@ -254,9 +267,10 @@ export function settleWeek(input: {
   const weekOver = Math.max(0, spentTC - input.weekTC)
   const penaltyTier = penaltyTierOf(weekOver, input.weekTC)
   const scale = TIER_SCALE[penaltyTier]
-  const isCleanWeek = spentTC === 0
-  const nextWeekTC = isCleanWeek ? input.config.weeklyTC : input.weekTC * scale.tc
-  const nextWeekLT = isCleanWeek ? input.config.weeklyLT : input.weekLT * scale.lt
+  // 惩罚只作用于下一周：档位系数乘的是**配置的基础额度**。空周天然落档位 0
+  // （weekOver = 0），于是恢复基础额度这件事不需要单独一条分支。
+  const nextWeekTC = input.config.weeklyTC * scale.tc
+  const nextWeekLT = input.config.weeklyLT * scale.lt
 
   // notes 恒为 2–4 条：前两条必有（结论 + 执行情况），后两条按有无比重的数据才出现
   const notes: string[] = [
@@ -309,8 +323,9 @@ export function currentQuota(state: MoneyState): { weekTC: number; weekLT: numbe
  * 补齐跨周结算（spec 7.5）：从「最后一次结算的下一周」一路补到「上一个已结束的周」，
  * 逐周调用 `settleWeek`。**本周不结算** —— 它还没结束。
  *
- * 中间没有任何数据的周按空周结算（`spentTC = 0`），其 `nextWeekTC` / `nextWeekLT`
- * 被重置回配置值，于是惩罚不会跨过空周继续衰减，这也是「干净的一周洗掉惩罚」的机制。
+ * 中间没有任何数据的周按空周结算（`spentTC = 0`）：档位 0 的下一周额度就是配置的基础额度，
+ * 因此惩罚不会跨过空周继续衰减。更一般地，任何**未超支**的一周都会把额度拉回配置值 ——
+ * 惩罚只作用于下一周。
  *
  * 每一周的额度取值链是 `currentQuota` → 本周结算的 `nextWeekTC` → 下一周的 `weekTC`，
  * 所以逐周补结算与「每周一打开应用一次」的结果完全一致。

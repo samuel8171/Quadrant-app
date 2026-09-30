@@ -76,9 +76,9 @@ function fillerEntries(cost: number): LedgerEntry[] {
   return out
 }
 
-/** 285 分钟里 30 分钟落在深夜：round((255 + 45) / 6) = 50 币。 */
+/** 237 分钟里 30 分钟落在深夜：round((207 + 45) / 6) = 42 币。 */
 function nightEntry(): LedgerEntry {
-  return mkEntry({ kind: 'planned', actualMin: 285, plannedMin: 300, nightMin: 30, done: true })
+  return mkEntry({ kind: 'planned', actualMin: 237, plannedMin: 300, nightMin: 30, done: true })
 }
 
 /** 45 分钟的计划外事项：round(7.5) = 8 币，且不参与娱币。 */
@@ -96,19 +96,19 @@ function missedEntry(): LedgerEntry {
  *
  * 默认形状被五个聚合断言钉死：
  * - 单日花费 110 / 50 / 50 / 50 / 40 / 0 / 0 —— 只有周一超过日软上限 50 ⇒ `overLimitDays = 1`；
- * - 一条计划外 45 分钟 ⇒ `unplannedCount = 1`、`unplannedMin = 45`；
- * - 一条 `done: false` ⇒ `missCount = 1`；
- * - 一条 30 分钟深夜 ⇒ `nightMin = 30`。
+ * - 周二固定挂特征条目：一条 45 分钟计划外（8 币）⇒ `unplannedCount = 1`、`unplannedMin = 45`，
+ *   一条 30 分钟深夜（42 币）⇒ `nightMin = 30`，两条合计 50 币，与该日耗费恰好相等；
+ * - 周六是「没做」那天 ⇒ `missCount = 1`。
  *
- * 每天的 `spentTC` 与当天条目 `costOfEntry` 之和**严格相等**（`spent` 与 300 的差额全部
- * 记在周一的填充条目上），`dayLimit` / `overdraft` 则按 `dayLimitOf` 的规则逐日滚动 ——
- * 与 `settleDay` 的算法一致。
+ * 每天的 `spentTC` 与当天条目 `costOfEntry` 之和**严格相等**：`spent` 与 300 的差额全部
+ * 记在周一的填充条目上（按 100 币一段拆分，满足 600 分钟的域上限），
+ * `dayLimit` / `overdraft` 按 `dayLimitOf` 逐日滚动 —— 与 `settleDay` 同算法。
+ * 想精确控制某天的花费就用 `spent`：周一那天的花费恒为 `spent − 190`。
  *
- * 这个滚动不是装饰：周一的 110 币把后面几天的 `dayLimit` 压到保底 10，于是「只算周一超限」
- * 与「凡 `spentTC > dayLimit` 就算超限」（后者会数出 5 天）在这里分道扬镳，
- * `overLimitDays === 1` 因此钉住了「比的是日软上限 `weekTC / 7`」这一种解释。
+ * 这个滚动不是装饰：周一的花费把后面几天的 `dayLimit` 压到保底 10，于是「只算周一超限」
+ * 与「凡 `spentTC > dayLimit` 就算超限」（后者会数出 5 天）在这里分道扬镳。
  *
- * `spent` 低于 300 会让周一的填充量变成负数；本任务只用到 300 及以上。
+ * `spent` 低于 190 会让周一的填充量变成负数；本任务的用例用到 200 及以上。
  */
 function mkWeek(
   over: { spent?: number; weekStart?: string; nextWeekTC?: number; nextWeekLT?: number } = {}
@@ -126,8 +126,8 @@ function mkWeek(
     const dayLimit = dayLimitOf(previousOverdraft, DEFAULT_MONEY_CONFIG)
     const overdraft = Math.max(0, daySpend - dayLimit)
     const entries =
-      i === 0
-        ? [nightEntry(), unplannedEntry(), ...fillerEntries(daySpend - 58)]
+      i === 1
+        ? [nightEntry(), unplannedEntry()]
         : i === 5
           ? [missedEntry()]
           : fillerEntries(daySpend)
@@ -437,6 +437,19 @@ describe('settleWeek', () => {
     expect(w.nightMin).toBe(30)
   })
 
+  it('overLimitDays 比的是配置里的日软上限 50，不是受罚周缩水后的 35', () => {
+    // 这一周只发了 245（上周受罚）：若按 weekTC / 7 = 35 算，下面的 40 与 50 全会被误判成超限
+    const fortyOnMonday = settleWeek(mkWeek({ spent: 230, nextWeekTC: 245 }))
+    expect(fortyOnMonday.weekTC).toBe(245)
+    expect(fortyOnMonday.spentTC).toBe(230)
+    expect(fortyOnMonday.overLimitDays).toBe(0)
+
+    // 同一额度下周一花 60：超过配置日软上限 50，只有它算超限
+    const sixtyOnMonday = settleWeek(mkWeek({ spent: 250, nextWeekTC: 245 }))
+    expect(sixtyOnMonday.spentTC).toBe(250)
+    expect(sixtyOnMonday.overLimitDays).toBe(1)
+  })
+
   it('缺失的日按零计', () => {
     const input = mkWeek({ spent: 300 })
     // 只留周一到周四：110 + 50 + 50 + 50 = 260，周六那条「没做」也跟着缺失
@@ -541,6 +554,38 @@ describe('ensureWeekRollover / currentQuota', () => {
     expect(next.weeks[3].weekTC).toBe(350)
     expect(next.weeks[3].nextWeekTC).toBe(350)
     expect(currentQuota(next)).toEqual({ weekTC: 350, weekLT: 10 })
+  })
+
+  it('惩罚只作用于下一周：未超支的一周把额度拉回配置值', () => {
+    // A 周受罚：只发 245、花 294（超支 20%）→ 档位 2 → 350 × 70% ≈ 245（已算好的快照）
+    const weekA = mkSettledWeek({
+      weekStart: '2026-09-07',
+      weekTC: 245,
+      spentTC: 294,
+      weekOver: 49,
+      penaltyTier: 2,
+      nextWeekTC: 245,
+      nextWeekLT: 6
+    })
+
+    // B 周拿到 245，花 200（非零、未超支）→ 档位 0 → 下周回到配置的 350，而不是 245
+    const state: MoneyState = {
+      enabled: true,
+      config: DEFAULT_MONEY_CONFIG,
+      days: mkWeek({ spent: 200, weekStart: '2026-09-14' }).days,
+      weeks: [weekA]
+    }
+    const next = ensureWeekRollover(state, '2026-09-21') // 补 09-14 这一周
+    expect(currentQuota(next)).toEqual({ weekTC: 350, weekLT: 10 })
+    expect(next.weeks).toHaveLength(2)
+    expect(next.weeks[1].weekTC).toBeCloseTo(245)
+    expect(next.weeks[1].spentTC).toBe(200)
+    expect(next.weeks[1].penaltyTier).toBe(0)
+
+    // 同一件事在档位 2 上的表现：70% 乘的是配置基础额度，所以是 245 而不是 245 × 70% = 171.5
+    const penalised = settleWeek(mkWeek({ spent: 294, weekStart: '2026-09-07', nextWeekTC: 245 }))
+    expect(penalised.penaltyTier).toBe(2)
+    expect(penalised.nextWeekTC).toBeCloseTo(245)
   })
 
   it('currentQuota 在没有任何结算时回退到配置值', () => {
