@@ -29,7 +29,20 @@ const baseData: AppData = {
   weekCounterOffset: 0
 }
 
-/** 合法 config 基线：与 `sampleDataWithMoney` 共用，供「某处不合规即整份被拒」的用例派生。 */
+/** 一条合法 `Goal`：用于验证「money 坏了也没把用户数据一起赔进去」。 */
+const validGoal = {
+  id: 'g1',
+  title: '目标',
+  type: 'long',
+  done: false,
+  remark: '',
+  groupTitles: [''],
+  subtasks: [],
+  order: 0,
+  createdAt: 'now'
+}
+
+/** 合法 config 基线：与 `sampleDataWithMoney` 共用，供「某处不合规 ⇒ 只丢账本」的用例派生。 */
 const validMoneyConfig: MoneyConfig = {
   weeklyTC: 560,
   dailyCapTC: 80,
@@ -197,10 +210,16 @@ describe('web platform API', () => {
     expect(await api.loadData()).toEqual(baseData)
   })
 
-  it('money 存在但 enabled 不是布尔时整份数据被拒', async () => {
-    const bad = { ...baseData, money: { enabled: 'yes', config: {}, days: [], weeks: [] } }
+  it('money 存在但 enabled 不是布尔时只丢账本，用户数据保住', async () => {
+    const bad = {
+      ...baseData,
+      goals: [validGoal],
+      money: { enabled: 'yes', config: {}, days: [], weeks: [] }
+    }
     const api = createWebPlatformApi(fakeStorage(JSON.stringify(bad)))
-    expect(await api.loadData()).toEqual(defaultData())
+    const loaded = await api.loadData()
+    expect(loaded.goals).toHaveLength(1)
+    expect(loaded.money).toBeUndefined()
   })
 
   it('含合法 money 的数据通过校验', async () => {
@@ -208,37 +227,43 @@ describe('web platform API', () => {
     expect((await api.loadData()).money).toEqual(sampleDataWithMoney.money)
   })
 
-  it('config 缺少新键（R2 之前的老数据）时整份数据被拒', async () => {
-    // web 端口径与扁平键一致：少任何一个键 ⇒ isFiniteNumber(undefined) 为假 ⇒ 整份数据非法。
-    // 桌面的 dataCodec 对同一份数据是逐键回退修复（见 dataCodec.test.ts），一严一宽是刻意的。
-    const legacy = {
-      ...baseData,
-      money: {
-        enabled: true,
-        config: {
-          weeklyTC: 350,
-          tcPerHour: 10,
-          nightStartMin: 1410,
-          nightEndMin: 360,
-          nightMultiplier: 1.5,
-          minCapRatio: 0.2,
-          weeklyLT: 10,
-          rewardLT: 0.5,
-          penaltyLT: 0.5,
-          missPenaltyLT: 1
-        },
-        days: [],
-        weeks: []
-      }
+  it('money 的 config 缺新键时只丢账本：目标与事件原样保留', async () => {
+    // 这是本次改动的**核心对比**：money 是可选字段，它坏了只该赔上账本。
+    // 改动前 loadData 会因为 validAppData 为假而整份回退 defaultData ——
+    // 用户的每一个目标、事件、预设都会静默消失。
+    const event = {
+      id: 'e1',
+      text: '事件',
+      remark: '',
+      quadrant: 1,
+      x: 0,
+      y: 0,
+      width: 6,
+      createdAt: 'now'
     }
-    const api = createWebPlatformApi(fakeStorage(JSON.stringify(legacy)))
-    expect(await api.loadData()).toEqual(defaultData())
+    const data = {
+      ...baseData,
+      goals: [validGoal],
+      events: [event],
+      // config 只给了 weeklyTC：R2 之前的键集，缺 dailyCapTC 等新键
+      money: { enabled: true, config: { weeklyTC: 560 }, days: [], weeks: [] }
+    }
+    const api = createWebPlatformApi(fakeStorage(JSON.stringify(data)))
+    const loaded = await api.loadData()
+    expect(loaded.goals).toHaveLength(1)
+    expect(loaded.goals[0]).toEqual(validGoal)
+    expect(loaded.events).toHaveLength(1)
+    expect(loaded.events[0]).toEqual(event)
+    expect(loaded.money).toBeUndefined()
   })
 
-  it('config 里任意一个新键不是有限数字时整份数据被拒', async () => {
+  it('config 里任意一个新键不是有限数字时只丢账本（不逐键修复）', async () => {
+    // 逐一钉住每个新键：少一个（JSON.stringify 会丢掉 undefined 值）都必须判 money 非法。
+    // 结果是**账本被丢掉**而不是被修复成默认值 —— 断言 money === undefined 就是在证明这一点。
     for (const key of ['dailyCapTC', 'videoLTPerHour', 'abandonedDayTC', 'latePhoneLT'] as const) {
       const data = {
         ...baseData,
+        goals: [validGoal],
         money: {
           enabled: true,
           config: { ...validMoneyConfig, [key]: undefined },
@@ -247,11 +272,13 @@ describe('web platform API', () => {
         }
       }
       const api = createWebPlatformApi(fakeStorage(JSON.stringify(data)))
-      expect(await api.loadData()).toEqual(defaultData())
+      const loaded = await api.loadData()
+      expect(loaded.goals).toHaveLength(1)
+      expect(loaded.money).toBeUndefined()
     }
   })
 
-  it('quadrantMultiplier 缺键、非数字或非对象时整份数据被拒（不逐键修复）', async () => {
+  it('quadrantMultiplier 缺键、非数字或非对象时只丢账本（不逐键修复）', async () => {
     const badValues: unknown[] = [
       { q1: 1.5, q2: 1, q3: 1.2 }, // 缺 q4
       { q1: 1.5, q2: 'x', q3: 1.2, q4: 0.5 }, // 某键不是数字
@@ -262,6 +289,7 @@ describe('web platform API', () => {
     for (const bad of badValues) {
       const data = {
         ...baseData,
+        goals: [validGoal],
         money: {
           enabled: true,
           config: { ...validMoneyConfig, quadrantMultiplier: bad },
@@ -270,7 +298,39 @@ describe('web platform API', () => {
         }
       }
       const api = createWebPlatformApi(fakeStorage(JSON.stringify(data)))
-      expect(await api.loadData()).toEqual(defaultData())
+      const loaded = await api.loadData()
+      expect(loaded.goals).toHaveLength(1)
+      // 若 web 端改成「逐键修复」，money 就会留下一个被补全的对象 ⇒ 这条会失败
+      expect(loaded.money).toBeUndefined()
     }
+  })
+
+  it('非 money 字段不合规时仍整份回退默认数据（不能借新分支夹带非法数据）', async () => {
+    const data = {
+      ...baseData,
+      // goal 缺 order ⇒ 无论 money 好坏都必须整份回退
+      goals: [
+        {
+          id: 'g1',
+          title: '目标',
+          type: 'long',
+          done: false,
+          remark: '',
+          groupTitles: [''],
+          subtasks: [],
+          createdAt: 'now'
+        }
+      ],
+      money: { enabled: true, config: { weeklyTC: 560 }, days: [], weeks: [] }
+    }
+    const api = createWebPlatformApi(fakeStorage(JSON.stringify(data)))
+    expect(await api.loadData()).toEqual(defaultData())
+  })
+
+  it('完全合法的载荷（含 money）原样返回，不走降级分支', async () => {
+    const api = createWebPlatformApi(fakeStorage(JSON.stringify(sampleDataWithMoney)))
+    const loaded = await api.loadData()
+    expect(loaded).toEqual(sampleDataWithMoney)
+    expect(loaded.money).toEqual(sampleDataWithMoney.money)
   })
 })

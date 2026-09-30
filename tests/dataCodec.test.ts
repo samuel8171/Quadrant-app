@@ -304,4 +304,44 @@ describe('dataCodec', () => {
     // 关键：规整过程不得改动共享常量本身
     expect(DEFAULT_MONEY_CONFIG.quadrantMultiplier).toEqual({ q1: 1.5, q2: 1, q3: 1.2, q4: 0.5 })
   })
+
+  it('桌面端不会因 money 坏了而丢掉用户数据（与 web 端 loadData 的三档降级对照）', () => {
+    // parseData 是「逐字段重建」：goal / event / preset / weekEvent 各自独立规整，
+    // money 的规整结果只影响 money 自己（`...(money ? { money } : {})`），
+    // 因此**任何** money 损毁都不会连带丢弃其余实体 —— 这也是桌面端不需要
+    // platformApi.loadData 那套三档降级的原因。
+    const goal = {
+      id: 'g1',
+      title: '目标',
+      type: 'long' as const,
+      done: false,
+      remark: '',
+      groupTitles: [''],
+      subtasks: [],
+      order: 0,
+      createdAt: 'now'
+    }
+    const withBadMoney = JSON.stringify({
+      ...baseData,
+      goals: [goal],
+      money: { enabled: true, config: { weeklyTC: 560 }, days: [], weeks: [] }
+    })
+    const repaired = parseData(withBadMoney)
+    expect(repaired.goals).toHaveLength(1)
+    expect(repaired.goals[0].id).toBe('g1')
+    // 桌面端口径：money 被**修复**（缺键回退到默认）而不是像 web 端那样被丢掉
+    expect(repaired.money?.config.dailyCapTC).toBe(DEFAULT_MONEY_CONFIG.dailyCapTC)
+    expect(repaired.money?.config.quadrantMultiplier).toEqual(DEFAULT_MONEY_CONFIG.quadrantMultiplier)
+
+    // money 连 enabled 都不是布尔（normalizeMoney 整块放弃）时，其余实体同样必须保住
+    const withGarbageMoney = JSON.stringify({
+      ...baseData,
+      goals: [goal],
+      money: { enabled: 'yes', config: {}, days: [], weeks: [] }
+    })
+    const dropped = parseData(withGarbageMoney)
+    expect(dropped.money).toBeUndefined()
+    expect(dropped.goals).toHaveLength(1)
+    expect(dropped.goals[0].id).toBe('g1')
+  })
 })

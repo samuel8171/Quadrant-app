@@ -154,7 +154,16 @@ function validMoney(value: unknown): boolean {
   return true
 }
 
-function validAppData(value: unknown): value is AppData {
+/**
+ * `AppData` 形状校验的**唯一实现**。`checkMoney` 决定是否连带校验可选字段 `money`：
+ *
+ * - `true` —— 完整校验（`validAppData` 用它，是保存 / 同步前的严格判定）；
+ * - `false` —— **完全忽略 `money`**（`loadData` 的第二档降级用它，见那里的注释）。
+ *
+ * 抽成一个函数而不是复制两份：这套校验器一旦分叉，两条路径对「什么算合法」就会
+ * 给出不同答案，而它们除 `money` 这一处刻意的例外之外必须永远一致。
+ */
+function validAppDataCore(value: unknown, checkMoney: boolean): boolean {
   if (!isRecord(value)) return false
   const data = value as Partial<AppData>
   if (data.version !== 2 || !Number.isFinite(data.weekCounterOffset) ||
@@ -175,7 +184,12 @@ function validAppData(value: unknown): value is AppData {
     data.weekEvents.every((event) => isRecord(event) && hasStringFields(event, ['id', 'date', 'title', 'color', 'remark', 'createdAt']) &&
       [1, 2, 3, 4].includes(event.quadrant as number) && typeof event.startMin === 'number' &&
       typeof event.endMin === 'number' && Number.isFinite(event.startMin) && Number.isFinite(event.endMin) && typeof event.showInQuadrant === 'boolean') &&
-    (data.money === undefined || validMoney(data.money))
+    (!checkMoney || data.money === undefined || validMoney(data.money))
+}
+
+/** 完整校验（含 `money`）：`money === undefined` 仍然合法。 */
+function validAppData(value: unknown): value is AppData {
+  return validAppDataCore(value, true)
 }
 
 function getDefaultStorage(): WebStorage {
@@ -221,7 +235,24 @@ export function createWebPlatformApi(storage?: WebStorage): QuadrantApi {
         const raw = safeStorage.getItem(DATA_KEY)
         if (!raw) return defaultData()
         const value: unknown = JSON.parse(raw)
-        return validAppData(value) ? value : defaultData()
+        if (validAppData(value)) return value
+        // 降级分三档，而不是「合法 / 非法」两档：
+        //   1. 完整合法 → 原样返回（上面那行）；
+        //   2. 除 money 外都合法 → 只丢账本，保住用户的目标 / 事件 / 预设；
+        //   3. 其余 → defaultData()。
+        //
+        // 第 2 档是必须的：`money` 是**可选**字段，而它的 `config` 会随版本加键。
+        // 少了这一档，任何一次加键都会让旧账本 payload 整份被判非法，于是用户的全部
+        // 数据被 defaultData() 静默清空 —— 不可逆，且用户无从察觉。
+        // `money: undefined` 与「该功能从未启用」是同一语义（见 types.ts 的 money 注释）。
+        //
+        // 注意判定用的是**同一份** validAppDataCore（checkMoney = false），不是复制品：
+        // 两条路径对「其余字段是否合法」必须永远给出同一个答案，否则第 2 档就会成为
+        // 夹带非法数据的后门。
+        if (validAppDataCore(value, false)) {
+          return { ...(value as AppData), money: undefined }
+        }
+        return defaultData()
       } catch {
         return defaultData()
       }
