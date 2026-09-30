@@ -2854,6 +2854,373 @@ body {
   animation: toast-in 0.2s ease-out;
 }
 
+/* ---------- mine page: money widgets ---------- */
+
+/*
+ * 12 栏基准栅格：两个 hero 各跨 6 栏（一行两个），四个小卡各跨 3 栏（一行四个）。
+ *
+ * 跨栏数不写在 CSS 里，而由组件通过 `--money-span` 传进来 —— 因为内联样式的
+ * 优先级高于媒体查询，若在组件里内联 `grid-column`，下面的手机档规则就盖不掉了。
+ * `minmax(0, 1fr)` 而不是 `1fr`：前者允许列被压缩到内容宽度以下，图表才不会把
+ * 栅格顶出横向滚动条。
+ */
+.money-grid {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 12px;
+}
+
+/*
+ * 小组件卡片。**刻意不玻璃化**：只用普通面板色 + var(--border)，
+ * 不引 `.gs-*`、不加 `backdrop-filter`（理由见 spec 12.4）。
+ */
+.money-widget {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  grid-column: span var(--money-span, 12);
+  min-width: 0;
+  padding: 14px 16px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+.money-widget-head {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.money-widget-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.money-widget-subtitle,
+.money-widget-foot {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.money-widget-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+/* ---- 双币余额 ---- */
+
+.money-balances {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 32px;
+}
+
+.money-balance {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.money-balance-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.money-balance-value {
+  font-size: 30px;
+  font-weight: 700;
+  line-height: 1.1;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.money-balance-value.neg {
+  color: var(--danger);
+}
+
+/* ---- 进度条 / 占比条 / 堆叠条共用的底槽 ---- */
+
+/*
+ * 圆角交给底槽：里面的 SVG 用 `preserveAspectRatio="none"` 横向拉满，
+ * 拉伸会歪掉 rx，所以矩形本身不画圆角。
+ *
+ * **这里不写 `flex: 1`**：执行质量那张卡里的底槽是 column flex 的直接子项，
+ * `flex: 1` 会把 `flex-basis` 变成 `0%` 从而接管**高度**（而不是宽度），
+ * 底槽会被压成 0 高。要横向撑满的是「底槽 + 文字」那一行里的底槽，
+ * 所以那条规则写在 `.money-meter-row .money-track` 上。
+ */
+.money-track {
+  min-width: 0;
+  height: 14px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.money-meter-row .money-track {
+  flex: 1;
+}
+
+.money-track-svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.money-meter-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.money-meter-note {
+  flex: none;
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.money-fill-accent {
+  fill: var(--accent);
+}
+
+.money-fill-danger {
+  fill: var(--danger);
+}
+
+.money-fill-night {
+  fill: var(--accent);
+}
+
+/* ---- 手写图表 ---- */
+
+.money-chart {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.money-bar {
+  fill: var(--accent);
+}
+
+.money-bar.over {
+  fill: var(--danger);
+}
+
+/* 日额度基准线：虚线，与柱子区分开 */
+.money-baseline {
+  stroke: var(--text-secondary);
+  stroke-width: 1.5;
+  stroke-dasharray: 5 4;
+}
+
+/*
+ * 热力 4 档：0 = 空槽（仍是可见的方格），1/2 = 同一强调色的两档透明度，
+ * 3 = 超过日软上限，与柱状图的警示柱同色。透明度而不是新颜色 —— 设计令牌里
+ * 没有中间色阶，新造一个就等于多一套色板。
+ */
+.money-heat {
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+.money-heat-0 {
+  fill: var(--card);
+}
+
+.money-heat-1 {
+  fill: var(--accent);
+  fill-opacity: 0.35;
+}
+
+.money-heat-2 {
+  fill: var(--accent);
+  fill-opacity: 0.7;
+}
+
+.money-heat-3 {
+  fill: var(--danger);
+}
+
+/*
+ * 文字轴与图表的 7 等分对齐：图表里每天的格子/柱子都居中于 viewBox 的 1/7，
+ * 这里也用 7 等分网格，两边因此天然对齐，不靠手算留白。
+ */
+.money-axis {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+}
+
+.money-axis span {
+  text-align: center;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+/* ---- 执行质量 ---- */
+
+/* 各段颜色只在这里定义一次：SVG 段取 fill，HTML 图例色块取 background */
+.money-seg-efficient {
+  --seg: var(--success);
+}
+
+.money-seg-normal {
+  --seg: var(--accent);
+}
+
+.money-seg-inefficient {
+  --seg: var(--text-secondary);
+}
+
+.money-seg-missed {
+  --seg: var(--danger);
+}
+
+.money-seg {
+  fill: var(--seg);
+}
+
+.money-swatch {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  background: var(--seg);
+}
+
+.money-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.money-legend li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.money-legend b {
+  color: var(--text);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- 惩罚预告 ---- */
+
+.money-penalty {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+/*
+ * 档位徽标：圆底 + 白色档位数字。四档用 success → 强化色的两档透明度 → danger 递进，
+ * 不新造颜色（设计令牌里没有琥珀色）。数字画在圆之后，所以不受圆的 fill-opacity 影响。
+ */
+.money-tier-badge {
+  flex: none;
+  width: 56px;
+  height: 56px;
+}
+
+.money-tier-0 {
+  fill: var(--success);
+}
+
+.money-tier-1 {
+  fill: var(--accent);
+  fill-opacity: 0.45;
+}
+
+.money-tier-2 {
+  fill: var(--accent);
+  fill-opacity: 0.8;
+}
+
+.money-tier-3 {
+  fill: var(--danger);
+}
+
+.money-tier-num {
+  fill: var(--text);
+  font-size: 24px;
+  font-weight: 700;
+}
+
+.money-penalty-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.money-penalty-head {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.money-penalty-rates {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 28px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.money-penalty-rates li {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.money-rate-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.money-rate-value {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.money-rate-quota {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/*
+ * 手机档：单列堆叠，顺序就是 DOM 顺序（两个 hero 在最上面）。
+ * `1 / -1` 而不是 `span 12`：栅格列数若将来变了，这条规则不用跟着改。
+ */
+@media (max-width: 767px) {
+  .money-grid {
+    gap: 10px;
+  }
+
+  .money-widget {
+    grid-column: 1 / -1;
+  }
+}
+
 @media (min-width: 768px) and (max-width: 1023px) {
   .sidebar {
     --sidebar-gap: 18px;

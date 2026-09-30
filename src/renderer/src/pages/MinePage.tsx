@@ -1,16 +1,36 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
+import { dateKey } from '../../../shared/dateKey'
+import { selectMoneyStats } from '../../../shared/money'
+import BalanceWidget from '../components/mine/BalanceWidget'
+import DailyHeatWidget from '../components/mine/DailyHeatWidget'
+import NightWidget from '../components/mine/NightWidget'
+import PenaltyWidget from '../components/mine/PenaltyWidget'
+import QualityWidget from '../components/mine/QualityWidget'
+import WeeklySpendWidget from '../components/mine/WeeklySpendWidget'
 import { useAppStore } from '../state/appStore'
 
 /**
- * 「我的」页骨架。
+ * 「我的」页。
  *
- * 本期只落三件事：三个分组标题、金钱总开关、以及为 Task 7 预留的分组容器。
- * 六个金钱小组件与卡片栅格由 Task 7 填进「金钱」组，本文件不预设任何版式。
+ * 三个分组：金钱（受开关控制）、设置、关于。金钱组里的六个小组件都只吃
+ * `selectMoneyStats` 的返回值，页面本身不参与任何计算 —— 组件与数据源之间
+ * 只有 `MoneyStats` 这一个契约。
  */
 export default function MinePage(): JSX.Element {
+  const money = useAppStore((s) => s.data.money)
   const moneyEnabled = useAppStore((s) => s.data.money?.enabled === true)
   const setMoneyEnabled = useAppStore((s) => s.setMoneyEnabled)
   const [notice, setNotice] = useState<string | null>(null)
+
+  /*
+   * 派生统计只在开启时算。`money` 的引用只要没变（store 每次改动都换新对象）
+   * 就不会重算，所以拖动/输入引起的重渲染不会反复跑选择器。
+   * `today` 取本地日期键，与 store 里 `rolloverMoneyWeek` 的取法一致。
+   */
+  const stats = useMemo(
+    () => (money?.enabled === true ? selectMoneyStats(money, dateKey(new Date())) : null),
+    [money]
+  )
 
   const isDesktop = Boolean((window as any).quadrantApi)
 
@@ -36,11 +56,25 @@ export default function MinePage(): JSX.Element {
       {/*
         金钱组**整组**受开关控制：关闭时连标题都不渲染。
         留一个空标题会被读成"这里坏了"，比不显示更糟。
-        Task 7 的六个小组件将挂在这个 section 里。
       */}
       {moneyEnabled && (
         <section className="mine-group">
           <h2 className="mine-group-title">金钱</h2>
+          {/*
+            DOM 顺序 = 屏幕顺序：两个 hero（双币余额、惩罚预告）在前，四个小卡随后。
+            桌面端靠这条顺序自动排成「hero 占满第一行、四张小卡占满第二行」，
+            手机档（单列）也就自然把最重要的两个排在最上面 —— 不需要第二套排布规则。
+          */}
+          {stats && (
+            <div className="money-grid">
+              <BalanceWidget stats={stats} />
+              <PenaltyWidget stats={stats} />
+              <WeeklySpendWidget stats={stats} />
+              <DailyHeatWidget stats={stats} />
+              <NightWidget stats={stats} />
+              <QualityWidget stats={stats} />
+            </div>
+          )}
         </section>
       )}
 
