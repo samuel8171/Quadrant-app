@@ -1014,7 +1014,8 @@ Task 2–5、8、10 引用的字段名与之一致；`MoneyStats` 定义在 Task
 ## R2 的 Global Constraints（在主计划之上追加）
 
 - `dailyCapTC` 是**独立配置项**，任何地方**不得**再用 `weeklyTC / 7` 当日上限。
-  `80 × 7 = 560 ≠ 540`，派生值就是错的。
+  `560 / 7 = 80` 目前恰好相等，但**仍然不得派生** —— 派生会让「调周总额」静默改掉「日上限」，
+  而这两个数是用户分开想的。R2-A 的测试必须钉住这一点（改 `weeklyTC` 不得影响 `dayLimitOf`）。
 - 深夜倍率与象限倍率**相乘**，且深夜倍率仍只作用于落在 `[23:30, 06:00)` 内的分钟数。
 - 娱币的「刷视频 / 打游戏」两条**只扣娱币、不产生时币消耗**，且**不进** `quality` 四分类。
 - 日超限只侵蚀次日额度；**只有周超限才罚下一周**（用户裁定第一条，与已实现一致，不得改）。
@@ -1039,7 +1040,7 @@ Task 2–5、8、10 引用的字段名与之一致；`MoneyStats` 定义在 Task
   `dailyCapTC: 80`、`videoLTPerHour: 1`、`gameLTPerHour: 1.5`、`restDayFactor: 0.8`、
   `abandonedDayTC: 80`、`latePhoneTC: number`、`latePhoneLT: number`、
   `quadrantMultiplier: { q1: number; q2: number; q3: number; q4: number }`
-- 改值：`weeklyTC: 540`、`weeklyLT: 20`
+- 改值：`weeklyTC: 560`、`weeklyLT: 20`
 
 - [ ] Step 1: 写失败测试 —— `dayLimitOf(0, config)` 用 `dailyCapTC` 而非 `weeklyTC / 7`。
       断言 `dayLimitOf(0, DEFAULT_MONEY_CONFIG) === 80`，且把 `weeklyTC` 改成 999 后该值**不变**。
@@ -1114,16 +1115,41 @@ Task 2–5、8、10 引用的字段名与之一致；`MoneyStats` 定义在 Task
 
 ---
 
-### Task R2-E: 休息日 ［新增，**阻塞于 §9 裁定 1**］
+### Task R2-E: 无计划之日的两条分支（休息日 / 补计划） ［新增］
 
 **Files:**
 - Modify: `src/shared/types.ts`（`LedgerDay` 加 `isRestDay: boolean`）
-- Modify: `src/shared/money.ts`（`settleDay` 按 `restDayFactor` 计）
-- Modify: 5 个同步点；日结面板加开关
+- Modify: `src/shared/money.ts`（新纯函数 `restDayCost`；`settleDay` 支持休息日）
+- Modify: 5 个同步点（含 `verify-integrity.mjs` 的两处复刻）
+- Modify: `src/renderer/src/components/money/SettlePanel.tsx`（分支入口）
+- Modify: `src/renderer/src/pages/WeeklyPage.tsx` + `components/weekly/DayView.tsx`（补计划路径 + 右上角「完成」）
 - Test: `tests/money.test.ts`
 
-- [ ] Step 1: 按裁定确定基数后写失败测试（基数不同，断言完全不同，**这一步不能先写**）
-- [ ] Step 2–6: TDD + 同步 + 提交
+**Interfaces:**
+- Produces:
+  - `restDayCost(config: MoneyConfig): number` = `Math.round(config.dailyCapTC × config.restDayFactor)` = **64**
+  - `LedgerDay.isRestDay: boolean`（默认 `false`）
+  - 休息日结算结果：`spentTC = 64`、`deltaLT = 0`、`entries = []`、`settledAt` 正常写入
+
+**流程（spec R2 §4.3）**
+
+```
+无计划日 → 面板先给两条路
+  (A) 休息日 → 固定扣 64，结算完成
+  (B) 不休息 → 跳该日时间轴 → 右上角「完成」→ 进正常日结页（允许一个块都不放）
+```
+
+- [ ] Step 1: 写失败测试 —— 休息日结算得 `spentTC === 64` 且 `deltaLT === 0`；
+      同一份输入在 `isRestDay === false` 时得 `spentTC === 0`（对照组，防实现把休息日当成默认）
+- [ ] Step 2/3/4: TDD 循环
+- [ ] Step 5: **只在无计划之日提供**该选项 —— 面板按「该日是否已有计划事件」决定是否显示入口，
+      并加一条断言：有计划的日子的结算数据里不得出现休息日产物
+- [ ] Step 6: 实现 (B) 分支的跳转与回程（该日日视图 ⇄ 日结页），「完成」按钮放**右上角**（用户指定位置）；
+      **一个事件块都不放**也必须能直接完成并进入日结页（这是必需的兜底，否则计划外的事无处记录）
+- [ ] Step 7: 同步 5 个文件；逐文件跑 `tests/money.test.ts` / `tests/dataCodec.test.ts` / `tests/platformApi.test.ts`
+- [ ] Step 8: type check + build；隔离 userData 的人工验收，**三条路径都走一遍**
+      （休息日 / 放块后完成 / 不放块直接完成），确认真实 `%APPDATA%\象限\plan.json` 未被触碰
+- [ ] Step 9: 提交
 
 ---
 
@@ -1201,12 +1227,12 @@ Task 2–5、8、10 引用的字段名与之一致；`MoneyStats` 定义在 Task
 R2-A（配置） ──┬─→ R2-B（象限倍率）
                ├─→ R2-C（娱币消费来源）
                ├─→ R2-D（7 天窗口）
-               ├─→ R2-E（休息日）  ← 阻塞于裁定 1
-               └─→ R2-F（深夜刷手机）← 阻塞于裁定 2
-R2-G / R2-H 与上面并行无依赖
-R2-I 依赖 R2-A（趋势图要新数值才有意义）
-R2-J 依赖 R2-C 与 R2-F
+               ├─→ R2-E（无计划日两分支：休息日 / 补计划）
+               └─→ R2-F（深夜刷手机）
+R2-G / R2-H / R2-I / R2-J 见上表各自依赖
 ```
+
+**三处语义已全部裁定完毕（R2 spec §9），无阻塞项。**
 
 **R2-A 必须先做**：它改了 `MoneyConfig` 的形状，其余任务的测试都会引用新键。
 
