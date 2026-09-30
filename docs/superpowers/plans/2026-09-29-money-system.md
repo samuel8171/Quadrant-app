@@ -1043,8 +1043,9 @@ Task 2–5、8、10 引用的字段名与之一致；`MoneyStats` 定义在 Task
 - 改值：`weeklyTC: 560`、`weeklyLT: 20`
 
 - [ ] Step 1: 写失败测试 —— `dayLimitOf(0, config)` 用 `dailyCapTC` 而非 `weeklyTC / 7`。
-      断言 `dayLimitOf(0, DEFAULT_MONEY_CONFIG) === 80`，且把 `weeklyTC` 改成 999 后该值**不变**。
-- [ ] Step 2: 跑测试确认失败（当前返回 77.14）
+      断言 `dayLimitOf(0, DEFAULT_MONEY_CONFIG) === 80`；**并且**把 `weeklyTC` 改成 999 后该值**仍为 80**
+      （第二条才是真正的判别器 —— 因为 `560 / 7` 恰好也是 80，只断言 80 区分不出派生与直读）。
+- [ ] Step 2: 跑测试确认失败（改动前 `weeklyTC = 350`，当前返回 50）
 - [ ] Step 3: 改 `dayLimitOf` 与 `settleWeek` 的 `daySoftCap` 为 `config.dailyCapTC`；保底 = `dailyCapTC × minCapRatio` = 16
 - [ ] Step 4: 跑测试确认通过
 - [ ] Step 5: 同步 5 个文件的字段集（新增 8 个键），并补 `normalizeMoney` 的逐键回退
