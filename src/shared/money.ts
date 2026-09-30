@@ -458,6 +458,10 @@ export interface MoneyStats {
  * 白天会随着新条目一直长；23:20 结算后，冻结快照整体取代这份推导，数字不会跳变。
  * 缺席的日（本周没有这个日账本）仍然按零计。
  *
+ * 同一条规矩也管**跨日透支**：`previousOverdraft` 是 `daily[i].limit` 与 `daily[i].ratio`
+ * 的唯一输入，所以它同样按日择一真源 —— 已结算的日取快照 `overdraft`，未结算的日取
+ * `max(0, 当天现算花费 − 当天 limit)`。否则「今天超支」会既画进柱子、又传不到明天。
+ *
  * 计数与时长（`quality` / `nightMin` / `nightRatio`）本来就只能来自条目 —— 没有快照可读，
  * 所以它们对每一天都读 `entries`，与上面的口径天然一致。
  */
@@ -483,6 +487,8 @@ export function selectMoneyStats(money: MoneyState, today: string): MoneyStats {
   let spentLT = 0
   let nightMin = 0
   let actualMin = 0
+  // 跨日滚动的透支：周一（下标 0）没有前一日，从 0 起
+  let previousOverdraft = 0
 
   for (let i = 0; i < 7; i++) {
     const date = dates[i]
@@ -512,12 +518,10 @@ export function selectMoneyStats(money: MoneyState, today: string): MoneyStats {
       }
     }
 
-    // 前一日透支只取自**同周的前一日**：周一（下标 0）没有前一日，按 0 计
-    const previousOverdraft = i === 0 ? 0 : (byDate.get(dates[i - 1])?.overdraft ?? 0)
-
     // `limit` 只走 dayLimitOf：它是「当日可用额度」的单一真源，由**配置的周池**派生。
     // 这里若改写成 weekTC / 7 就是第二套公式 —— 受罚周会把 40 币的一天也算成超限，
     // 且与冻结在 LedgerDay.dayLimit 里的数字自相矛盾（这正是前一版修掉的 bug）。
+    // 传入的是**前一日**的透支（见循环末尾的滚动）。
     const limit = dayLimitOf(previousOverdraft, money.config)
     daily.push({
       date,
@@ -552,6 +556,13 @@ export function selectMoneyStats(money: MoneyState, today: string): MoneyStats {
         }
       }
     }
+
+    // 透支只带入**次日**（与 settleDay 同一条规则），且必须和当天的钱同源：
+    // 已结算的日认冻结快照；未结算的日按同一天现算的花费算 —— 若这里退回读
+    // `day.overdraft`（未冻结时恒为 0），今天超支的部分就传不到明天，
+    // 次日的额度会虚高，而当天那根柱子却已经画成超限。
+    previousOverdraft =
+      day && day.settledAt !== null ? day.overdraft : Math.max(0, daySpent - limit)
   }
 
   // 与 settleWeek 的收尾同源：档位由本周的实时花费预演，系数乘的是**配置的基础额度**

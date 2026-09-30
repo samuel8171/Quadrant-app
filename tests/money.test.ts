@@ -852,4 +852,28 @@ describe('selectMoneyStats', () => {
     expect(stats.spentLT).toBe(0) // 条目重算该是 +0.5，快照说了算
     expect(stats.remainingTC).toBeCloseTo(350 - 7)
   })
+
+  it('未结算的日超额度时，它现算出的透支要带入次日额度', () => {
+    // 周三（未结算）按条目现算出 80 币 > 日额度 50 ⇒ 透支 30 ⇒ 周四额度该是 20
+    const wed = unsettledDay('2026-09-30', [
+      mkEntry({ kind: 'planned', plannedMin: 480, actualMin: 480, done: true })
+    ])
+    const stats = selectMoneyStats(mkMoney([wed]), TODAY)
+
+    expect(stats.daily[2].spentTC).toBe(80)
+    expect(stats.daily[2].limit).toBe(50) // 当天额度由传入的透支 0 决定
+    expect(stats.daily[2].ratio).toBeCloseTo(80 / 50)
+    expect(stats.daily[3].limit).toBe(20) // 50 − 30，透支必须传下去
+  })
+
+  it('未结算的日没超额度时，次日额度不受影响', () => {
+    // 对照：同样未结算，只花 20 币（未过 50），次日额度仍是满额
+    const wed = unsettledDay('2026-09-30', [
+      mkEntry({ kind: 'planned', plannedMin: 120, actualMin: 120, done: true })
+    ])
+    const stats = selectMoneyStats(mkMoney([wed]), TODAY)
+
+    expect(stats.daily[2].spentTC).toBe(20)
+    expect(stats.daily[3].limit).toBe(50)
+  })
 })
