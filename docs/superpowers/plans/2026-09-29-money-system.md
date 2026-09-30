@@ -70,7 +70,7 @@
 ```ts
 it('无 money 字段的 v2 数据往返后逐字节不变', () => {
   const raw = { version: 2, goals: [], events: [], weekPresets: [], weekEvents: [], weekCounterOffset: 0 }
-  expect(parseData(JSON.parse(JSON.stringify(raw)))).toEqual(raw)
+  expect(parseData(JSON.stringify(raw))).toEqual(raw)
 })
 
 it('money 为非对象时被丢弃为 undefined，不影响其余字段', () => {
@@ -133,7 +133,8 @@ it('含合法 money 的数据通过校验', async () => {
 - [ ] **Step 6: 跑测试确认失败**
 
 Run: `./node_modules/.bin/vitest run tests/platformApi.test.ts`
-Expected: FAIL —— `validAppData` 对未知字段整体放行，第三条会失败；第二条也会失败（`money` 存在时不校验，被当合法）
+Expected: FAIL —— 至少第二条会失败（`money` 存在时旧校验器对未知字段整体放行，非法 `enabled` 被当合法）。
+第三条是否 RED 取决于实现顺序，不必强求两条都红。
 
 - [ ] **Step 7: 在 `platformApi.ts` 实现 `validMoney` 并接入 `validAppData`**
 
