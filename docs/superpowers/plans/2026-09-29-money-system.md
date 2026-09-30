@@ -1007,8 +1007,9 @@ Task 2–5、8、10 引用的字段名与之一致；`MoneyStats` 定义在 Task
 
 - Task 1–8 已实现并复审通过，分支 `feat/money-system`，HEAD `81a7487`，全量逐文件 **288 通过**。
 - R2 的改动**推翻一部分已实现的公式**，因此下面 5 个任务标 **[修正]**、5 个标 **[新增]**。
-- ⚠️ **执行 R2 前必须先拿到 R2 spec §9 的三处语义裁定**（休息日基数、逾期扣款口径、象限倍率数值）。
-  在拿到之前，R2-A / R2-E / R2-F 的测试断言无法写死。
+- ✅ **R2 spec §9.1 的两处语义已定**（逾期扣款 = 80 全额、娱币不动；象限倍率
+  Q1 1.5 / Q2 1.0 / Q3 1.2 / Q4 0.5，权重取向「紧急 > 重要」）。
+- ⚠️ 仅剩 §9.2 的**休息日基数**未定 —— **只有 R2-E 被它阻塞**；R2-A ~ R2-D、R2-F ~ R2-J 均可开工。
 
 ## R2 的 Global Constraints（在主计划之上追加）
 
@@ -1062,7 +1063,8 @@ Task 2–5、8、10 引用的字段名与之一致；`MoneyStats` 定义在 Task
 - 改签名：`costOfEntry(input: { actualMin: number; nightMin: number; quadrant: Quadrant }, config: MoneyConfig): number`
 - 公式：`round(((dayMin + nightMin × nightMultiplier) / 60 × tcPerHour) × quadrantMultiplier[`q${quadrant}`])`
 
-- [ ] Step 1: 写失败测试 —— 同样 120 分钟 0 深夜，Q1 得 30（20×1.5）、Q4 得 20（20×1.0）；
+- [ ] Step 1: 写失败测试 —— 同样 120 分钟 0 深夜，Q1 得 30（20×1.5）、Q3 得 24（20×1.2）、
+      Q2 得 20（20×1.0）、Q4 得 10（20×0.5）；
       并加一条「深夜 + Q1 相乘」的用例（120 分钟全深夜、Q1 ⇒ `round((120×1.5/60×10)×1.5)` = 45）
 - [ ] Step 2: 跑测试确认失败
 - [ ] Step 3: 实现并把 `settleDay` 与 `selectMoneyStats` 的未结算日推导两处调用点一并改掉
