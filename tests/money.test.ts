@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { LedgerDay, LedgerEntry, MoneyState, WeekSettlement } from '../src/shared/types'
+import type { LedgerDay, LedgerEntry, MoneyConfig, MoneyState, WeekSettlement } from '../src/shared/types'
 import { addDays, dateKey, parseDateKey } from '../src/shared/dateKey'
 import {
   DEFAULT_MONEY_CONFIG,
@@ -10,6 +10,7 @@ import {
   leisureDelta,
   nightMinutesOf,
   penaltyTierOf,
+  selectMoneyStats,
   settleDay,
   settleWeek
 } from '../src/shared/money'
@@ -591,5 +592,208 @@ describe('ensureWeekRollover / currentQuota', () => {
   it('currentQuota 在没有任何结算时回退到配置值', () => {
     const state: MoneyState = { enabled: true, config: DEFAULT_MONEY_CONFIG, days: [], weeks: [] }
     expect(currentQuota(state)).toEqual({ weekTC: 350, weekLT: 10 })
+  })
+})
+
+// ============================================================================
+// Task 5：派生统计（小组件的数据源）
+// ============================================================================
+
+/** 用 `settleDay` 造一天：额度、透支、花费都与实现同源，不手抄。 */
+function settledDay(date: string, entries: LedgerEntry[], previousOverdraft = 0): LedgerDay {
+  return settleDay({
+    date,
+    entries,
+    previousOverdraft,
+    settledAt: `${date}T23:20:00.000Z`,
+    config: DEFAULT_MONEY_CONFIG
+  })
+}
+
+/** 只带日账本、没有周结算记录的状态：本周额度回落到配置值 350 / 10。 */
+function mkMoney(days: LedgerDay[], weeks: WeekSettlement[] = []): MoneyState {
+  return { enabled: true, config: DEFAULT_MONEY_CONFIG, days, weeks }
+}
+
+/** `selectMoneyStats` 的观察日：2026-09-30（周三），本周周一为 2026-09-28。 */
+const TODAY = '2026-09-30'
+const THIS_WEEK_START = '2026-09-28'
+
+/**
+ * 本周已结算两天、周一一整天空缺：
+ * - 周二：一条「没做」+ 一条恰好按计划完成 ⇒ missed 1、efficient 1，花费 10 币；
+ * - 周三：一条用了 1.5 倍时长 ⇒ normal，花费 15 币。
+ */
+const moneyWithTwoSettledDays: MoneyState = (() => {
+  const tue = settledDay('2026-09-29', [
+    mkEntry({ kind: 'planned', plannedMin: 60, actualMin: 0, done: false }),
+    mkEntry({ kind: 'planned', plannedMin: 60, actualMin: 60, done: true })
+  ])
+  const wed = settledDay(
+    '2026-09-30',
+    [mkEntry({ kind: 'planned', plannedMin: 60, actualMin: 90, done: true })],
+    tue.overdraft
+  )
+  return mkMoney([tue, wed])
+})()
+
+/** 周池为 0 ⇒ 日额度与保底线都是 0，但周一仍然花了 20 币。 */
+const moneyWithZeroLimitDay: MoneyState = (() => {
+  const config: MoneyConfig = { ...DEFAULT_MONEY_CONFIG, weeklyTC: 0 }
+  const mon = settleDay({
+    date: THIS_WEEK_START,
+    entries: [mkEntry({ kind: 'planned', plannedMin: 120, actualMin: 120, done: true })],
+    previousOverdraft: 0,
+    settledAt: `${THIS_WEEK_START}T23:20:00.000Z`,
+    config
+  })
+  return { enabled: true, config, days: [mon], weeks: [] }
+})()
+
+/**
+ * 账本里的 `sourceId` 指向一个**已不存在**的 `weekEvent.id`。
+ *
+ * `MoneyState` 里根本没有 `weekEvents`，选择器因此连查找源事件的机会都没有 ——
+ * 它只能读条目自身的 `title` / `actualMin` 等快照字段（Review Focus 第 4 条）。
+ */
+const moneyWithDanglingSourceId: MoneyState = mkMoney([
+  settledDay('2026-09-29', [
+    mkEntry({
+      kind: 'planned',
+      sourceId: 'weekEvent-已被删除',
+      title: '已删除事件的标题快照',
+      plannedMin: 120,
+      actualMin: 120,
+      done: true
+    })
+  ])
+])
+
+describe('selectMoneyStats', () => {
+  it('daily 恒为 7 项，未结算的日子按零计', () => {
+    const stats = selectMoneyStats(moneyWithTwoSettledDays, TODAY)
+    expect(stats.daily).toHaveLength(7)
+    expect(stats.daily[0].ratio).toBe(0)
+    expect(stats.daily[0].limit).toBeCloseTo(50)
+    expect(stats.daily.map((d) => d.weekday)).toEqual(['一', '二', '三', '四', '五', '六', '日'])
+  })
+
+  it('余额 = 额度减本周已花', () => {
+    const stats = selectMoneyStats(moneyWithTwoSettledDays, TODAY)
+    expect(stats.remainingTC).toBeCloseTo(stats.weekTC - stats.spentTC)
+  })
+
+  it('ratio = spentTC / limit，limit 为 0 时不产生 Infinity', () => {
+    const stats = selectMoneyStats(moneyWithZeroLimitDay, TODAY)
+    expect(Number.isFinite(stats.daily[0].ratio)).toBe(true)
+    expect(stats.daily[0].ratio).toBe(0)
+  })
+
+  it('quality 四类计数与条目一一对应', () => {
+    const stats = selectMoneyStats(moneyWithTwoSettledDays, TODAY)
+    expect(stats.quality.missed).toBe(1)
+    expect(stats.quality.efficient).toBe(1)
+  })
+
+  it('源事件被删除后仍按 title 快照正常计入，不抛错', () => {
+    // 该账本里的 sourceId 指向一个已不存在的 weekEvent.id
+    const stats = selectMoneyStats(moneyWithDanglingSourceId, TODAY)
+    expect(stats.spentTC).toBeGreaterThan(0)
+    expect(Number.isFinite(stats.remainingTC)).toBe(true)
+    expect(stats.daily.some((d) => d.spentTC > 0)).toBe(true)
+  })
+
+  it('daily[i].limit 由 dayLimitOf(前一日透支) 得出，不受受罚周缩水的周额度影响', () => {
+    // 周一花 80 币（额度 50）⇒ 透支 30；本周额度被上周的档位 2 压到 245
+    const mon = settledDay(THIS_WEEK_START, [
+      mkEntry({ kind: 'planned', plannedMin: 480, actualMin: 480, done: true })
+    ])
+    const stats = selectMoneyStats(
+      mkMoney([mon], [mkSettledWeek({ weekStart: '2026-09-21', nextWeekTC: 245, nextWeekLT: 6 })]),
+      TODAY
+    )
+
+    expect(stats.weekStart).toBe(THIS_WEEK_START)
+    expect(stats.weekTC).toBeCloseTo(245)
+    expect(stats.weekTC / 7).toBeCloseTo(35) // 按 weekTC / 7 重算就会得到 35
+    expect(stats.daily[0].limit).toBe(50) // 日额度是配置派生出的固定值，不受惩罚影响
+    expect(stats.daily[1].limit).toBe(20) // 50 − 周一透支的 30
+    expect(stats.daily[1].limit).toBe(dayLimitOf(mon.overdraft, DEFAULT_MONEY_CONFIG))
+  })
+
+  it('quality：计划外不进任何一类，恰好 1.5 倍算正常，超过 1.5 倍算低效', () => {
+    const day = settledDay('2026-09-29', [
+      mkEntry({ kind: 'unplanned', plannedMin: null, actualMin: 45, done: true }),
+      mkEntry({ kind: 'planned', plannedMin: 60, actualMin: 90, done: true }), // 恰好 1.5 倍
+      mkEntry({ kind: 'planned', plannedMin: 60, actualMin: 91, done: true }), // 超过 1.5 倍
+      mkEntry({ kind: 'planned', plannedMin: 60, actualMin: 0, done: false })
+    ])
+    const stats = selectMoneyStats(mkMoney([day]), TODAY)
+    expect(stats.quality).toEqual({ efficient: 0, normal: 1, inefficient: 1, missed: 1 })
+  })
+
+  it('深夜时长与占比、娱币余额都来自本周条目', () => {
+    const day = settledDay('2026-09-29', [
+      mkEntry({ kind: 'planned', plannedMin: 300, actualMin: 237, nightMin: 30, done: true }), // 高效 ⇒ +0.5
+      mkEntry({ kind: 'unplanned', plannedMin: null, actualMin: 3, done: true }), // 娱币中性
+      mkEntry({ kind: 'planned', plannedMin: 60, actualMin: 0, done: false }) // 没做 ⇒ −1
+    ])
+    const stats = selectMoneyStats(mkMoney([day]), TODAY)
+
+    expect(stats.nightMin).toBe(30)
+    expect(stats.nightRatio).toBeCloseTo(30 / 240) // 237 + 3 分钟实际做事
+    expect(stats.weekLT).toBe(10)
+    expect(stats.spentLT).toBeCloseTo(-0.5)
+    expect(stats.remainingLT).toBeCloseTo(stats.weekLT + stats.spentLT)
+  })
+
+  it('penaltyTier 与下周额度是本周花费的实时预演', () => {
+    const stats = selectMoneyStats(mkMoney(mkWeek({ spent: 420, weekStart: THIS_WEEK_START }).days), TODAY)
+
+    expect(stats.spentTC).toBe(420)
+    expect(stats.weekTC).toBe(350)
+    expect(stats.remainingTC).toBeCloseTo(-70)
+    expect(stats.penaltyTier).toBe(2) // 超支 70 / 350 = 20%
+    expect(stats.nextWeekTC).toBeCloseTo(245) // 350 × 70%
+    expect(stats.nextWeekLT).toBeCloseTo(6) // 10 × 60%
+  })
+
+  it('只统计本周：上一周的账本不进 daily', () => {
+    const stats = selectMoneyStats(mkMoney(mkWeek({ weekStart: '2026-09-21' }).days), TODAY)
+
+    expect(stats.weekStart).toBe(THIS_WEEK_START)
+    expect(stats.spentTC).toBe(0)
+    expect(stats.daily.map((d) => d.date)).toEqual([
+      '2026-09-28',
+      '2026-09-29',
+      '2026-09-30',
+      '2026-10-01',
+      '2026-10-02',
+      '2026-10-03',
+      '2026-10-04'
+    ])
+    expect(stats.daily.every((d) => d.spentTC === 0 && d.ratio === 0)).toBe(true)
+    expect(stats.quality).toEqual({ efficient: 0, normal: 0, inefficient: 0, missed: 0 })
+  })
+
+  it('返回的字段与契约逐字一致，且没有 balance 这类冗余余额', () => {
+    const stats = selectMoneyStats(moneyWithTwoSettledDays, TODAY)
+    expect(Object.keys(stats).sort()).toEqual([
+      'daily',
+      'nextWeekLT',
+      'nextWeekTC',
+      'nightMin',
+      'nightRatio',
+      'penaltyTier',
+      'quality',
+      'remainingLT',
+      'remainingTC',
+      'spentLT',
+      'spentTC',
+      'weekLT',
+      'weekStart',
+      'weekTC'
+    ])
+    expect(Object.keys(stats.daily[0]).sort()).toEqual(['date', 'limit', 'ratio', 'spentTC', 'weekday'])
   })
 })

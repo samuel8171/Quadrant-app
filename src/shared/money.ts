@@ -387,3 +387,157 @@ function firstUnsettledMonday(state: MoneyState, lastCompletedMonday: Date): Dat
   return start.getTime() <= lastCompletedMonday.getTime() ? start : null
 }
 
+/**
+ * `MoneyStats.daily[i].weekday` 的取值：周一~周日的**裸单字**。
+ *
+ * 不能复用 `weekRules` 的 `WEEKDAY_NAMES`：那个常量返回 `['周一', '周二', …]`（带「周」前缀），
+ * 而且住在 `renderer/` —— `shared/` 反向依赖界面层会破坏依赖方向（理由同 `dateKey.ts`）。
+ */
+const WEEKDAY_LABELS = ['一', '二', '三', '四', '五', '六', '日']
+
+/**
+ * `selectMoneyStats` 的返回契约：Task 7 的六个小组件**只**消费它，字段名逐字固定。
+ *
+ * 每个字段都是**派生**值，没有一个落盘 —— 这正是 `MoneyState` 刻意不设 `balance` 的原因
+ * （见 `currentQuota`）：额度与余额永远现算，就不可能和账本不一致。
+ * 单条日统计里也没有 `balance`：只有 `spentTC` / `limit` / `ratio`。
+ */
+export interface MoneyStats {
+  /** 本周周一（'YYYY-MM-DD'）。 */
+  weekStart: string
+  /** 本周发放的时币额度（已含上周惩罚后的值，见 `currentQuota`）。 */
+  weekTC: number
+  /** 本周已花时币（逐日 `spentTC` 快照之和）。 */
+  spentTC: number
+  /** 本周剩余时币，恒等于 `weekTC − spentTC`（超支时为负）。 */
+  remainingTC: number
+  /** 本周发放的娱币额度。 */
+  weekLT: number
+  /** 本周娱币净变化：奖励为正、惩罚为负（逐日 `deltaLT` 快照之和）。 */
+  spentLT: number
+  /** 本周剩余娱币，恒等于 `weekLT + spentLT`。 */
+  remainingLT: number
+  /** 周一~周日**恒 7 项**，缺席的日按零花计。 */
+  daily: { date: string; weekday: string; spentTC: number; limit: number; ratio: number }[]
+  /** 本周深夜做事总分钟数。 */
+  nightMin: number
+  /** 深夜分钟数占本周实际做事分钟数的比例（0~1；本周没有做事时为 0）。 */
+  nightRatio: number
+  /** 条目质量四分类计数；计划外条目不进任何一类。 */
+  quality: { efficient: number; normal: number; inefficient: number; missed: number }
+  /** **实时预演**：本周若此刻结束会落到的档位（不是任何已存的结算值）。 */
+  penaltyTier: PenaltyTier
+  /** 该档位下下周的时币额度 = `config.weeklyTC × 档位系数`。 */
+  nextWeekTC: number
+  /** 该档位下下周的娱币额度 = `config.weeklyLT × 档位系数`。 */
+  nextWeekLT: number
+}
+
+/**
+ * 把整份 `MoneyState` 摊成小组件要读的**只读视图模型**（spec 12.5）。
+ *
+ * 纯函数：`today` 是入参，不读时钟、不用随机数；同一份输入永远得到同一份输出。
+ *
+ * **只读条目自身的快照字段**：`LedgerEntry.sourceId` 可能指向一个已被删除的源事件，
+ * 而 `MoneyState` 里根本没有 `weekEvents` —— 本函数不做任何源查找，因此既不会抛错、
+ * 也不会漏算（标题等快照字段在记录时就已冻结）。
+ *
+ * 本周的两种口径必须分开，别混：
+ * - 钱与娱币读**日快照**（`spentTC` / `deltaLT`），与 `settleWeek` 同一条规矩；
+ * - 计数与时长（`quality` / `nightMin` / `nightRatio`）只能来自条目，没有快照可读。
+ *
+ * 未结算的日（`settledAt` 为 null）其快照字段还没冻结，天然按零计入 `spentTC`，
+ * 但它的条目仍会进 `quality` / `nightMin` —— 这些是实时量，不需要等结算。
+ */
+export function selectMoneyStats(money: MoneyState, today: string): MoneyStats {
+  const weekStartDate = mondayOf(parseDateKey(today))
+  const weekStart = dateKey(weekStartDate)
+  const quota = currentQuota(money)
+
+  // 本周 7 天的日期键由它锁定 daily 的长度与顺序（周一定为下标 0）
+  const dates: string[] = []
+  for (let i = 0; i < 7; i++) dates.push(dateKey(addDays(weekStartDate, i)))
+  const weekEnd = dates[6]
+
+  // 日期键是定长 `YYYY-MM-DD`，字典序即时间序。`days` 按 date 升序，后写覆盖先写
+  const byDate = new Map<string, LedgerDay>()
+  for (const day of money.days) {
+    if (day.date >= weekStart && day.date <= weekEnd) byDate.set(day.date, day)
+  }
+
+  const daily: MoneyStats['daily'] = []
+  const quality = { efficient: 0, normal: 0, inefficient: 0, missed: 0 }
+  let spentTC = 0
+  let spentLT = 0
+  let nightMin = 0
+  let actualMin = 0
+
+  for (let i = 0; i < 7; i++) {
+    const date = dates[i]
+    const day = byDate.get(date)
+    const daySpent = day?.spentTC ?? 0
+
+    // 前一日透支只取自**同周的前一日**：周一（下标 0）没有前一日，按 0 计
+    const previousOverdraft = i === 0 ? 0 : (byDate.get(dates[i - 1])?.overdraft ?? 0)
+
+    // `limit` 只走 dayLimitOf：它是「当日可用额度」的单一真源，由**配置的周池**派生。
+    // 这里若改写成 weekTC / 7 就是第二套公式 —— 受罚周会把 40 币的一天也算成超限，
+    // 且与冻结在 LedgerDay.dayLimit 里的数字自相矛盾（这正是前一版修掉的 bug）。
+    const limit = dayLimitOf(previousOverdraft, money.config)
+    daily.push({
+      date,
+      weekday: WEEKDAY_LABELS[i],
+      spentTC: daySpent,
+      limit,
+      // limit 为 0 时不许出现 Infinity / NaN：无额度可谈，比例取 0
+      ratio: limit > 0 ? daySpent / limit : 0
+    })
+    spentTC += daySpent
+
+    if (day) {
+      spentLT += day.deltaLT
+      for (const entry of day.entries) {
+        actualMin += entry.actualMin
+        nightMin += entry.nightMin
+
+        // 与 leisureDelta 同序：没做优先于计划外，只有「计划内 + 已完成」才有质量可判
+        if (!entry.done) {
+          quality.missed++
+        } else if (entry.kind === 'planned') {
+          const planned = entry.plannedMin
+          if (planned === null || planned <= 0) {
+            quality.normal++ // 没有可比基准，既不奖励也不惩罚
+          } else if (entry.actualMin <= planned) {
+            quality.efficient++
+          } else if (entry.actualMin > planned * 1.5) {
+            quality.inefficient++
+          } else {
+            quality.normal++
+          }
+        }
+      }
+    }
+  }
+
+  // 与 settleWeek 的收尾同源：档位由本周的实时花费预演，系数乘的是**配置的基础额度**
+  const weekOver = Math.max(0, spentTC - quota.weekTC)
+  const penaltyTier = penaltyTierOf(weekOver, quota.weekTC)
+  const scale = TIER_SCALE[penaltyTier]
+
+  return {
+    weekStart,
+    weekTC: quota.weekTC,
+    spentTC,
+    remainingTC: quota.weekTC - spentTC,
+    weekLT: quota.weekLT,
+    spentLT,
+    remainingLT: quota.weekLT + spentLT,
+    daily,
+    nightMin,
+    nightRatio: actualMin > 0 ? nightMin / actualMin : 0,
+    quality,
+    penaltyTier,
+    nextWeekTC: money.config.weeklyTC * scale.tc,
+    nextWeekLT: money.config.weeklyLT * scale.lt
+  }
+}
