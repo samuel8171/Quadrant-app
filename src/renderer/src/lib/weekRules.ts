@@ -4,6 +4,13 @@ import {
   type WeekEvent,
   type WeekPreset
 } from '../../../shared/types'
+import { addDays, dateKey, mondayOf, pad2, parseDateKey } from '../../../shared/dateKey'
+
+/**
+ * 纯日期函数已于本任务**下沉**到 `shared/dateKey.ts`（原因见该文件头部注释）。
+ * 这里原样 re-export，签名与名字都不变，所有既有 import 点无需改动。
+ */
+export { addDays, dateKey, mondayOf, pad2, parseDateKey }
 
 export const DAY_START_MIN = 7 * 60
 export const DAY_END_MIN = 24 * 60
@@ -16,31 +23,6 @@ export const WEEKDAY_NAMES = ['周一', '周二', '周三', '周四', '周五', 
 
 const MS_PER_DAY = 86_400_000
 const ANCHOR_UTC_DAY = Date.UTC(2026, 7, 10) / MS_PER_DAY
-
-export function pad2(n: number): string {
-  return String(n).padStart(2, '0')
-}
-
-export function dateKey(d: Date): string {
-  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`
-}
-
-export function parseDateKey(key: string): Date {
-  const [y, m, d] = key.split('-').map(Number)
-  return new Date(y, m - 1, d)
-}
-
-export function addDays(d: Date, n: number): Date {
-  const next = new Date(d)
-  next.setDate(next.getDate() + n)
-  return next
-}
-
-export function mondayOf(d: Date): Date {
-  const m = new Date(d.getFullYear(), d.getMonth(), d.getDate())
-  m.setDate(m.getDate() - ((m.getDay() + 6) % 7))
-  return m
-}
 
 export function weekDays(monday: Date): Date[] {
   return Array.from({ length: 7 }, (_, i) => addDays(monday, i))
