@@ -230,4 +230,29 @@ describe('settleDay', () => {
     expect(day.dayLimit).toBe(50)
     expect(day.deltaLT).toBe(0)
   })
+
+  it('结算快照独占自己的条目数组：调用方事后改动不会改写已冻结的账', () => {
+    const entries = [mkEntry({ actualMin: 120, plannedMin: 120, done: true })]
+    const day = settleDay({
+      date: '2026-09-28',
+      previousOverdraft: 0,
+      settledAt: 'x',
+      entries,
+      config: DEFAULT_MONEY_CONFIG
+    })
+
+    // 调用方继续往自己那个数组里塞条目（组装/落盘过程中的常见写法）
+    entries.push(mkEntry({ actualMin: 480, plannedMin: 480, done: true }))
+
+    expect(day.entries).not.toBe(entries)
+    expect(day.entries).toHaveLength(1)
+    expect(day.spentTC).toBe(20)
+    // 快照必须自洽：冻结的 spentTC 仍等于快照内条目之和
+    expect(
+      day.entries.reduce(
+        (sum, e) => sum + costOfEntry({ actualMin: e.actualMin, nightMin: e.nightMin }, DEFAULT_MONEY_CONFIG),
+        0
+      )
+    ).toBe(day.spentTC)
+  })
 })

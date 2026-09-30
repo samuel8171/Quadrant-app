@@ -117,6 +117,9 @@ export function dayLimitOf(previousOverdraft: number, config: MoneyConfig): numb
  *
  * `nightPending` 恒为 `true`：结算发生在 23:20，而深夜窗口 23:30 才开启，
  * 「昨夜 23:30 之后是否还在做事」只能由**次日**的结算补记（Task 8 消费此字段）。
+ *
+ * 返回值对条目数组做的是**浅拷贝**：数组归快照所有，但条目对象仍与调用方共享 ——
+ * 调用方不得原地改这些对象（账本是追加写的，条目一旦记录即视为不可变）。
  */
 export function settleDay(input: {
   date: string
@@ -140,7 +143,10 @@ export function settleDay(input: {
   return {
     date: input.date,
     settledAt: input.settledAt,
-    entries: input.entries,
+    // 快照独占自己的数组：直接存 input.entries 等于把它交给调用方，
+    // 调用方在组装/落盘途中 push/splice 就会改到已冻结的 spentTC/overdraft/dayLimit。
+    // 唯一获准修改已结算快照的地方是 Task 8 的深夜补记，且它必须**重算**各项汇总。
+    entries: [...input.entries],
     dayLimit,
     spentTC,
     overdraft: Math.max(0, spentTC - dayLimit),
