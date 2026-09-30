@@ -10,6 +10,7 @@ import {
   leisureDelta,
   nightMinutesOf,
   penaltyTierOf,
+  pendingDays,
   selectMoneyStats,
   settleDay,
   settleWeek
@@ -875,5 +876,55 @@ describe('selectMoneyStats', () => {
 
     expect(stats.daily[2].spentTC).toBe(20)
     expect(stats.daily[3].limit).toBe(50)
+  })
+})
+
+// ============================================================================
+// Task 8：待结算判定（日结卡片的唯一数据源）
+// ============================================================================
+
+/**
+ * 混合账本：周六已结算、周日与周一未结算、周二（今天）未结算。
+ *
+ * 观察日取 `TODAY`（2026-09-30，周三）。这里故意让「今天」也留一条未结算记录——
+ * 就是要证明待结算的判定**不能只看向 `settledAt`**，还必须把「今天尚未结束」排除掉。
+ */
+const moneyWithMixedDays: MoneyState = mkMoney([
+  settledDay('2026-09-27', [mkEntry({ actualMin: 60, plannedMin: 60, done: true })]),
+  unsettledDay('2026-09-28', [mkEntry({ actualMin: 60, plannedMin: 60, done: true })]),
+  unsettledDay('2026-09-29', [mkEntry({ actualMin: 0, plannedMin: 60, done: false })]),
+  unsettledDay('2026-09-30', [mkEntry({ actualMin: 60, plannedMin: 60, done: true })])
+])
+
+/** 只有今天一条未结算记录：不应有任何待结算。 */
+const moneyWithTodayOnly: MoneyState = mkMoney([
+  unsettledDay('2026-09-30', [mkEntry({ actualMin: 60, plannedMin: 60, done: true })])
+])
+
+describe('pendingDays', () => {
+  it('待结算 = 早于今天且 settledAt 为 null 的日子，按升序', () => {
+    expect(pendingDays(moneyWithMixedDays, '2026-09-30')).toEqual(['2026-09-28', '2026-09-29'])
+  })
+
+  it('今天尚未结束，不计入待结算', () => {
+    expect(pendingDays(moneyWithTodayOnly, '2026-09-30')).toEqual([])
+  })
+
+  it('全部已结算时为空', () => {
+    const allSettled = mkMoney([
+      settledDay('2026-09-28', [mkEntry({ actualMin: 60, plannedMin: 60, done: true })]),
+      settledDay('2026-09-29', [mkEntry({ actualMin: 60, plannedMin: 60, done: true })])
+    ])
+    expect(pendingDays(allSettled, '2026-09-30')).toEqual([])
+  })
+
+  it('账本里日期乱序时，返回值仍按升序', () => {
+    // 契约里 days 按 date 升序，但选择器不该依赖调用方守约：这里故意倒着放
+    const shuffled = mkMoney([unsettledDay('2026-09-29', []), unsettledDay('2026-09-27', [])])
+    expect(pendingDays(shuffled, '2026-09-30')).toEqual(['2026-09-27', '2026-09-29'])
+  })
+
+  it('没有账本时为空', () => {
+    expect(pendingDays(mkMoney([]), '2026-09-30')).toEqual([])
   })
 })

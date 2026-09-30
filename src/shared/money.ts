@@ -587,3 +587,22 @@ export function selectMoneyStats(money: MoneyState, today: string): MoneyStats {
     nextWeekLT: money.config.weeklyLT * scale.lt
   }
 }
+
+/**
+ * 待结算的日期列表（spec 7.1 的日结卡片数据源），按日期升序。
+ *
+ * 判定只有两条：`settledAt === null`（尚未结算）且 `date < today`（这一天已经过完）。
+ * **今天不计入** —— 它还没结束，此刻结算等于拿半天的账当整天结；判定用的是日期字符串
+ * 而非时间戳，正是因为「一天是否结束」在本地日历上是纯粹的日期比较。
+ *
+ * 日期键是定长 `YYYY-MM-DD`，字典序即时间序，所以 `<` 与 `.sort()` 都不需要解析回 `Date`。
+ * 返回前显式排序，不依赖 `days` 已按升序这一点：调用方守不守约不该改变本函数的语义。
+ *
+ * 与 `selectMoneyStats` 同源：两者都只读 `money`、把 `today` 当入参，不读时钟、不用随机数。
+ */
+export function pendingDays(money: MoneyState, today: string): string[] {
+  return money.days
+    .filter((day) => day.settledAt === null && day.date < today)
+    .map((day) => day.date)
+    .sort()
+}
