@@ -996,3 +996,221 @@ Task 2–5、8、10 引用的字段名与之一致；`MoneyStats` 定义在 Task
 **一处需要执行者注意的架构修正**：Task 4 的 Step 3 把 `mondayOf` / `addDays` / `dateKey` 从
 `renderer/lib/weekRules.ts` 下沉到 `shared/dateKey.ts`。这是为了让 `shared/money.ts` 不反向依赖 `renderer/`。
 该步骤用 `tests/weekRules.test.ts` 原样全绿作为回归保证 —— **这是硬性验收条件，不是可选项。**
+
+---
+
+# R2 任务集（2026-09-30 修订）
+
+**Spec：** `docs/superpowers/specs/2026-09-30-money-system-r2.md`（本文的 R2 部分以它为唯一权威）
+
+## R2 执行前状态
+
+- Task 1–8 已实现并复审通过，分支 `feat/money-system`，HEAD `81a7487`，全量逐文件 **288 通过**。
+- R2 的改动**推翻一部分已实现的公式**，因此下面 5 个任务标 **[修正]**、5 个标 **[新增]**。
+- ⚠️ **执行 R2 前必须先拿到 R2 spec §9 的三处语义裁定**（休息日基数、逾期扣款口径、象限倍率数值）。
+  在拿到之前，R2-A / R2-E / R2-F 的测试断言无法写死。
+
+## R2 的 Global Constraints（在主计划之上追加）
+
+- `dailyCapTC` 是**独立配置项**，任何地方**不得**再用 `weeklyTC / 7` 当日上限。
+  `80 × 7 = 560 ≠ 540`，派生值就是错的。
+- 深夜倍率与象限倍率**相乘**，且深夜倍率仍只作用于落在 `[23:30, 06:00)` 内的分钟数。
+- 娱币的「刷视频 / 打游戏」两条**只扣娱币、不产生时币消耗**，且**不进** `quality` 四分类。
+- 日超限只侵蚀次日额度；**只有周超限才罚下一周**（用户裁定第一条，与已实现一致，不得改）。
+- 新增持久化字段仍必须同步 **5 个文件**：`shared/types.ts`、`main/dataCodec.ts`（`normalizeMoney`）、
+  `renderer/lib/platformApi.ts`（`validMoney`）、`shared/defaults.ts`、
+  `scripts/verify-integrity.mjs`（内含 `validAppData` 与 `firstViolation` **两处**复刻）。
+- 写 money 必须写**完整** `MoneyState`（四个顶层字段 + `config` 全键），否则网页端会静默清空用户全部数据。
+- `data.money.config` 目前以**引用**持有 `DEFAULT_MONEY_CONFIG`，携带时必须 spread。
+
+---
+
+### Task R2-A: 数值定标与 `dailyCapTC` 独立化 ［修正］
+
+**Files:**
+- Modify: `src/shared/types.ts`（`MoneyConfig` + 新类型）
+- Modify: `src/shared/money.ts`（`DEFAULT_MONEY_CONFIG`、`dayLimitOf`、`settleWeek`）
+- Modify: `src/main/dataCodec.ts`、`src/renderer/src/lib/platformApi.ts`、`scripts/verify-integrity.mjs`（两处复刻）
+- Test: `tests/money.test.ts`、`tests/dataCodec.test.ts`、`tests/platformApi.test.ts`
+
+**Interfaces:**
+- Produces: `MoneyConfig` 新增字段
+  `dailyCapTC: 80`、`videoLTPerHour: 1`、`gameLTPerHour: 1.5`、`restDayFactor: 0.8`、
+  `abandonedDayTC: 80`、`latePhoneTC: number`、`latePhoneLT: number`、
+  `quadrantMultiplier: { q1: number; q2: number; q3: number; q4: number }`
+- 改值：`weeklyTC: 540`、`weeklyLT: 20`
+
+- [ ] Step 1: 写失败测试 —— `dayLimitOf(0, config)` 用 `dailyCapTC` 而非 `weeklyTC / 7`。
+      断言 `dayLimitOf(0, DEFAULT_MONEY_CONFIG) === 80`，且把 `weeklyTC` 改成 999 后该值**不变**。
+- [ ] Step 2: 跑测试确认失败（当前返回 77.14）
+- [ ] Step 3: 改 `dayLimitOf` 与 `settleWeek` 的 `daySoftCap` 为 `config.dailyCapTC`；保底 = `dailyCapTC × minCapRatio` = 16
+- [ ] Step 4: 跑测试确认通过
+- [ ] Step 5: 同步 5 个文件的字段集（新增 8 个键），并补 `normalizeMoney` 的逐键回退
+- [ ] Step 6: 跑 `tests/money.test.ts` / `tests/dataCodec.test.ts` / `tests/platformApi.test.ts` 三个文件
+- [ ] Step 7: `node scripts/verify-integrity.mjs --appdata tmp/vi-probe` 确认无 `money` 相关 FAIL/WARN
+- [ ] Step 8: 提交
+
+---
+
+### Task R2-B: 象限倍率接入计费 ［修正］
+
+**Files:**
+- Modify: `src/shared/money.ts`（`costOfEntry` 及其两个调用点）
+- Test: `tests/money.test.ts`
+
+**Interfaces:**
+- 改签名：`costOfEntry(input: { actualMin: number; nightMin: number; quadrant: Quadrant }, config: MoneyConfig): number`
+- 公式：`round(((dayMin + nightMin × nightMultiplier) / 60 × tcPerHour) × quadrantMultiplier[`q${quadrant}`])`
+
+- [ ] Step 1: 写失败测试 —— 同样 120 分钟 0 深夜，Q1 得 30（20×1.5）、Q4 得 20（20×1.0）；
+      并加一条「深夜 + Q1 相乘」的用例（120 分钟全深夜、Q1 ⇒ `round((120×1.5/60×10)×1.5)` = 45）
+- [ ] Step 2: 跑测试确认失败
+- [ ] Step 3: 实现并把 `settleDay` 与 `selectMoneyStats` 的未结算日推导两处调用点一并改掉
+      （**漏改任一处就会出现两套口径**，这正是 T4/T5 两轮返工的成因）
+- [ ] Step 4: 跑测试确认通过
+- [ ] Step 5: 提交
+
+---
+
+### Task R2-C: 娱币的两条纯消费来源 ［新增］
+
+**Files:**
+- Modify: `src/shared/types.ts`（`LedgerDay` 加 `videoMin: number`、`gameMin: number`）
+- Modify: `src/shared/money.ts`（新函数 `consumptionDeltaLT`；`settleDay` 计入 `deltaLT`）
+- Modify: 5 个同步点
+- Test: `tests/money.test.ts`
+
+**Interfaces:**
+- Produces: `consumptionDeltaLT(input: { videoMin: number; gameMin: number }, config: MoneyConfig): number`
+  = `−(videoMin / 60 × videoLTPerHour) − (gameMin / 60 × gameLTPerHour)`
+
+- [ ] Step 1: 写失败测试 —— 刷视频 60 分钟 → `−1`；打游戏 120 分钟 → `−3`；两者合计 → `−4`
+- [ ] Step 2/3/4: TDD 循环
+- [ ] Step 5: 断言这两项**不进** `quality`、且**不改变** `spentTC`
+- [ ] Step 6: 同步 5 个文件；逐文件跑三个测试文件
+- [ ] Step 7: 提交
+
+---
+
+### Task R2-D: 日结窗口 7 天、逾期满额、不可重结 ［修正］
+
+**Files:**
+- Modify: `src/shared/money.ts`（`ensureLedgerDays`、`pendingDays`、新 `abandonDays`）
+- Modify: `src/renderer/src/state/appStore.ts`（开机物化改为全窗口）
+- Test: `tests/money.test.ts`
+
+**Interfaces:**
+- `ensureLedgerDays` 改为对 `[today − 7, today)` 的**每一天**建未结算空记录（不再要求 `plannedDates`）
+- 新纯函数 `abandonExpiredDays(money, today): MoneyState` —— 把早于 `today − 7` 的未结算日
+  按 `abandonedDayTC` 全额落账（`spentTC = abandonedDayTC`、`deltaLT` 不变）、`settledAt` 置为到期日
+
+- [ ] Step 1: 写失败测试 —— 8 天前的一天被 `abandonExpiredDays` 落成 `spentTC === 80`、`deltaLT === 0`
+- [ ] Step 2/3/4: TDD 循环
+- [ ] Step 5: **不可重结**：已有测试覆盖 `commitDaySettlement` 的守卫；补一条断言「已结算日在两次开机后
+      数字逐字节不变」（针对「往日时间轴被修改」）
+- [ ] Step 6: 逐文件跑测试；提交
+
+---
+
+### Task R2-E: 休息日 ［新增，**阻塞于 §9 裁定 1**］
+
+**Files:**
+- Modify: `src/shared/types.ts`（`LedgerDay` 加 `isRestDay: boolean`）
+- Modify: `src/shared/money.ts`（`settleDay` 按 `restDayFactor` 计）
+- Modify: 5 个同步点；日结面板加开关
+- Test: `tests/money.test.ts`
+
+- [ ] Step 1: 按裁定确定基数后写失败测试（基数不同，断言完全不同，**这一步不能先写**）
+- [ ] Step 2–6: TDD + 同步 + 提交
+
+---
+
+### Task R2-F: 深夜刷手机的次日连带扣款 ［新增，**阻塞于 §9 裁定**］
+
+**Files:**
+- Modify: `src/shared/types.ts`（`LedgerDay` 加 `latePhone: boolean`）
+- Modify: `src/shared/money.ts`（次日扣款逻辑）
+- Modify: 5 个同步点；日结面板加一问
+- Test: `tests/money.test.ts`
+
+- [ ] Step 1: 写失败测试 —— 在 D 日答「有」⇒ **D+1** 的 `spentTC` 增加 `latePhoneTC`、`deltaLT` 减少 `latePhoneLT`；
+      D 日本身不变（用户明确要求扣**次日**）
+- [ ] Step 2–6: TDD + 同步 + 提交
+
+---
+
+### Task R2-G: 两种货币的小图标 ［新增］
+
+**Files:**
+- Create: `src/renderer/src/components/money/MoneyIcon.tsx`（`{ kind: 'tc' | 'lt'; size?: number }`，手写 SVG）
+- Modify: 余额卡、日结面板、条目行
+
+- [ ] Step 1: 实现两枚 SVG 图标，沿用 `theme.css` 的 `currentColor`，尺寸可传
+- [ ] Step 2: 接入余额卡与日结面板；type check + build
+- [ ] Step 3: 人工验收（两种尺寸下均清晰、不模糊）；提交
+
+---
+
+### Task R2-H: 日视图事件块显示价值 ［新增］
+
+**Files:**
+- Modify: `src/renderer/src/components/weekly/EventBlock.tsx`、`DayView.tsx`
+- Test: 无（组件层）；依赖 `costOfEntry` 的纯函数测试已存在
+
+- [ ] Step 1: 在日视图的每个事件块上显示它将要花费的时币数（用 `costOfEntry` 算，**不要另写公式**）
+- [ ] Step 2: 确认周视图（`WeekOverview`）**不**显示 —— 用户说的是「周计划的子页面」，即日视图
+- [ ] Step 3: type check + build + 人工验收（块高度是否被撑开、窄屏是否溢出）
+- [ ] Step 4: 提交
+
+---
+
+### Task R2-I: 「我的」页荧光折线趋势图 ［新增］
+
+**Files:**
+- Modify: `src/renderer/src/components/mine/*`（重做图表；`selectMoneyStats` 可能要补趋势数据）
+- Modify: `src/renderer/src/styles/theme.css`
+
+- [ ] Step 1: 用手写 SVG 画两条趋势折线（时币一条、娱币一条），蓝色荧光 + 淡粉色荧光
+- [ ] Step 2: 荧光用 SVG `filter: drop-shadow` 或双层描边实现，**不引入任何依赖**
+- [ ] Step 3: 桌面 12 列 / 手机单列布局复核；`prefers-reduced-motion` 下不做动画
+- [ ] Step 4: type check + build + 人工验收（两种主题下均清晰、荧光不过曝）
+- [ ] Step 5: 提交
+
+---
+
+### Task R2-J: 日结面板三问集成与回归 ［新增］
+
+**Files:**
+- Modify: `src/renderer/src/components/money/SettlePanel.tsx`
+- Modify: `tests/money.test.ts`（纯函数部分已在 R2-C/F 覆盖）
+
+- [ ] Step 1: 面板并列问出：① 刷视频时长 ② 打游戏时长 ③ 昨夜 24:00 后是否刷手机
+      （与既有的「昨夜 23:30 之后还在做事吗」**并存**，两者语义不同，见 R2 spec §6）
+- [ ] Step 2: 每条实时显示它将产生的 LT / TC 变化，口径必须调用既有纯函数，不得在组件里重算
+- [ ] Step 3: 逐文件跑全量；`electron-vite build`；隔离 userData 的人工验收
+- [ ] Step 4: **关闭态回归**：`money.enabled === false` 时这些新问题一律不出现
+- [ ] Step 5: 提交
+
+---
+
+## R2 的执行顺序与依赖
+
+```
+R2-A（配置） ──┬─→ R2-B（象限倍率）
+               ├─→ R2-C（娱币消费来源）
+               ├─→ R2-D（7 天窗口）
+               ├─→ R2-E（休息日）  ← 阻塞于裁定 1
+               └─→ R2-F（深夜刷手机）← 阻塞于裁定 2
+R2-G / R2-H 与上面并行无依赖
+R2-I 依赖 R2-A（趋势图要新数值才有意义）
+R2-J 依赖 R2-C 与 R2-F
+```
+
+**R2-A 必须先做**：它改了 `MoneyConfig` 的形状，其余任务的测试都会引用新键。
+
+## R2 的收尾待办（沿用主计划的收尾项）
+
+1. 修正主计划里「组件顺序」的自相矛盾（表格顺序 vs「hero 在前」）
+2. 更新 `AGENTS.md` 维护点说明，把 `money` 字段纳入
+3. 修 `src/renderer/probe/main.tsx` 的 `PAGES` 缺 `mine`
+4. 平板档 768–1023px 是否补断点
