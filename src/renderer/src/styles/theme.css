@@ -3562,7 +3562,8 @@ body {
 .settle-foot {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
+  flex-wrap: wrap;
   padding-top: 4px;
   border-top: 1px solid var(--border);
 }
@@ -3578,8 +3579,28 @@ body {
   color: var(--text);
 }
 
-.settle-commit {
+/*
+ * 「那天我什么都没做」是次要动作，但文案里必须把后果（娱币惩罚）写出来：
+ * 它是不可逆的结算，用户需要在按下之前就看到代价。
+ */
+.settle-nothing {
   margin-left: auto;
+  padding: 8px 12px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.settle-nothing:hover {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.settle-commit {
   padding: 9px 18px;
   font: inherit;
   font-size: 14px;
@@ -3625,6 +3646,12 @@ body {
   .settle-commit {
     width: 100%;
     margin-left: 0;
+  }
+
+  .settle-nothing {
+    width: 100%;
+    margin-left: 0;
+    text-align: center;
   }
 
   .settle-foot {

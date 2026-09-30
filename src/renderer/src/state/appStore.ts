@@ -18,6 +18,7 @@ import {
   DEFAULT_MONEY_CONFIG,
   costOfEntry,
   dayLimitOf,
+  ensureLedgerDays,
   ensureWeekRollover,
   leisureDelta,
   nightMinutesOf,
@@ -135,6 +136,8 @@ interface AppState {
   resolveLeave: (action: 'save' | 'discard' | 'cancel') => void
   setMoneyEnabled: (enabled: boolean) => void
   rolloverMoneyWeek: () => void
+  /** 为「计划过、但账本里还没有记录」的过去日期补出未结算日账本（日结卡片的入口）。 */
+  materializeLedgerDays: () => void
   /** 用 `entries` 结算 `date`（Task 8 的正向路径，快照只有这里能首次冻结）。 */
   commitDaySettlement: (date: string, entries: LedgerEntry[]) => void
   /** 把一条计划外条目追加进 `date`（未结算）的账本。 */
@@ -314,6 +317,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     // 先把本地数据渲染出来，云端对账放到后面——网络慢时首屏不该等它。
     const data = await getPlatformApi().loadData()
     set({ data, loaded: true })
+    // 顺序不能反：先把「计划过但没有记录」的过去日补进账本，周结算才看得到它们；
+    // 否则含未结算日的那些周会被当成空周冻结成一个再也改不了的 0。
+    get().materializeLedgerDays()
     // 本地可能已经跨了若干个周（上次打开是很久以前），补齐周结算。桌面端也要跑。
     get().rolloverMoneyWeek()
     if (isDesktopRuntime()) return
@@ -379,6 +385,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     // 表现为"同步过的东西过一会儿自己变回去了"。
     set({ data })
     void getPlatformApi().saveData(data)
+    // 云端那份可能是另一台设备写的：先补出「计划过但没记录」的过去日，再补周结算
+    // （顺序同 init —— 物化必须在滚动之前）。
+    get().materializeLedgerDays()
     // 云端那份可能是在另一个设备上、跨了周才写下的，落地后立刻补一次周结算。
     get().rolloverMoneyWeek()
   },
@@ -758,6 +767,30 @@ export const useAppStore = create<AppState>((set, get) => ({
     const data = { ...current, money }
     saveSoon(data)
     set({ data })
+  },
+
+  /**
+   * 补出「计划过、但账本里还没有记录」的过去日期（spec 7.1）。
+   *
+   * 这是日结卡片能出现的**前提**：没有它，`pendingDays` 永远扫不到任何东西 ——
+   * 计费只发生在象限页完成事件的那一刻，而「排了计划但当天没打开应用」根本不会产生日账本。
+   * 未启用时是空操作；`ensureLedgerDays` 无变化时原对象返回，据此短路掉无谓的落盘。
+   *
+   * 必须在 `rolloverMoneyWeek` **之前**调用：物化出来的未结算日会让含它的那一周被推迟结算
+   * （见 `ensureWeekRollover`），而不是先被冻结成一个 0。
+   */
+  materializeLedgerDays: () => {
+    const data = get().data
+    if (data.money?.enabled !== true) return
+    const money = ensureLedgerDays(
+      data.money,
+      data.weekEvents.map((event) => event.date),
+      dateKey(new Date())
+    )
+    if (money === data.money) return
+    const next = { ...data, money }
+    saveSoon(next)
+    set({ data: next })
   },
 
   /**

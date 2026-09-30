@@ -197,11 +197,15 @@ function DayForm({
     setNewTitle('')
   }
 
-  const commit = (): void => {
-    commitDaySettlement(
-      date,
-      rows.map((r) => toEntry(r, config))
-    )
+  const commitEntries = (entries: LedgerEntry[]): void => {
+    /*
+     * 顺序是**先补记、后结算当天**，不能反。
+     *
+     * `commitDaySettlement` 结算完会立刻补一次周结算，而周结算只读各日的冻结快照。
+     * 若先结算当天、再补记昨天，昨天的 spentTC 是在本周已经冻结之后才变的 ——
+     * 那一周的账会永久少掉这笔深夜做事（周快照一经写入不许改）。
+     * 反过来先补记，本周的账在滚动那一刻就已经是最终值。
+     */
     if (needsBackfill) {
       // 补记回写的是**昨天**那一条已结算快照（全库唯一允许改动它的路径）。
       confirmNight(dateKey(addDays(parseDateKey(date), -1)), {
@@ -209,8 +213,23 @@ function DayForm({
         endMin: nightWorked ? nightEndMin : undefined
       })
     }
+    commitDaySettlement(date, entries)
     onCommitted()
   }
+
+  const commit = (): void => commitEntries(rows.map((r) => toEntry(r, config)))
+
+  /**
+   * 「那天我什么都没做」：走与正常结算**完全同一条** `commitDaySettlement` 路径，
+   * 只是把每一条计划内条目都记成 `done: false` / `actualMin: 0` ——
+   * 于是 `spentTC` 自然为 0、娱币按 `missPenaltyLT` 逐条扣，没有任何旁路、也没有单独的快照分支。
+   *
+   * 它的真正职责是**解开死锁**：周结算会推迟含未结算日的周（见 `ensureWeekRollover`），
+   * 若某天既不结算也不清掉，那一周的滚动就永远停在那里。面板里临时录入的计划外条目一并丢弃 ——
+   * 那天什么都没做，也就没有计划外的事。
+   */
+  const commitNothingDone = (): void =>
+    commitEntries(needed.map((r) => toEntry({ ...r, done: false, actualMin: 0 }, config)))
 
   return (
     <div className="settle-day">
@@ -364,6 +383,11 @@ function DayForm({
         <span className="settle-total">
           这一天：<b>{totalCost}</b> 币 · {signed(totalDelta)} LT
         </span>
+        <button type="button" className="settle-nothing" onClick={commitNothingDone}>
+          {needed.length > 0
+            ? `那天我什么都没做（计划内 ${needed.length} 条全记未完成，娱币 −${needed.length * config.missPenaltyLT}）`
+            : '那天我什么都没做'}
+        </button>
         <button type="button" className="settle-commit" onClick={commit}>
           {total > 1 ? '结算这一天，下一天 →' : '结算这一天'}
         </button>
