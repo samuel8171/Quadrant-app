@@ -407,13 +407,13 @@ export interface MoneyStats {
   weekStart: string
   /** 本周发放的时币额度（已含上周惩罚后的值，见 `currentQuota`）。 */
   weekTC: number
-  /** 本周已花时币（逐日 `spentTC` 快照之和）。 */
+  /** 本周已花时币（逐日花费之和：已结算的日取冻结快照，未结算的日按条目现算）。 */
   spentTC: number
   /** 本周剩余时币，恒等于 `weekTC − spentTC`（超支时为负）。 */
   remainingTC: number
   /** 本周发放的娱币额度。 */
   weekLT: number
-  /** 本周娱币净变化：奖励为正、惩罚为负（逐日 `deltaLT` 快照之和）。 */
+  /** 本周娱币净变化：奖励为正、惩罚为负（逐日 `deltaLT` 之和，口径同 `spentTC`）。 */
   spentLT: number
   /** 本周剩余娱币，恒等于 `weekLT + spentLT`。 */
   remainingLT: number
@@ -423,7 +423,12 @@ export interface MoneyStats {
   nightMin: number
   /** 深夜分钟数占本周实际做事分钟数的比例（0~1；本周没有做事时为 0）。 */
   nightRatio: number
-  /** 条目质量四分类计数；计划外条目不进任何一类。 */
+  /**
+   * 条目质量四分类计数。
+   *
+   * 计划外**且已完成**的不进任何一类；但没做的条目（无论计划内外）都算 `missed` ——
+   * 分类顺序与 `leisureDelta` 一致，`!done` 先判。
+   */
   quality: { efficient: number; normal: number; inefficient: number; missed: number }
   /** **实时预演**：本周若此刻结束会落到的档位（不是任何已存的结算值）。 */
   penaltyTier: PenaltyTier
@@ -442,12 +447,19 @@ export interface MoneyStats {
  * 而 `MoneyState` 里根本没有 `weekEvents` —— 本函数不做任何源查找，因此既不会抛错、
  * 也不会漏算（标题等快照字段在记录时就已冻结）。
  *
- * 本周的两种口径必须分开，别混：
- * - 钱与娱币读**日快照**（`spentTC` / `deltaLT`），与 `settleWeek` 同一条规矩；
- * - 计数与时长（`quality` / `nightMin` / `nightRatio`）只能来自条目，没有快照可读。
+ * **每一天的钱只有一个真源**，否则同屏的两个小组件会互相矛盾（今天的条目进了
+ * 执行质量，却进不了本周已用）：
+ * - **已结算**的日（`settledAt` 非 null）→ 冻结快照（`spentTC` / `deltaLT`）就是权威，
+ *   即使它与条目重算的结果不符也不得改写（快照优先，与 `settleWeek` 同一条规矩）；
+ * - **未结算**的日（`settledAt` 为 null）→ 快照还没冻结（字段仍是 0），按 `settleDay`
+ *   的同一套算法从条目现算：`spentTC = Σ costOfEntry(...)`、`deltaLT = Σ leisureDelta(...)`。
  *
- * 未结算的日（`settledAt` 为 null）其快照字段还没冻结，天然按零计入 `spentTC`，
- * 但它的条目仍会进 `quality` / `nightMin` —— 这些是实时量，不需要等结算。
+ * 理由：仪表盘的职责是「显示到目前为止已经记录下的东西」。今天的数字因此是**临时**的，
+ * 白天会随着新条目一直长；23:20 结算后，冻结快照整体取代这份推导，数字不会跳变。
+ * 缺席的日（本周没有这个日账本）仍然按零计。
+ *
+ * 计数与时长（`quality` / `nightMin` / `nightRatio`）本来就只能来自条目 —— 没有快照可读，
+ * 所以它们对每一天都读 `entries`，与上面的口径天然一致。
  */
 export function selectMoneyStats(money: MoneyState, today: string): MoneyStats {
   const weekStartDate = mondayOf(parseDateKey(today))
@@ -475,7 +487,30 @@ export function selectMoneyStats(money: MoneyState, today: string): MoneyStats {
   for (let i = 0; i < 7; i++) {
     const date = dates[i]
     const day = byDate.get(date)
-    const daySpent = day?.spentTC ?? 0
+
+    // 一天的钱只认一个真源：已结算读冻结快照，未结算按条目现算（见函数头注释）。
+    // 两处都用既有辅助，不另写计费/娱币公式。缺席的日（day 为 undefined）恒为 0。
+    let daySpent = 0
+    let dayDelta = 0
+    if (day) {
+      if (day.settledAt !== null) {
+        daySpent = day.spentTC
+        dayDelta = day.deltaLT
+      } else {
+        for (const entry of day.entries) {
+          daySpent += costOfEntry({ actualMin: entry.actualMin, nightMin: entry.nightMin }, money.config)
+          dayDelta += leisureDelta(
+            {
+              kind: entry.kind,
+              done: entry.done,
+              actualMin: entry.actualMin,
+              plannedMin: entry.plannedMin
+            },
+            money.config
+          )
+        }
+      }
+    }
 
     // 前一日透支只取自**同周的前一日**：周一（下标 0）没有前一日，按 0 计
     const previousOverdraft = i === 0 ? 0 : (byDate.get(dates[i - 1])?.overdraft ?? 0)
@@ -493,9 +528,9 @@ export function selectMoneyStats(money: MoneyState, today: string): MoneyStats {
       ratio: limit > 0 ? daySpent / limit : 0
     })
     spentTC += daySpent
+    spentLT += dayDelta
 
     if (day) {
-      spentLT += day.deltaLT
       for (const entry of day.entries) {
         actualMin += entry.actualMin
         nightMin += entry.nightMin

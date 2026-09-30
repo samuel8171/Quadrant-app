@@ -610,6 +610,23 @@ function settledDay(date: string, entries: LedgerEntry[], previousOverdraft = 0)
   })
 }
 
+/**
+ * 造一个**未结算**的日账本（`settledAt === null`），快照字段一律留 0 ——
+ * 现实里也正是如此：快照要等 23:20 的结算才冻结，在那之前钱只能从 `entries` 现算。
+ */
+function unsettledDay(date: string, entries: LedgerEntry[]): LedgerDay {
+  return {
+    date,
+    settledAt: null,
+    entries,
+    dayLimit: 0,
+    spentTC: 0,
+    overdraft: 0,
+    deltaLT: 0,
+    nightPending: true
+  }
+}
+
 /** 只带日账本、没有周结算记录的状态：本周额度回落到配置值 350 / 10。 */
 function mkMoney(days: LedgerDay[], weeks: WeekSettlement[] = []): MoneyState {
   return { enabled: true, config: DEFAULT_MONEY_CONFIG, days, weeks }
@@ -795,5 +812,44 @@ describe('selectMoneyStats', () => {
       'weekTC'
     ])
     expect(Object.keys(stats.daily[0]).sort()).toEqual(['date', 'limit', 'ratio', 'spentTC', 'weekday'])
+  })
+
+  it('未结算的日：钱按条目现算，与当天的质量计数同源', () => {
+    // 今天（周三）已经记了一条 2 小时的计划内条目，但还没结算
+    const today = unsettledDay('2026-09-30', [
+      mkEntry({ kind: 'planned', plannedMin: 120, actualMin: 120, done: true })
+    ])
+    const stats = selectMoneyStats(mkMoney([today]), TODAY)
+
+    // 快照字段全是 0，若读快照就会得到 0 —— 必须由条目现算，否则「执行质量」会动而「本周已用」不动
+    expect(stats.daily[2].spentTC).toBe(20)
+    expect(stats.daily[2].ratio).toBeCloseTo(20 / 50)
+    expect(stats.quality.efficient).toBe(1)
+    expect(stats.spentTC).toBe(20)
+    expect(stats.remainingTC).toBeCloseTo(350 - 20)
+  })
+
+  it('已结算的日：冻结快照优先，即使与条目重算的结果不符也不改写', () => {
+    // 故意造一份不一致的账本：条目重算该得 20 币 / +0.5 娱币，快照却冻结在 7 币 / 0
+    const frozen: LedgerDay = {
+      ...settledDay('2026-09-29', [
+        mkEntry({ kind: 'planned', plannedMin: 120, actualMin: 120, done: true })
+      ]),
+      spentTC: 7,
+      deltaLT: 0
+    }
+    const stats = selectMoneyStats(mkMoney([frozen]), TODAY)
+
+    expect(
+      frozen.entries.reduce(
+        (sum, e) => sum + costOfEntry({ actualMin: e.actualMin, nightMin: e.nightMin }, DEFAULT_MONEY_CONFIG),
+        0
+      )
+    ).toBe(20) // 条目确实值 20 币……
+
+    expect(stats.daily[1].spentTC).toBe(7) // ……但已结算的日只认快照
+    expect(stats.spentTC).toBe(7)
+    expect(stats.spentLT).toBe(0) // 条目重算该是 +0.5，快照说了算
+    expect(stats.remainingTC).toBeCloseTo(350 - 7)
   })
 })
