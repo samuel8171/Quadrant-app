@@ -1,4 +1,4 @@
-import type { LedgerEntryKind, MoneyConfig } from './types'
+import type { LedgerDay, LedgerEntry, LedgerEntryKind, MoneyConfig } from './types'
 
 /**
  * 计费与结算参数的默认值（spec 第 11 节）。
@@ -84,4 +84,67 @@ export function leisureDelta(
   if (input.actualMin <= planned) return config.rewardLT
   if (input.actualMin > planned * 1.5) return -config.penaltyLT
   return 0
+}
+
+/**
+ * 当日可用额度（spec 6.2）：
+ *
+ * ```
+ * dayLimit(i) = max(D × minCapRatio, D − overdraft(i−1))，其中 D = weeklyTC / 7
+ * ```
+ *
+ * 日软上限 `D`（默认 50）**不阻止消费**，只决定透支：透支只带入**次日**、不累积，
+ * 靠 `minCapRatio`（默认 0.2 → 保底 10 币）兜底 —— 这正是防死亡螺旋的那一层，
+ * 否则一次大额透支会让后续额度长期贴地。自修复也由此而来：超支 30 的次日额度为 20，
+ * 只在额度内消费则不产生新透支，第三天回到 50。
+ *
+ * 保底线取 `D × minCapRatio` 而**不是** `weeklyTC × minCapRatio`：后者在默认值下是
+ * 70 币，比日额度本身还高，保底会退化成「永远不扣」。
+ */
+export function dayLimitOf(previousOverdraft: number, config: MoneyConfig): number {
+  const softCap = config.weeklyTC / 7
+  return Math.max(softCap * config.minCapRatio, softCap - previousOverdraft)
+}
+
+/**
+ * 对一天做结算（spec 6.2 / 7.3）。
+ *
+ * `spentTC` 与 `deltaLT` 都**由原始字段重新推导**（逐条 `costOfEntry` / `leisureDelta` 求和），
+ * 不读条目上已存的 `costTC` / `deltaLT`：结算快照是唯一真源，条目字段只是记录时的镜像，
+ * 两者若有偏差必须以结算为准。
+ *
+ * `settledAt` 由调用方传入并原样写入 —— 函数因此保持纯的、可测的，不自取当前时间。
+ *
+ * `nightPending` 恒为 `true`：结算发生在 23:20，而深夜窗口 23:30 才开启，
+ * 「昨夜 23:30 之后是否还在做事」只能由**次日**的结算补记（Task 8 消费此字段）。
+ */
+export function settleDay(input: {
+  date: string
+  entries: LedgerEntry[]
+  previousOverdraft: number
+  settledAt: string
+  config: MoneyConfig
+}): LedgerDay {
+  const dayLimit = dayLimitOf(input.previousOverdraft, input.config)
+
+  let spentTC = 0
+  let deltaLT = 0
+  for (const entry of input.entries) {
+    spentTC += costOfEntry({ actualMin: entry.actualMin, nightMin: entry.nightMin }, input.config)
+    deltaLT += leisureDelta(
+      { kind: entry.kind, done: entry.done, actualMin: entry.actualMin, plannedMin: entry.plannedMin },
+      input.config
+    )
+  }
+
+  return {
+    date: input.date,
+    settledAt: input.settledAt,
+    entries: input.entries,
+    dayLimit,
+    spentTC,
+    overdraft: Math.max(0, spentTC - dayLimit),
+    deltaLT,
+    nightPending: true
+  }
 }
