@@ -1,5 +1,24 @@
 # 环境备忘
 
+## tmp/ 目录状态（2026-09-28 清理后）
+
+`tmp/` 已按备份审计清理掉 385 项、回收约 1.13 GB，**当前仅剩 6 项**：
+
+| 保留项 | 用途 |
+| --- | --- |
+| `vite.probe.config.ts` | 生产构建验证探针的入口配置（活跃工具） |
+| `popup-inventory.mjs` | 逐按钮排查浮层玻璃化进度的清单脚本（活跃工具） |
+| `push2.sh` / `push2.py` | REST 推送方案的参考实现 |
+| `aurora-backup/` | 玻璃重构前的 `theme.css` 快照（B 档，去留待定） |
+| `plan-backup-141445.json` | ⚠️ **真实用户数据快照**（含目标与子任务），不是产物，勿删 |
+
+- **本文档与 `HANDOFF.md`、`docs/probes/*.md` 里引用的其他 `tmp/*.mjs`、`tmp/*.py` 取证脚本
+  已不在磁盘**——它们是一次性取证件，历史文档保留原文不改。需要复现时按文档描述重写，
+  或从 Windows 回收站找回（本项目的删除走回收站语义，尚未清空）。
+- `tmp/dist130`、`tmp/dist131` 下残留的 `win-unpacked/resources/app.asar`（各 41.5 MB）
+  被外部进程独占句柄（`WinError 32`），已**截断为 0 字节**（磁盘空间已释放），
+  目录空壳在相关进程退出或重启后即可删除。
+
 ## firecrawl CLI
 
 - 安装方式：npm 全局安装，包名 `firecrawl-cli@1.16.2`
@@ -94,6 +113,38 @@
    直接搜 exe 搜不到源码（它在压缩包里）。搜本轮新增的字符串最可靠，
    例如 `.gs-viewport {`、`height: max(100%, var(--app-height, 0px));`、
    JS 里的安全区居中表达式、`clampMenuCenter`。顺带确认 `"version": "x.y.z"` 已更新。
+
+## 程序完整性验证
+
+`scripts/verify-integrity.mjs` —— **只读**体检脚本，回答"这份程序（源码 + 依赖 + 构建产物 +
+运行数据 + 安装包）是否完整可用"。纯文件 I/O、无外部依赖，秒级完成。
+
+```bash
+node scripts/verify-integrity.mjs                  # 全部检查（不含类型检查）
+node scripts/verify-integrity.mjs --typecheck      # 附加 tsc（沙箱内会降级为 SKIP）
+node scripts/verify-integrity.mjs --json           # 机器可读输出
+node scripts/verify-integrity.mjs --strict         # 有 WARN 也返回非 0
+node scripts/verify-integrity.mjs --appdata <dir>  # 覆盖数据目录（默认 %APPDATA%\象限）
+```
+
+七组检查及其针对性：
+
+| 组 | 抓什么 |
+| --- | --- |
+| 源码与配置 | 关键文件是否被误删或清空、package.json 元数据、tsconfig 可解析 |
+| 依赖 | 直接依赖是否落地、入口文件是否可达（抓"半棵树"那类问题） |
+| 构建产物 | `out/`、`dist-web/` 的 HTML/CSS/manifest **引用闭合**、bundle 体积健全、产物是否比 src 旧 |
+| 运行数据 | `plan.json` 是否通过 `validAppData` —— **不合规会被静默重置为默认数据**，本项目最严重的静默故障 |
+| 模型同步 | `types.ts` 的 `AppData` 字段与 `validAppData` 的检查字段是否一致（启发式，抓漏同步） |
+| 安装包 | `dist/*.exe` 的 PE 头、体积、是否含当前版本 |
+| 类型检查 | 可选，需 `--typecheck` |
+
+- **退出码**：有 FAIL → 1；`--strict` 下 WARN 也算失败，可直接接进 CI。
+- ⚠️ **维护点**：第 4 组的 `validAppData` 是 `platformApi.ts:47-68` 的忠实复刻（含
+  `isRecord` / `hasStringFields` 的精确语义），属"第 4 处"字段副本。**新增事件字段时，
+  必须与 `shared/types.ts`、`main/dataCodec.normalizeEvent`、`renderer/lib/platformApi.validAppData` 一并改。**
+- 自检方式：`--appdata` 指向临时目录，造一份不合规数据应报 FAIL 并指出具体实体下标
+  （已验证：合规数据 25 通过 / 1 警告 / 0 失败；不合规数据 → FAIL + 退出码 1）。
 
 ## 界面交互探针（定位"只在真实事件时序下暴露"的缺陷）
 
