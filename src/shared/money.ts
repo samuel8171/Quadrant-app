@@ -320,17 +320,74 @@ export function currentQuota(state: MoneyState): { weekTC: number; weekLT: numbe
 }
 
 /**
+ * 为「计划过、但账本里还没有记录」的过去日期补出一条未结算的日账本（spec 7.1）。
+ *
+ * **为什么需要它**：`pendingDays` 只能扫出**已存在**的日账本，而计费是在象限页完成时才追加条目的。
+ * 于是「周末排了计划、当天没打开应用」这种最常见的情况下，压根没有人会为那天写下一条记录，
+ * 日结卡片就永远不出现 —— 整个子系统唯一的日常交互入口形同虚设。本函数就是那条缺失的接线。
+ *
+ * **窗口只回看两周**：`[本周一 − 7, 今天)`。上限是刻意的 —— 用户离开一个月再回来时，
+ * 若把整月的计划日全部物化出来，卡片会一次报出几十天待结算，那不是提醒而是惩罚；
+ * 两周足够覆盖「隔了一个周末才回来」。窗口**不含今天**：它还没结束，此刻谈结算为时过早。
+ *
+ * **只补不碰**：`days` 里已有该日期的记录（无论已结算还是未结算）一律原样跳过 ——
+ * 已结算的快照不可变，未结算的记录里可能已经有用户录入的条目，物化不能覆盖它们。
+ *
+ * 无变化时**原对象返回**：调用方（appStore）据返回值恒等短路，避免每次冷启动都白写一遍盘。
+ * 纯函数：`today` 与 `plannedDates` 都是入参，不读时钟；`plannedDates` 里的重复项在内部去重，
+ * 不要求调用方先去重。
+ */
+export function ensureLedgerDays(
+  money: MoneyState,
+  plannedDates: string[],
+  today: string
+): MoneyState {
+  const windowStart = dateKey(addDays(mondayOf(parseDateKey(today)), -7))
+  const existing = new Set(money.days.map((day) => day.date))
+  const missing = new Set<string>()
+  for (const date of plannedDates) {
+    if (date < windowStart || date >= today) continue
+    if (existing.has(date)) continue
+    missing.add(date)
+  }
+  if (missing.size === 0) return money
+
+  const days = [...money.days]
+  for (const date of missing) {
+    days.push({
+      date,
+      settledAt: null,
+      entries: [],
+      dayLimit: 0,
+      spentTC: 0,
+      overdraft: 0,
+      deltaLT: 0,
+      nightPending: true
+    })
+  }
+  days.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
+  return { ...money, days }
+}
+
+/**
  * 补齐跨周结算（spec 7.5）：从「最后一次结算的下一周」一路补到「上一个已结束的周」，
  * 逐周调用 `settleWeek`。**本周不结算** —— 它还没结束。
  *
- * 中间没有任何数据的周按空周结算（`spentTC = 0`）：档位 0 的下一周额度就是配置的基础额度，
- * 因此惩罚不会跨过空周继续衰减。更一般地，任何**未超支**的一周都会把额度拉回配置值 ——
- * 惩罚只作用于下一周。
+ * **含未结算日的周一律推迟**（本任务新增）：只要这一周里还有 `settledAt === null` 的日账本，
+ * 就整周不结算，并**就此停止**、不再往后补。两条理由：
+ * - `settleWeek` 只读 `day.spentTC`，而未结算的快照是 0 —— 现在结算等于把这一周冻结成一个
+ *   永远为 0 的假数字，而快照一经写入就不许改（唯一豁免只有深夜补记）；
+ * - 若跳过它去结算后面的周，额度链（`currentQuota` → 本周 `nextWeekTC` → 下下周 `weekTC`）
+ *   就会用错误的前序额度算下去，错得很安静。
+ * 推迟的代价只是「本周额度暂时还停在上一次结算的值」，而那一天一旦结算完，滚动会自然继续。
+ *
+ * 中间没有任何数据的周按空周结算（`spentTC = 0`）：`[].some(...) === false` 是假言真值，
+ * 所以「一个记录都没有的周」无需任何特判就会走原路径。
  *
  * 每一周的额度取值链是 `currentQuota` → 本周结算的 `nextWeekTC` → 下一周的 `weekTC`，
  * 所以逐周补结算与「每周一打开应用一次」的结果完全一致。
  *
- * 没有待补的周时**原对象返回**：调用方（appStore）把它写回 state，
+ * 没有待补的周（或第一周就被推迟）时**原对象返回**：调用方（appStore）把它写回 state，
  * 返回值恒等意味着不会触发无谓的重渲染与落盘。
  */
 export function ensureWeekRollover(state: MoneyState, today: string): MoneyState {
@@ -348,11 +405,14 @@ export function ensureWeekRollover(state: MoneyState, today: string): MoneyState
   ) {
     const weekStart = dateKey(cursor)
     const weekEnd = dateKey(addDays(cursor, 6))
+    // 日账本按 date 升序，日期键可直接字典序比区间
+    const days = state.days.filter((day) => day.date >= weekStart && day.date <= weekEnd)
+    // 还有没结算的日 → 整周推迟，且不再往后补（见函数头注释）
+    if (days.some((day) => day.settledAt === null)) break
     const settlement = settleWeek({
       weekStart,
       weekEnd,
-      // 日账本按 date 升序，日期键可直接字典序比区间
-      days: state.days.filter((day) => day.date >= weekStart && day.date <= weekEnd),
+      days,
       weekTC: quota.weekTC,
       weekLT: quota.weekLT,
       config: state.config
@@ -361,6 +421,8 @@ export function ensureWeekRollover(state: MoneyState, today: string): MoneyState
     quota = { weekTC: settlement.nextWeekTC, weekLT: settlement.nextWeekLT }
   }
 
+  // 第一周就被推迟时 weeks 没有增长 —— 返回原对象，别制造无谓的落盘
+  if (weeks.length === state.weeks.length) return state
   return { ...state, weeks }
 }
 

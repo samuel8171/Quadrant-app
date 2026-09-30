@@ -6,6 +6,7 @@ import {
   costOfEntry,
   currentQuota,
   dayLimitOf,
+  ensureLedgerDays,
   ensureWeekRollover,
   leisureDelta,
   nightMinutesOf,
@@ -926,5 +927,146 @@ describe('pendingDays', () => {
 
   it('没有账本时为空', () => {
     expect(pendingDays(mkMoney([]), '2026-09-30')).toEqual([])
+  })
+})
+
+// ============================================================================
+// Task 8 追加：补建「计划过的过去日」与「周结算推迟」
+// ============================================================================
+
+/**
+ * `ensureLedgerDays` 的观察日：2026-09-30（周三），本周一 2026-09-28，
+ * 于是回看窗口 = `[2026-09-21, 2026-09-30)` —— 上周一（含）到昨天（含）。
+ */
+describe('ensureLedgerDays', () => {
+  it('窗口内、有计划、但没有记录的日期 → 补出一条未结算的空记录', () => {
+    const money = mkMoney([])
+    const next = ensureLedgerDays(money, ['2026-09-29'], '2026-09-30')
+    expect(next).not.toBe(money)
+    expect(next.days).toEqual([
+      {
+        date: '2026-09-29',
+        settledAt: null,
+        entries: [],
+        dayLimit: 0,
+        spentTC: 0,
+        overdraft: 0,
+        deltaLT: 0,
+        nightPending: true
+      }
+    ])
+    // 其余字段原样带过
+    expect(next.enabled).toBe(true)
+    expect(next.config).toBe(DEFAULT_MONEY_CONFIG)
+    expect(next.weeks).toEqual([])
+  })
+
+  it('窗口外的日期一律忽略（上周一之前 / 今天 / 未来）', () => {
+    const money = mkMoney([])
+    expect(ensureLedgerDays(money, ['2026-09-20'], '2026-09-30')).toBe(money) // 早于窗口起点
+    expect(ensureLedgerDays(money, ['2026-09-30'], '2026-09-30')).toBe(money) // 今天尚未结束
+    expect(ensureLedgerDays(money, ['2026-10-05'], '2026-09-30')).toBe(money) // 未来
+  })
+
+  it('窗口的边界含两端：上周一补得出来、更早一天补不出来', () => {
+    const atStart = ensureLedgerDays(mkMoney([]), ['2026-09-21'], '2026-09-30')
+    expect(atStart.days.map((d) => d.date)).toEqual(['2026-09-21'])
+    expect(pendingDays(atStart, '2026-09-30')).toEqual(['2026-09-21'])
+  })
+
+  it('已有记录的日期（已结算或未结算）一个字节都不动', () => {
+    const pending = unsettledDay('2026-09-25', [])
+    const settled = settledDay('2026-09-29', [mkEntry({ actualMin: 60, plannedMin: 60, done: true })])
+    const money = mkMoney([pending, settled])
+    const next = ensureLedgerDays(money, ['2026-09-25', '2026-09-29'], '2026-09-30')
+    expect(next).toBe(money)
+    expect(next.days[0]).toBe(pending)
+    expect(next.days[1]).toBe(settled)
+  })
+
+  it('没有计划过的日期不会凭空补记录', () => {
+    const money = mkMoney([])
+    expect(ensureLedgerDays(money, [], '2026-09-30')).toBe(money)
+    // 计划日期全在窗口外，同样不产生新对象
+    expect(ensureLedgerDays(money, ['2026-09-20', '2026-09-30'], '2026-09-30')).toBe(money)
+  })
+
+  it('计划日期重复只补一条，且返回值按 date 升序', () => {
+    const next = ensureLedgerDays(
+      mkMoney([]),
+      ['2026-09-29', '2026-09-22', '2026-09-29'],
+      '2026-09-30'
+    )
+    expect(next.days.map((d) => d.date)).toEqual(['2026-09-22', '2026-09-29'])
+  })
+})
+
+describe('ensureWeekRollover 推迟含未结算日的周', () => {
+  it('上一周还有未结算的日 → 整周不结算、且不越周往后补', () => {
+    // 09-21 那一周里 09-25 还没结算；再往前还有一周（09-14）也没结算
+    const state: MoneyState = {
+      enabled: true,
+      config: DEFAULT_MONEY_CONFIG,
+      days: [unsettledDay('2026-09-25', [])],
+      weeks: []
+    }
+    const same = ensureWeekRollover(state, '2026-09-30')
+    expect(same).toBe(state)
+    expect(same.weeks).toEqual([])
+    // 没有任何周结算 → 本周额度回落到配置值
+    expect(currentQuota(same)).toEqual({ weekTC: 350, weekLT: 10 })
+  })
+
+  it('那一天标记为已结算后，滚动随即推进', () => {
+    const pendingState: MoneyState = {
+      enabled: true,
+      config: DEFAULT_MONEY_CONFIG,
+      days: [unsettledDay('2026-09-25', [])],
+      weeks: []
+    }
+    const settled = settledDay('2026-09-25', [
+      mkEntry({ actualMin: 60, plannedMin: 60, done: true })
+    ])
+    const next = ensureWeekRollover({ ...pendingState, days: [settled] }, '2026-09-30')
+    expect(next).not.toBe(pendingState)
+    expect(next.weeks.map((w) => w.weekStart)).toEqual(['2026-09-21'])
+    expect(next.weeks[0].spentTC).toBe(10)
+    expect(next.weeks[0].penaltyTier).toBe(0)
+  })
+
+  it('推迟后重新扫描：先前的周已结算、本周未结算的那一周仍推迟', () => {
+    // 前一周已全部结算（09-21 周），本周（09-28 周）里 09-29 未结算
+    const mon = settledDay('2026-09-21', [mkEntry({ actualMin: 60, plannedMin: 60, done: true })])
+    const pendingThisWeek = unsettledDay('2026-09-29', [])
+    const state: MoneyState = {
+      enabled: true,
+      config: DEFAULT_MONEY_CONFIG,
+      days: [mon, pendingThisWeek],
+      weeks: []
+    }
+    // 上一周（09-21）全部已结算 → 结算它；本周还没结束，本来就不结算
+    const next = ensureWeekRollover(state, '2026-09-30')
+    expect(next.weeks.map((w) => w.weekStart)).toEqual(['2026-09-21'])
+    expect(next.weeks[0].spentTC).toBe(10)
+  })
+
+  it('没有任何日账本的周仍按空周结算（假言真值，不特判）', () => {
+    const state: MoneyState = {
+      enabled: true,
+      config: DEFAULT_MONEY_CONFIG,
+      days: [],
+      weeks: []
+    }
+    expect(ensureWeekRollover(state, '2026-09-30')).toBe(state)
+    // 有账本才会滚：最早账本所在周起逐周补，中间空周按零
+    const withOld = ensureWeekRollover(
+      {
+        ...state,
+        days: [settledDay('2026-09-14', [mkEntry({ actualMin: 60, plannedMin: 60, done: true })])]
+      },
+      '2026-09-30'
+    )
+    expect(withOld.weeks.map((w) => w.weekStart)).toEqual(['2026-09-14', '2026-09-21'])
+    expect(withOld.weeks[1].spentTC).toBe(0)
   })
 })
