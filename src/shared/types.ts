@@ -104,10 +104,29 @@ export interface AppData {
   money?: MoneyState
 }
 
+/**
+ * 四象限权重：Q1 重要且紧急 / Q2 重要不紧急 / Q3 不重要但紧急 / Q4 都不。
+ *
+ * 用户的取向是**紧急 > 重要**（故 q3 = 1.2 高于 q2 = 1.0），两者皆有取最高、
+ * 两者皆无取最低。定价见 spec R2 §3.1。
+ */
+export interface QuadrantMultiplier {
+  q1: number
+  q2: number
+  q3: number
+  q4: number
+}
+
 /** 计费与结算的全局参数。默认值见 `shared/money.ts` 的 `DEFAULT_MONEY_CONFIG`。 */
 export interface MoneyConfig {
   /** W：每周发放的时币总额。 */
   weeklyTC: number
+  /**
+   * 日软上限（时币）。**独立字段，不由 `weeklyTC / 7` 派生** ——
+   * 派生关系会让「调周总额」静默改掉「日上限」，而这两个数是分开想的
+   * （先定的日上限 80、后改的周总额 560）。见 spec R2 §2。
+   */
+  dailyCapTC: number
   /** 币/小时。 */
   tcPerHour: number
   /** 深夜时段起点（分钟，自 0 点起算）；1410 = 23:30。 */
@@ -126,6 +145,25 @@ export interface MoneyConfig {
   penaltyLT: number
   /** 有事情没做的娱币惩罚。 */
   missPenaltyLT: number
+  /** 刷视频每小时扣的娱币（纯消费来源，不产生任何时币消耗）。 */
+  videoLTPerHour: number
+  /** 打游戏每小时扣的娱币（同上）。 */
+  gameLTPerHour: number
+  /** 休息日系数：休息日固定扣 `dailyCapTC × restDayFactor`。 */
+  restDayFactor: number
+  /** 逾期未结算一天按满额扣的时币（= `dailyCapTC` 全额）。 */
+  abandonedDayTC: number
+  /**
+   * 深夜刷手机（24:00 之后）连带扣的**次日时币**。
+   *
+   * ⚠️ 用户只说了「大量」而**未给定数字**：当前值是占位值，**待用户定标**。
+   * 任何依赖它的展示/结算都必须能承受这个值被改掉。
+   */
+  latePhoneTC: number
+  /** 深夜刷手机连带扣的娱币。⚠️ 同上：占位值，**待用户定标**。 */
+  latePhoneLT: number
+  /** 四象限权重。**本配置第一个非标量字段**。 */
+  quadrantMultiplier: QuadrantMultiplier
 }
 
 export type LedgerEntryKind = 'planned' | 'unplanned'

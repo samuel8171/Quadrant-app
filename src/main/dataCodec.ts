@@ -10,6 +10,7 @@ import {
   type PenaltyTier,
   type Quadrant,
   type QuadrantEvent,
+  type QuadrantMultiplier,
   type Subtask,
   type WeekEvent,
   type WeekPreset,
@@ -71,8 +72,17 @@ function isPenaltyTier(value: unknown): value is PenaltyTier {
   return value === 0 || value === 1 || value === 2 || value === 3
 }
 
-const MONEY_NUMERIC_KEYS: readonly (keyof MoneyConfig)[] = [
+/**
+ * `MoneyConfig` 里所有**标量**键。
+ *
+ * 显式排除 `quadrantMultiplier`：它不是数字而是嵌套对象，混进来会让
+ * `config[key] = value` 的赋值类型退化成 `number & QuadrantMultiplier`。
+ */
+type NumericMoneyKey = Exclude<keyof MoneyConfig, 'quadrantMultiplier'>
+
+const MONEY_NUMERIC_KEYS: readonly NumericMoneyKey[] = [
   'weeklyTC',
+  'dailyCapTC',
   'tcPerHour',
   'nightStartMin',
   'nightEndMin',
@@ -81,10 +91,29 @@ const MONEY_NUMERIC_KEYS: readonly (keyof MoneyConfig)[] = [
   'weeklyLT',
   'rewardLT',
   'penaltyLT',
-  'missPenaltyLT'
+  'missPenaltyLT',
+  'videoLTPerHour',
+  'gameLTPerHour',
+  'restDayFactor',
+  'abandonedDayTC',
+  'latePhoneTC',
+  'latePhoneLT'
 ]
 
-/** `config` 逐键校验：非有限数字的键回退到 `DEFAULT_MONEY_CONFIG` 的同名值。 */
+/** `quadrantMultiplier` 的四个键；嵌套字段单独走一套回退，不混进扁平键列表。 */
+const QUADRANT_KEYS: readonly (keyof QuadrantMultiplier)[] = ['q1', 'q2', 'q3', 'q4']
+
+/**
+ * `config` 逐键校验：非有限数字的键回退到 `DEFAULT_MONEY_CONFIG` 的同名值。
+ *
+ * **嵌套字段（`quadrantMultiplier`）也逐键回退**：整体缺失时四个键都取默认值；
+ * 只缺一两个键时，缺的那些单独回退、已有的保留 —— 即**局部对象被修复而不是整块丢弃**。
+ * 这与 web 端的 `validMoney`（整体存在但任一键不是有限数字就判整份数据非法）是
+ * 一严一宽的两套口径，各自与同侧既有字段的处理方式保持一致。
+ *
+ * 回退出来的 `quadrantMultiplier` 是**新对象**：`{ ...DEFAULT_MONEY_CONFIG }` 只复制
+ * 顶层，嵌套对象仍是共享引用，直接改写它会污染 `DEFAULT_MONEY_CONFIG`。
+ */
 function normalizeMoneyConfig(raw: unknown): MoneyConfig {
   const source = isRecord(raw) ? raw : {}
   const config: MoneyConfig = { ...DEFAULT_MONEY_CONFIG }
@@ -92,6 +121,13 @@ function normalizeMoneyConfig(raw: unknown): MoneyConfig {
     const value = source[key]
     if (isFiniteNumber(value)) config[key] = value
   }
+  const rawQuadrant = isRecord(source.quadrantMultiplier) ? source.quadrantMultiplier : {}
+  const quadrantMultiplier: QuadrantMultiplier = { ...DEFAULT_MONEY_CONFIG.quadrantMultiplier }
+  for (const key of QUADRANT_KEYS) {
+    const value = rawQuadrant[key]
+    if (isFiniteNumber(value)) quadrantMultiplier[key] = value
+  }
+  config.quadrantMultiplier = quadrantMultiplier
   return config
 }
 

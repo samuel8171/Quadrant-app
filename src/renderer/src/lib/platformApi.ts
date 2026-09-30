@@ -46,6 +46,7 @@ function validPhotos(value: unknown): boolean {
 
 const MONEY_NUMERIC_KEYS = [
   'weeklyTC',
+  'dailyCapTC',
   'tcPerHour',
   'nightStartMin',
   'nightEndMin',
@@ -54,8 +55,16 @@ const MONEY_NUMERIC_KEYS = [
   'weeklyLT',
   'rewardLT',
   'penaltyLT',
-  'missPenaltyLT'
+  'missPenaltyLT',
+  'videoLTPerHour',
+  'gameLTPerHour',
+  'restDayFactor',
+  'abandonedDayTC',
+  'latePhoneTC',
+  'latePhoneLT'
 ] as const
+
+const QUADRANT_MULTIPLIER_KEYS = ['q1', 'q2', 'q3', 'q4'] as const
 
 const WEEK_SETTLEMENT_NUMERIC_KEYS = [
   'weekTC',
@@ -114,6 +123,18 @@ function validWeekSettlement(value: unknown): boolean {
 }
 
 /**
+ * `quadrantMultiplier` 是配置里**唯一的非标量字段**，必须整块存在且四个键都是有限数字。
+ *
+ * 局部对象**不被接受**（缺一个键就判非法）：这与扁平键的处理方式一致 ——
+ * 上面 `MONEY_NUMERIC_KEYS` 里少任何一个键同样会让 `isFiniteNumber(undefined)` 为假、
+ * 整份数据被拒。桌面的 `dataCodec.normalizeMoney` 走的是另一套口径（逐键回退修复），
+ * 一严一宽各自与同侧既有字段保持一致。
+ */
+function validQuadrantMultiplier(value: unknown): boolean {
+  return isRecord(value) && QUADRANT_MULTIPLIER_KEYS.every((key) => isFiniteNumber(value[key]))
+}
+
+/**
  * `money` 是**可选**字段（老数据没有），但一旦存在就必须整块合规。
  *
  * 与 `validPhotos` 同一套宽严标准：`undefined` 放行（由 `validAppData` 判断），
@@ -127,6 +148,7 @@ function validMoney(value: unknown): boolean {
   if (!isRecord(config) || !MONEY_NUMERIC_KEYS.every((key) => isFiniteNumber(config[key]))) {
     return false
   }
+  if (!validQuadrantMultiplier(config.quadrantMultiplier)) return false
   if (!Array.isArray(value.days) || !value.days.every(validLedgerDay)) return false
   if (!Array.isArray(value.weeks) || !value.weeks.every(validWeekSettlement)) return false
   return true

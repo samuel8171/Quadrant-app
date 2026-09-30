@@ -10,22 +10,37 @@ import type {
 } from './types'
 
 /**
- * 计费与结算参数的默认值（spec 第 11 节）。
+ * 计费与结算参数的默认值（spec R2 第 2 节）。
  *
  * 这是这些常量的**单一真源**：`dataCodec.normalizeMoney` 的非法值回退、
  * 开启开关时写入的初始 `config`，都应引用这里而不是各自重抄一遍。
+ *
+ * `quadrantMultiplier` 是**首个非标量字段**：它按值展开出一份新对象，
+ * 调用方 `{ ...DEFAULT_MONEY_CONFIG }` 得到的是同一份嵌套引用 ——
+ * 要改它必须自己再 spread 一层，否则会污染这个共享常量。
  */
 export const DEFAULT_MONEY_CONFIG: MoneyConfig = {
-  weeklyTC: 350,
+  weeklyTC: 560,
+  dailyCapTC: 80,
   tcPerHour: 10,
   nightStartMin: 1410,
   nightEndMin: 360,
   nightMultiplier: 1.5,
   minCapRatio: 0.2,
-  weeklyLT: 10,
+  weeklyLT: 20,
   rewardLT: 0.5,
   penaltyLT: 0.5,
-  missPenaltyLT: 1
+  missPenaltyLT: 1,
+  videoLTPerHour: 1,
+  gameLTPerHour: 1.5,
+  restDayFactor: 0.8,
+  abandonedDayTC: 80,
+  // ⚠️ 占位值：用户只说了「大量」而未定数，**待用户定标**。
+  latePhoneTC: 40,
+  // ⚠️ 占位值，同上，**待用户定标**。
+  latePhoneLT: 2,
+  // 象限倍率的取值见 spec R2 §9.1。Q3 > Q2 是刻意的（「被紧急事推着走」收得更贵）
+  quadrantMultiplier: { q1: 1.5, q2: 1.0, q3: 1.2, q4: 0.5 }
 }
 
 /**
@@ -96,22 +111,27 @@ export function leisureDelta(
 }
 
 /**
- * 当日可用额度（spec 6.2）：
+ * 当日可用额度（spec R2 §3.2）：
  *
  * ```
- * dayLimit(i) = max(D × minCapRatio, D − overdraft(i−1))，其中 D = weeklyTC / 7
+ * dayLimit(i) = max(D × minCapRatio, D − overdraft(i−1))，其中 D = config.dailyCapTC
  * ```
  *
- * 日软上限 `D`（默认 50）**不阻止消费**，只决定透支：透支只带入**次日**、不累积，
- * 靠 `minCapRatio`（默认 0.2 → 保底 10 币）兜底 —— 这正是防死亡螺旋的那一层，
- * 否则一次大额透支会让后续额度长期贴地。自修复也由此而来：超支 30 的次日额度为 20，
- * 只在额度内消费则不产生新透支，第三天回到 50。
+ * 日软上限 `D` **直读独立的 `config.dailyCapTC`（默认 80），不从 `weeklyTC / 7` 派生** ——
+ * 派生会让「调周总额」静默改掉「日上限」。注意在默认值下 `560 / 7` 恰好也是 80，
+ * 所以「结果等于 80」证明不了任何事：判别它必须让两个数不相等（把 `weeklyTC` 改成 999，
+ * 额度仍须是 80）。
+ *
+ * 日软上限**不阻止消费**，只决定透支：透支只带入**次日**、不累积，靠 `minCapRatio`
+ * （默认 0.2 → 保底 16 币）兜底 —— 这正是防死亡螺旋的那一层，否则一次大额透支会让
+ * 后续额度长期贴地。自修复也由此而来：超支 30 的次日额度为 50，只在额度内消费则
+ * 不产生新透支，第三天回到 80。
  *
  * 保底线取 `D × minCapRatio` 而**不是** `weeklyTC × minCapRatio`：后者在默认值下是
- * 70 币，比日额度本身还高，保底会退化成「永远不扣」。
+ * 112 币，比日额度本身还高，保底会退化成「永远不扣」。
  */
 export function dayLimitOf(previousOverdraft: number, config: MoneyConfig): number {
-  const softCap = config.weeklyTC / 7
+  const softCap = config.dailyCapTC
   return Math.max(softCap * config.minCapRatio, softCap - previousOverdraft)
 }
 
@@ -184,7 +204,7 @@ const TIER_SCALE: Record<PenaltyTier, { tc: number; lt: number }> = {
  * 超支比例落在哪一档（spec 6.5）。
  *
  * 边界**下含**：`weekOver / weekTC` 恰好等于 0.10 是档位 1、恰好等于 0.30 是档位 2。
- * 这里不需要 epsilon —— `105 / 350` 与字面量 `0.3` 舍入到同一个 double，
+ * 这里不需要 epsilon —— `168 / 560` 与字面量 `0.3` 舍入到同一个 double，
  * `<=` 直接成立。
  *
  * `weekTC` 为 0 时不特判：比例算成 Infinity，自然落到档位 3（额度为零却还有花费，
@@ -209,13 +229,13 @@ export function penaltyTierOf(weekOver: number, weekTC: number): PenaltyTier {
  * （`plannedMin` / `actualMin` / `doneCount` / `missCount` / `unplannedCount` /
  * `unplannedMin` / `nightMin`）只能来自条目，没有快照可读。
  *
- * `overLimitDays` 比的是**日软上限** `config.weeklyTC / 7`（spec 6.2 的 D），
+ * `overLimitDays` 比的是**日软上限** `config.dailyCapTC`（spec R2 §3.2 的 D），
  * 与 `dayLimitOf` 同源，而不是 `day.dayLimit`，也不是本周缩水后的 `weekTC / 7`：
  * - 不用 `day.dayLimit`：它已经含了前一日透支，连续透支的日子会被重复计数，
  *   一周里「几天超限」就失去意义；
- * - 不用 `weekTC / 7`：日软上限是由**配置的周池**决定的固定值，惩罚周只削减该周的总量，
- *   不改变每天多少算超限 —— 否则受罚周会把 40 币的一天也算成超限，
- *   与冻结在 `LedgerDay.dayLimit` 里的数字（50）自相矛盾。
+ * - 不用 `weekTC / 7`：日软上限是由**配置的独立字段**决定的固定值，惩罚周只削减该周的
+ *   总量，不改变每天多少算超限 —— 否则受罚周会把 40 币的一天也算成超限，
+ *   与冻结在 `LedgerDay.dayLimit` 里的数字（80）自相矛盾。
  *
  * **惩罚只作用于下一周**：所有档位都是「配置的基础额度 × 档位系数」，
  * 而不是「本周已缩水的额度 × 档位系数」。档位 0 是 100% / 100%，即回到
@@ -244,8 +264,8 @@ export function settleWeek(input: {
   let nightMin = 0
   let overLimitDays = 0
 
-  // 日软上限取 config 而不是本周实发的 weekTC：见函数头注释
-  const daySoftCap = input.config.weeklyTC / 7
+  // 日软上限取 config 的独立字段而不是本周实发的 weekTC：见函数头注释
+  const daySoftCap = input.config.dailyCapTC
   for (const day of input.days) {
     spentTC += day.spentTC
     if (day.spentTC > daySoftCap) overLimitDays++
@@ -598,8 +618,8 @@ export function selectMoneyStats(money: MoneyState, today: string): MoneyStats {
       }
     }
 
-    // `limit` 只走 dayLimitOf：它是「当日可用额度」的单一真源，由**配置的周池**派生。
-    // 这里若改写成 weekTC / 7 就是第二套公式 —— 受罚周会把 40 币的一天也算成超限，
+    // `limit` 只走 dayLimitOf：它是「当日可用额度」的单一真源，由**配置的日上限**直读。
+    // 这里若改写成 weeklyTC / 7 就是第二套公式 —— 受罚周会把 40 币的一天也算成超限，
     // 且与冻结在 LedgerDay.dayLimit 里的数字自相矛盾（这正是前一版修掉的 bug）。
     // 传入的是**前一日**的透支（见循环末尾的滚动）。
     const limit = dayLimitOf(previousOverdraft, money.config)

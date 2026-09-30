@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { defaultData } from '../src/shared/defaults'
-import type { AppData, ReviewRecord } from '../src/shared/types'
+import type { AppData, MoneyConfig, ReviewRecord } from '../src/shared/types'
 import { createWebPlatformApi, type WebStorage } from '../src/renderer/src/lib/platformApi'
 
 function memoryStorage(): WebStorage {
@@ -29,22 +29,33 @@ const baseData: AppData = {
   weekCounterOffset: 0
 }
 
+/** 合法 config 基线：与 `sampleDataWithMoney` 共用，供「某处不合规即整份被拒」的用例派生。 */
+const validMoneyConfig: MoneyConfig = {
+  weeklyTC: 560,
+  dailyCapTC: 80,
+  tcPerHour: 10,
+  nightStartMin: 1410,
+  nightEndMin: 360,
+  nightMultiplier: 1.5,
+  minCapRatio: 0.2,
+  weeklyLT: 20,
+  rewardLT: 0.5,
+  penaltyLT: 0.5,
+  missPenaltyLT: 1,
+  videoLTPerHour: 1,
+  gameLTPerHour: 1.5,
+  restDayFactor: 0.8,
+  abandonedDayTC: 80,
+  latePhoneTC: 40,
+  latePhoneLT: 2,
+  quadrantMultiplier: { q1: 1.5, q2: 1, q3: 1.2, q4: 0.5 }
+}
+
 const sampleDataWithMoney: AppData = {
   ...baseData,
   money: {
     enabled: true,
-    config: {
-      weeklyTC: 350,
-      tcPerHour: 10,
-      nightStartMin: 1410,
-      nightEndMin: 360,
-      nightMultiplier: 1.5,
-      minCapRatio: 0.2,
-      weeklyLT: 10,
-      rewardLT: 0.5,
-      penaltyLT: 0.5,
-      missPenaltyLT: 1
-    },
+    config: validMoneyConfig,
     days: [
       {
         date: '2026-09-28',
@@ -64,7 +75,7 @@ const sampleDataWithMoney: AppData = {
             deltaLT: 0.5
           }
         ],
-        dayLimit: 50,
+        dayLimit: 80,
         spentTC: 20,
         overdraft: 0,
         deltaLT: 0.5,
@@ -195,5 +206,71 @@ describe('web platform API', () => {
   it('含合法 money 的数据通过校验', async () => {
     const api = createWebPlatformApi(fakeStorage(JSON.stringify(sampleDataWithMoney)))
     expect((await api.loadData()).money).toEqual(sampleDataWithMoney.money)
+  })
+
+  it('config 缺少新键（R2 之前的老数据）时整份数据被拒', async () => {
+    // web 端口径与扁平键一致：少任何一个键 ⇒ isFiniteNumber(undefined) 为假 ⇒ 整份数据非法。
+    // 桌面的 dataCodec 对同一份数据是逐键回退修复（见 dataCodec.test.ts），一严一宽是刻意的。
+    const legacy = {
+      ...baseData,
+      money: {
+        enabled: true,
+        config: {
+          weeklyTC: 350,
+          tcPerHour: 10,
+          nightStartMin: 1410,
+          nightEndMin: 360,
+          nightMultiplier: 1.5,
+          minCapRatio: 0.2,
+          weeklyLT: 10,
+          rewardLT: 0.5,
+          penaltyLT: 0.5,
+          missPenaltyLT: 1
+        },
+        days: [],
+        weeks: []
+      }
+    }
+    const api = createWebPlatformApi(fakeStorage(JSON.stringify(legacy)))
+    expect(await api.loadData()).toEqual(defaultData())
+  })
+
+  it('config 里任意一个新键不是有限数字时整份数据被拒', async () => {
+    for (const key of ['dailyCapTC', 'videoLTPerHour', 'abandonedDayTC', 'latePhoneLT'] as const) {
+      const data = {
+        ...baseData,
+        money: {
+          enabled: true,
+          config: { ...validMoneyConfig, [key]: undefined },
+          days: [],
+          weeks: []
+        }
+      }
+      const api = createWebPlatformApi(fakeStorage(JSON.stringify(data)))
+      expect(await api.loadData()).toEqual(defaultData())
+    }
+  })
+
+  it('quadrantMultiplier 缺键、非数字或非对象时整份数据被拒（不逐键修复）', async () => {
+    const badValues: unknown[] = [
+      { q1: 1.5, q2: 1, q3: 1.2 }, // 缺 q4
+      { q1: 1.5, q2: 'x', q3: 1.2, q4: 0.5 }, // 某键不是数字
+      {}, // 空对象
+      42, // 不是对象
+      null
+    ]
+    for (const bad of badValues) {
+      const data = {
+        ...baseData,
+        money: {
+          enabled: true,
+          config: { ...validMoneyConfig, quadrantMultiplier: bad },
+          days: [],
+          weeks: []
+        }
+      }
+      const api = createWebPlatformApi(fakeStorage(JSON.stringify(data)))
+      expect(await api.loadData()).toEqual(defaultData())
+    }
   })
 })

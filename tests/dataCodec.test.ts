@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { parseData, serializeData } from '../src/main/dataCodec'
 import { defaultData } from '../src/shared/defaults'
+import { DEFAULT_MONEY_CONFIG } from '../src/shared/money'
 import type { AppData } from '../src/shared/types'
 
 const baseData: AppData = {
@@ -17,16 +18,24 @@ const sampleDataWithMoney: AppData = {
   money: {
     enabled: true,
     config: {
-      weeklyTC: 350,
+      weeklyTC: 560,
+      dailyCapTC: 80,
       tcPerHour: 10,
       nightStartMin: 1410,
       nightEndMin: 360,
       nightMultiplier: 1.5,
       minCapRatio: 0.2,
-      weeklyLT: 10,
+      weeklyLT: 20,
       rewardLT: 0.5,
       penaltyLT: 0.5,
-      missPenaltyLT: 1
+      missPenaltyLT: 1,
+      videoLTPerHour: 1,
+      gameLTPerHour: 1.5,
+      restDayFactor: 0.8,
+      abandonedDayTC: 80,
+      latePhoneTC: 40,
+      latePhoneLT: 2,
+      quadrantMultiplier: { q1: 1.5, q2: 1, q3: 1.2, q4: 0.5 }
     },
     days: [
       {
@@ -60,7 +69,7 @@ const sampleDataWithMoney: AppData = {
             deltaLT: 0
           }
         ],
-        dayLimit: 50,
+        dayLimit: 80,
         spentTC: 32,
         overdraft: 0,
         deltaLT: 0.5,
@@ -222,5 +231,77 @@ describe('dataCodec', () => {
   it('合法 money 往返保真（含一天已结算记录）', () => {
     const out = parseData(JSON.stringify(sampleDataWithMoney))
     expect(out.money).toEqual(sampleDataWithMoney.money)
+  })
+
+  it('config 的非默认取值原样保留（规整不是「一律返回默认」）', () => {
+    const raw = {
+      ...baseData,
+      money: {
+        enabled: true,
+        config: { ...DEFAULT_MONEY_CONFIG, weeklyTC: 600, dailyCapTC: 90 },
+        days: [],
+        weeks: []
+      }
+    }
+    const out = parseData(JSON.stringify(raw))
+    expect(out.money?.config.weeklyTC).toBe(600)
+    expect(out.money?.config.dailyCapTC).toBe(90)
+  })
+
+  it('config 缺新键时逐键回退到默认值', () => {
+    // 老数据（R2 之前）只有旧键集：新键必须回退到 DEFAULT_MONEY_CONFIG，而不是 undefined/0
+    const legacyConfig = {
+      weeklyTC: 350,
+      tcPerHour: 10,
+      nightStartMin: 1410,
+      nightEndMin: 360,
+      nightMultiplier: 1.5,
+      minCapRatio: 0.2,
+      weeklyLT: 10,
+      rewardLT: 0.5,
+      penaltyLT: 0.5,
+      missPenaltyLT: 1
+    }
+    const out = parseData(
+      JSON.stringify({ ...baseData, money: { enabled: true, config: legacyConfig, days: [], weeks: [] } })
+    )
+    // 已有的旧键保留，缺的新键补默认
+    expect(out.money?.config.weeklyTC).toBe(350)
+    expect(out.money?.config.weeklyLT).toBe(10)
+    expect(out.money?.config.dailyCapTC).toBe(DEFAULT_MONEY_CONFIG.dailyCapTC)
+    expect(out.money?.config.abandonedDayTC).toBe(DEFAULT_MONEY_CONFIG.abandonedDayTC)
+    expect(out.money?.config.quadrantMultiplier).toEqual(DEFAULT_MONEY_CONFIG.quadrantMultiplier)
+  })
+
+  it('quadrantMultiplier 局部对象被逐键修复，不整块丢弃', () => {
+    const out = parseData(
+      JSON.stringify({
+        ...baseData,
+        money: {
+          enabled: true,
+          config: { ...DEFAULT_MONEY_CONFIG, quadrantMultiplier: { q1: 9 } },
+          days: [],
+          weeks: []
+        }
+      })
+    )
+    // 桌面端口径：已有的键保留、缺的键各自回退 —— 与 web 端「缺一个键就整份拒收」相反
+    expect(out.money?.config.quadrantMultiplier).toEqual({ q1: 9, q2: 1, q3: 1.2, q4: 0.5 })
+  })
+
+  it('quadrantMultiplier 修复用的对象不是 DEFAULT_MONEY_CONFIG 的嵌套引用', () => {
+    const raw = JSON.stringify({
+      ...baseData,
+      money: {
+        enabled: true,
+        config: { ...DEFAULT_MONEY_CONFIG, quadrantMultiplier: { q1: 9, q2: 9, q3: 9, q4: 9 } },
+        days: [],
+        weeks: []
+      }
+    })
+    const out = parseData(raw)
+    expect(out.money?.config.quadrantMultiplier).not.toBe(DEFAULT_MONEY_CONFIG.quadrantMultiplier)
+    // 关键：规整过程不得改动共享常量本身
+    expect(DEFAULT_MONEY_CONFIG.quadrantMultiplier).toEqual({ q1: 1.5, q2: 1, q3: 1.2, q4: 0.5 })
   })
 })

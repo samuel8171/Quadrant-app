@@ -398,9 +398,12 @@ function validPhotos(v) {
 }
 
 const MONEY_NUMERIC_KEYS = [
-  'weeklyTC', 'tcPerHour', 'nightStartMin', 'nightEndMin', 'nightMultiplier',
-  'minCapRatio', 'weeklyLT', 'rewardLT', 'penaltyLT', 'missPenaltyLT'
+  'weeklyTC', 'dailyCapTC', 'tcPerHour', 'nightStartMin', 'nightEndMin', 'nightMultiplier',
+  'minCapRatio', 'weeklyLT', 'rewardLT', 'penaltyLT', 'missPenaltyLT',
+  'videoLTPerHour', 'gameLTPerHour', 'restDayFactor', 'abandonedDayTC', 'latePhoneTC', 'latePhoneLT'
 ]
+// 配置里唯一的非标量字段：四个键都必须存在且为有限数字，与 platformApi.validMoney 同口径。
+const QUADRANT_MULTIPLIER_KEYS = ['q1', 'q2', 'q3', 'q4']
 const WEEK_SETTLEMENT_NUMERIC_KEYS = [
   'weekTC', 'spentTC', 'weekOver', 'plannedMin', 'actualMin', 'doneCount', 'missCount',
   'unplannedCount', 'unplannedMin', 'nightMin', 'overLimitDays', 'nextWeekTC', 'nextWeekLT'
@@ -438,10 +441,15 @@ function validWeekSettlement(v) {
   return WEEK_SETTLEMENT_NUMERIC_KEYS.every((k) => isFiniteNum(v[k]))
 }
 
+function validQuadrantMultiplier(v) {
+  return isRecord(v) && QUADRANT_MULTIPLIER_KEYS.every((k) => isFiniteNum(v[k]))
+}
+
 function validMoney(v) {
   if (!isRecord(v)) return false
   if (typeof v.enabled !== 'boolean') return false
   if (!isRecord(v.config) || !MONEY_NUMERIC_KEYS.every((k) => isFiniteNum(v.config[k]))) return false
+  if (!validQuadrantMultiplier(v.config.quadrantMultiplier)) return false
   if (!Array.isArray(v.days) || !v.days.every(validLedgerDay)) return false
   if (!Array.isArray(v.weeks) || !v.weeks.every(validWeekSettlement)) return false
   return true
