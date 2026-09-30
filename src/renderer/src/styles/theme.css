@@ -3221,6 +3221,409 @@ body {
   }
 }
 
+/* ---------- 日结卡片与结算面板 ---------- */
+
+/*
+ * 卡片与面板的宿主：包住周视图与日视图，让日结卡片在两种视图下都常驻页顶。
+ * 与 `.page-switch` 同构（纵向 flex），否则两个视图的 `flex: 1` 会失去参照。
+ */
+.weekly-shell {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/*
+ * 日结卡片：**主动提请**的那一个元素，只在有逾期未结算日时出现。
+ * 普通面板色 + 强调色描边，不做玻璃化（理由同 `.money-widget`）。
+ */
+.settle-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 18px 32px 0;
+  padding: 12px 16px;
+  font: inherit;
+  text-align: left;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-lg);
+  cursor: pointer;
+}
+
+.settle-card:hover {
+  background: var(--card);
+}
+
+.settle-card-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.settle-card-text {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.settle-card-hint {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.settle-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 130;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.5);
+}
+
+.settle-panel {
+  display: flex;
+  flex-direction: column;
+  width: min(600px, 100%);
+  max-height: min(84vh, 760px);
+  overflow: hidden;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+.settle-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 18px 20px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.settle-head-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.settle-title {
+  margin: 0;
+  font-size: 18px;
+}
+
+.settle-sub {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.settle-close {
+  margin-left: auto;
+  width: 30px;
+  height: 30px;
+  flex: none;
+  font-size: 18px;
+  line-height: 1;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.settle-day {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 18px 20px 20px;
+  overflow: auto;
+}
+
+.settle-section {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.settle-section-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.settle-empty {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.settle-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.settle-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.settle-row.missed {
+  opacity: 0.72;
+}
+
+.settle-row-done {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+  cursor: pointer;
+}
+
+.settle-row-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settle-quad {
+  flex: none;
+  padding: 1px 6px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+
+.settle-row-input {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+}
+
+.settle-row-input input {
+  width: 62px;
+  padding: 5px 7px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.settle-unit,
+.settle-plan {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.settle-miss {
+  font-size: 12px;
+  color: var(--danger);
+}
+
+.settle-row-cost {
+  flex: none;
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  min-width: 96px;
+  justify-content: flex-end;
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.settle-row-cost b {
+  font-size: 14px;
+  color: var(--text);
+}
+
+.settle-row-cost em {
+  font-style: normal;
+}
+
+.settle-row-remove {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.settle-add {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+
+.settle-add-title {
+  flex: 1;
+  min-width: 120px;
+  padding: 7px 9px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.settle-add-min {
+  width: 66px;
+  padding: 7px 9px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.settle-add select,
+.settle-backfill-answer select {
+  padding: 7px 9px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.settle-add-button {
+  padding: 7px 14px;
+  font: inherit;
+  font-size: 13px;
+  color: #fff;
+  background: var(--accent);
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.settle-backfill {
+  padding: 12px 14px;
+  background: var(--card);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-md);
+}
+
+.settle-backfill-q {
+  margin: 0;
+  font-size: 13px;
+}
+
+.settle-backfill-answer {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  font-size: 13px;
+}
+
+.settle-backfill-answer label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.settle-foot {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+}
+
+.settle-total {
+  font-size: 13px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.settle-total b {
+  font-size: 15px;
+  color: var(--text);
+}
+
+.settle-commit {
+  margin-left: auto;
+  padding: 9px 18px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  color: #fff;
+  background: var(--accent);
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+@media (max-width: 767px) {
+  .settle-card {
+    margin: calc(14px + var(--safe-top)) 20px 0;
+  }
+
+  .settle-overlay {
+    padding: 12px;
+  }
+
+  .settle-panel {
+    max-height: 88vh;
+  }
+
+  .settle-row {
+    flex-wrap: wrap;
+  }
+
+  .settle-row-cost {
+    min-width: 0;
+  }
+
+  .settle-commit {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .settle-foot {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+
+
 @media (min-width: 768px) and (max-width: 1023px) {
   .sidebar {
     --sidebar-gap: 18px;

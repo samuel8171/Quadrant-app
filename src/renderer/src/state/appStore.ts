@@ -2,6 +2,9 @@ import { create } from 'zustand'
 import type {
   AppData,
   CloudMeta,
+  LedgerDay,
+  LedgerEntry,
+  MoneyConfig,
   MoneyState,
   Quadrant,
   QuadrantEvent,
@@ -10,8 +13,16 @@ import type {
   WeekPreset
 } from '../../../shared/types'
 import { defaultData, isEmptyData } from '../../../shared/defaults'
-import { dateKey } from '../../../shared/dateKey'
-import { DEFAULT_MONEY_CONFIG, ensureWeekRollover } from '../../../shared/money'
+import { addDays, dateKey, parseDateKey } from '../../../shared/dateKey'
+import {
+  DEFAULT_MONEY_CONFIG,
+  costOfEntry,
+  dayLimitOf,
+  ensureWeekRollover,
+  leisureDelta,
+  nightMinutesOf,
+  settleDay
+} from '../../../shared/money'
 import * as eventRules from '../lib/eventRules'
 import * as goalRules from '../lib/goalRules'
 import * as quadrantSync from '../lib/quadrantSync'
@@ -124,6 +135,12 @@ interface AppState {
   resolveLeave: (action: 'save' | 'discard' | 'cancel') => void
   setMoneyEnabled: (enabled: boolean) => void
   rolloverMoneyWeek: () => void
+  /** 用 `entries` 结算 `date`（Task 8 的正向路径，快照只有这里能首次冻结）。 */
+  commitDaySettlement: (date: string, entries: LedgerEntry[]) => void
+  /** 把一条计划外条目追加进 `date`（未结算）的账本。 */
+  addUnplannedEntry: (date: string, entry: LedgerEntry) => void
+  /** 深夜补记：回写 `previousDate` 这一份**已结算**快照（全库唯一例外，见实现处注释）。 */
+  confirmNight: (previousDate: string, answer: { worked: boolean; endMin?: number }) => void
 }
 
 let clipboard: QuadrantEvent | null = null
@@ -212,6 +229,75 @@ async function reconcileWithCloud(): Promise<void> {
     } catch {
       /* 补传失败不致命：dirty 仍为真 */
     }
+  }
+}
+
+/**
+ * 把一条日账本按日期升序写回账本数组，**同日的旧记录整体替换**。
+ *
+ * 「整体替换」正是结算的语义：一天的快照是原子的，不存在「半个快照」。
+ * 日账本的唯一真源是 `date`，`upsert` 而不是 `push` 才能保证重复结算（异常重入）
+ * 不会在同一天留下两条记录。
+ */
+function upsertLedgerDay(days: LedgerDay[], day: LedgerDay): LedgerDay[] {
+  const next = days.filter((d) => d.date !== day.date)
+  next.push(day)
+  next.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
+  return next
+}
+
+/**
+ * 结算 `date` 时该带入的「前一日透支额」。
+ *
+ * 透支只带入**次日**（与 `settleDay` / `selectMoneyStats` 同一条规则），所以这里只看
+ * 日历上的昨天：昨天没有账本 → 0；昨天已结算 → 直接取冻结快照的 `overdraft`。
+ *
+ * 「昨天未结算」这一支在正常路径上到不了 —— 结算按最早优先，昨天必定已结算。
+ * 保留它是为了让异常输入也算出正确的额度，而不是悄悄按 0 处理（那会把额度算高）。
+ */
+function carriedOverdraft(money: MoneyState, date: string): number {
+  const prevDate = dateKey(addDays(parseDateKey(date), -1))
+  const prev = money.days.find((d) => d.date === prevDate)
+  if (!prev) return 0
+  if (prev.settledAt !== null) return prev.overdraft
+  const limit = dayLimitOf(carriedOverdraft(money, prevDate), money.config)
+  const spent = prev.entries.reduce(
+    (sum, e) => sum + costOfEntry({ actualMin: e.actualMin, nightMin: e.nightMin }, money.config),
+    0
+  )
+  return Math.max(0, spent - limit)
+}
+
+/**
+ * 深夜补记条目：从 `nightStartMin`（23:30）起算、到 `endMin` 结束的那一段。
+ *
+ * `endMin` 是「持续到几点」的钟点（自 0 点起算）；不大于 `nightEndMin`（06:00）即
+ * 跨过零点，加 1440 归一。时长下限 1 分钟、上限一个深夜窗口（390 分钟）——
+ * 补记只回答「深夜还在做什么」，超过窗口的部分不属于这一问。
+ *
+ * 记成 `kind: 'unplanned'`：这段工作没有计划基准（`plannedMin` 只能为 null），
+ * 因此按 `leisureDelta` 的口径它不参与娱币，只按时长计 TC（深夜部分带倍率）。
+ */
+function buildNightEntry(endMin: number, config: MoneyConfig): LedgerEntry {
+  const window = config.nightEndMin + 1440 - config.nightStartMin
+  const normalizedEnd = endMin <= config.nightEndMin ? endMin + 1440 : endMin
+  const actualMin = Math.max(1, Math.min(normalizedEnd - config.nightStartMin, window))
+  const nightMin = nightMinutesOf({ startMin: config.nightStartMin, actualMin }, config)
+  return {
+    id: crypto.randomUUID(),
+    kind: 'unplanned',
+    sourceId: null,
+    title: '深夜做事',
+    quadrant: null,
+    plannedMin: null,
+    actualMin,
+    done: true,
+    nightMin,
+    costTC: costOfEntry({ actualMin, nightMin }, config),
+    deltaLT: leisureDelta(
+      { kind: 'unplanned', done: true, actualMin, plannedMin: null },
+      config
+    )
   }
 }
 
@@ -688,6 +774,101 @@ export const useAppStore = create<AppState>((set, get) => ({
     const next = { ...data, money }
     saveSoon(next)
     set({ data: next })
+  },
+
+  /**
+   * 把一天的结算写进账本（日结面板的「结算这一天」）。
+   *
+   * `entries` 是这一天的**完整**条目集（面板把计划内 + 计划外一起交上来），
+   * 由 `settleDay` 从原始字段重新推导 `spentTC` / `overdraft` / `deltaLT`。
+   * 写入的 `money` 是**四个字段齐全**的新对象（`...money` 只换 `days`）——
+   * 半截 `money` 会被网页端校验器判非法，进而静默清空用户的全部数据。
+   *
+   * 结算完再补一次周结算：在「先结算了旧日账本、此前无周可补」的场景下，
+   * 这一天才让某个已结束的周第一次变得可结算。`ensureWeekRollover` 幂等，
+   * 后续每次调用都会原对象返回，所以跨周的那一天只触发一次。
+   */
+  commitDaySettlement: (date, entries) => {
+    const data = get().data
+    const money = data.money
+    if (money?.enabled !== true) return
+    const settled = settleDay({
+      date,
+      entries,
+      previousOverdraft: carriedOverdraft(money, date),
+      settledAt: new Date().toISOString(),
+      config: money.config
+    })
+    const next = { ...data, money: { ...money, days: upsertLedgerDay(money.days, settled) } }
+    saveSoon(next)
+    set({ data: next })
+    get().rolloverMoneyWeek()
+  },
+
+  /**
+   * 追加一条计划外条目到 `date` 的账本（日结面板「有没有计划外的事」）。
+   *
+   * 面板每录一条就落一次盘，而不是攒到结算时一起写 —— 计划外事项是账本里最有价值的
+   * 信息（spec 5），不该因为中途关掉面板就丢。当天已有**已结算**快照时直接拒绝：
+   * 已冻结的一天只能由 `confirmNight` 那一处改动，别的入口不许碰。
+   */
+  addUnplannedEntry: (date, entry) => {
+    const data = get().data
+    const money = data.money
+    if (money?.enabled !== true) return
+    const existing = money.days.find((d) => d.date === date)
+    if (existing?.settledAt != null) return
+    const day: LedgerDay = existing
+      ? { ...existing, entries: [...existing.entries, entry] }
+      : {
+          date,
+          settledAt: null,
+          entries: [entry],
+          dayLimit: 0,
+          spentTC: 0,
+          overdraft: 0,
+          deltaLT: 0,
+          nightPending: true
+        }
+    const next = { ...data, money: { ...money, days: upsertLedgerDay(money.days, day) } }
+    saveSoon(next)
+    set({ data: next })
+  },
+
+  /**
+   * 深夜补记（spec 7.3）——**全代码库唯一允许修改已结算快照的地方**。
+   *
+   * 时序决定了它必须存在：日结在 23:20 触发，而深夜窗口 23:30 才开启，于是第 `i` 天
+   * 结算时根本看不到当晚 23:30 之后的做事；只能由第 `i+1` 天的日结回头补记。
+   *
+   * 这里**不是给数字打补丁**：把补记条目并进原来的条目集，再整日重跑 `settleDay`
+   * 重新推导 `spentTC` / `overdraft` / `deltaLT` —— 否则快照会出现
+   * 「汇总与条目互相对不上」的隐性错误，并顺着 `overdraft` 传导到周结算。
+   * `settledAt` 沿用旧值：补记不改变「这一天是什么时候结算的」。
+   * 无论答「是」还是「否」，都把 `nightPending` 置 false —— 这一问已经问过了。
+   */
+  confirmNight: (previousDate, answer) => {
+    const data = get().data
+    const money = data.money
+    if (money?.enabled !== true) return
+    const day = money.days.find((d) => d.date === previousDate)
+    if (!day || day.settledAt === null) return
+    const entries =
+      answer.worked && answer.endMin !== undefined
+        ? [...day.entries, buildNightEntry(answer.endMin, money.config)]
+        : day.entries
+    const recomputed = settleDay({
+      date: previousDate,
+      entries,
+      previousOverdraft: carriedOverdraft(money, previousDate),
+      settledAt: day.settledAt,
+      config: money.config
+    })
+    const patched: LedgerDay = { ...recomputed, nightPending: false }
+    const next = { ...data, money: { ...money, days: upsertLedgerDay(money.days, patched) } }
+    saveSoon(next)
+    set({ data: next })
+    get().rolloverMoneyWeek()
   },
 
   saveNow: () => {
