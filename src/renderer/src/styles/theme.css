@@ -3608,6 +3608,16 @@ body {
     flex-wrap: wrap;
   }
 
+  /* 手机档标题独占一行并允许折行：窄屏上截断成「周六写」比换行更难读。 */
+  .settle-row-done {
+    flex: 1 1 100%;
+  }
+
+  .settle-row-title {
+    overflow: visible;
+    white-space: normal;
+  }
+
   .settle-row-cost {
     min-width: 0;
   }
