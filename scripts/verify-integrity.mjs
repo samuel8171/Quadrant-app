@@ -396,6 +396,57 @@ function hasStringFields(v, fields) {
 function validPhotos(v) {
   return v === undefined || (Array.isArray(v) && v.every((id) => typeof id === 'string'))
 }
+
+const MONEY_NUMERIC_KEYS = [
+  'weeklyTC', 'tcPerHour', 'nightStartMin', 'nightEndMin', 'nightMultiplier',
+  'minCapRatio', 'weeklyLT', 'rewardLT', 'penaltyLT', 'missPenaltyLT'
+]
+const WEEK_SETTLEMENT_NUMERIC_KEYS = [
+  'weekTC', 'spentTC', 'weekOver', 'plannedMin', 'actualMin', 'doneCount', 'missCount',
+  'unplannedCount', 'unplannedMin', 'nightMin', 'overLimitDays', 'nextWeekTC', 'nextWeekLT'
+]
+const isFiniteNum = (n) => typeof n === 'number' && Number.isFinite(n)
+const isDateKey = (v) => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v)
+
+function validLedgerEntry(v) {
+  if (!isRecord(v)) return false
+  if (typeof v.id !== 'string' || typeof v.title !== 'string') return false
+  if (v.kind !== 'planned' && v.kind !== 'unplanned') return false
+  if (typeof v.done !== 'boolean') return false
+  if (v.sourceId !== null && typeof v.sourceId !== 'string') return false
+  if (v.plannedMin !== null && !isFiniteNum(v.plannedMin)) return false
+  if (!isFiniteNum(v.actualMin) || !isFiniteNum(v.nightMin)) return false
+  if (!isFiniteNum(v.costTC) || !isFiniteNum(v.deltaLT)) return false
+  return v.quadrant === null || [1, 2, 3, 4].includes(v.quadrant)
+}
+
+function validLedgerDay(v) {
+  if (!isRecord(v)) return false
+  if (!isDateKey(v.date)) return false
+  if (v.settledAt !== null && typeof v.settledAt !== 'string') return false
+  if (typeof v.nightPending !== 'boolean') return false
+  if (!isFiniteNum(v.dayLimit) || !isFiniteNum(v.spentTC)) return false
+  if (!isFiniteNum(v.overdraft) || !isFiniteNum(v.deltaLT)) return false
+  return Array.isArray(v.entries) && v.entries.every(validLedgerEntry)
+}
+
+function validWeekSettlement(v) {
+  if (!isRecord(v)) return false
+  if (!isDateKey(v.weekStart) || !isDateKey(v.weekEnd)) return false
+  if (![0, 1, 2, 3].includes(v.penaltyTier)) return false
+  if (!Array.isArray(v.notes) || !v.notes.every((note) => typeof note === 'string')) return false
+  return WEEK_SETTLEMENT_NUMERIC_KEYS.every((k) => isFiniteNum(v[k]))
+}
+
+function validMoney(v) {
+  if (!isRecord(v)) return false
+  if (typeof v.enabled !== 'boolean') return false
+  if (!isRecord(v.config) || !MONEY_NUMERIC_KEYS.every((k) => isFiniteNum(v.config[k]))) return false
+  if (!Array.isArray(v.days) || !v.days.every(validLedgerDay)) return false
+  if (!Array.isArray(v.weeks) || !v.weeks.every(validWeekSettlement)) return false
+  return true
+}
+
 function validAppData(value) {
   if (!isRecord(value)) return false
   const d = value
@@ -417,7 +468,8 @@ function validAppData(value) {
     d.weekPresets.every((p) => isRecord(p) && hasStringFields(p, ['id', 'title', 'color', 'remark', 'createdAt']) &&
       quad(p.quadrant) && num(p.durationMin)) &&
     d.weekEvents.every((e) => isRecord(e) && hasStringFields(e, ['id', 'date', 'title', 'color', 'remark', 'createdAt']) &&
-      quad(e.quadrant) && num(e.startMin) && num(e.endMin) && typeof e.showInQuadrant === 'boolean')
+      quad(e.quadrant) && num(e.startMin) && num(e.endMin) && typeof e.showInQuadrant === 'boolean') &&
+    (d.money === undefined || validMoney(d.money))
 }
 
 /** 定位不合规的具体实体，便于排查（仍不打印任何正文） */
@@ -451,6 +503,8 @@ function firstViolation(value) {
   i = idx(d.weekEvents, (e) => isRecord(e) && hasStringFields(e, ['id', 'date', 'title', 'color', 'remark', 'createdAt']) &&
     quad(e.quadrant) && num(e.startMin) && num(e.endMin) && typeof e.showInQuadrant === 'boolean')
   if (i >= 0) return `weekEvents[${i}] 不合规（检查 id/date/title/color/remark/createdAt/quadrant/startMin/endMin/showInQuadrant）`
+
+  if (d.money !== undefined && !validMoney(d.money)) return 'money 不合规（检查 enabled/config/days/weeks）'
 
   return '未知'
 }

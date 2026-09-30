@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { defaultData, isEmptyData, defaultSyncMeta } from '../src/shared/defaults'
-import type { AppData, CloudMeta, SyncMeta } from '../src/shared/types'
+import { DEFAULT_MONEY_CONFIG } from '../src/shared/money'
+import type { AppData, CloudMeta, LedgerDay, SyncMeta } from '../src/shared/types'
 import {
   decideStartup,
   hasCloudRevision,
@@ -34,6 +35,17 @@ const nonEmpty = (): AppData =>
   })
 const meta = (patch: Partial<SyncMeta> = {}): SyncMeta => ({ ...defaultSyncMeta('dev-1'), ...patch })
 const cloud = (revision: string | null): CloudMeta => ({ exists: revision !== null, revision })
+
+const settledDay: LedgerDay = {
+  date: '2026-09-28',
+  settledAt: '2026-09-28T23:20:00.000Z',
+  entries: [],
+  dayLimit: 50,
+  spentTC: 20,
+  overdraft: 0,
+  deltaLT: 0,
+  nightPending: false
+}
 
 describe('同步元信息：启动判定', () => {
   it('没有云端会话时一律保留本地（桌面端靠这条关掉自动同步）', () => {
@@ -207,5 +219,25 @@ describe('空数据判定', () => {
     expect(isEmptyData(defaultData())).toBe(true)
     expect(isEmptyData(nonEmpty())).toBe(false)
     expect(isEmptyData(data({ weekCounterOffset: 120 }))).toBe(true)
+  })
+
+  it('仅有钱账本也算用户数据（否则会被空数据保护误判）', () => {
+    const money = {
+      enabled: true,
+      config: DEFAULT_MONEY_CONFIG,
+      days: [settledDay],
+      weeks: []
+    }
+    expect(isEmptyData(data({ money }))).toBe(false)
+  })
+
+  it('有 money 字段但账本为空时仍算空数据', () => {
+    const money = {
+      enabled: true,
+      config: DEFAULT_MONEY_CONFIG,
+      days: [],
+      weeks: []
+    }
+    expect(isEmptyData(data({ money }))).toBe(true)
   })
 })

@@ -1,6 +1,75 @@
 import { describe, expect, it } from 'vitest'
 import { parseData, serializeData } from '../src/main/dataCodec'
 import { defaultData } from '../src/shared/defaults'
+import type { AppData } from '../src/shared/types'
+
+const baseData: AppData = {
+  version: 2,
+  goals: [],
+  events: [],
+  weekPresets: [],
+  weekEvents: [],
+  weekCounterOffset: 0
+}
+
+const sampleDataWithMoney: AppData = {
+  ...baseData,
+  money: {
+    enabled: true,
+    config: {
+      weeklyTC: 350,
+      tcPerHour: 10,
+      nightStartMin: 1410,
+      nightEndMin: 360,
+      nightMultiplier: 1.5,
+      minCapRatio: 0.2,
+      weeklyLT: 10,
+      rewardLT: 0.5,
+      penaltyLT: 0.5,
+      missPenaltyLT: 1
+    },
+    days: [
+      {
+        date: '2026-09-28',
+        settledAt: '2026-09-28T23:20:00.000Z',
+        entries: [
+          {
+            id: 'le-1',
+            kind: 'planned',
+            sourceId: 'we-1',
+            title: '写周报',
+            quadrant: 1,
+            plannedMin: 120,
+            actualMin: 120,
+            done: true,
+            nightMin: 0,
+            costTC: 20,
+            deltaLT: 0.5
+          },
+          {
+            id: 'le-2',
+            kind: 'unplanned',
+            sourceId: null,
+            title: '临时会议',
+            quadrant: null,
+            plannedMin: null,
+            actualMin: 45,
+            done: true,
+            nightMin: 30,
+            costTC: 12,
+            deltaLT: 0
+          }
+        ],
+        dayLimit: 50,
+        spentTC: 32,
+        overdraft: 0,
+        deltaLT: 0.5,
+        nightPending: true
+      }
+    ],
+    weeks: []
+  }
+}
 
 describe('dataCodec', () => {
   it('round-trips default data', () => {
@@ -137,5 +206,21 @@ describe('dataCodec', () => {
     const parsed = parseData(serializeData(data))
     // 空数组统一收敛成 undefined，避免"有字段但无内容"的两种等价形态同时存在。
     expect(parsed.events[0].photos).toBeUndefined()
+  })
+
+  it('无 money 字段的 v2 数据往返后逐字节不变', () => {
+    const raw = { version: 2, goals: [], events: [], weekPresets: [], weekEvents: [], weekCounterOffset: 0 }
+    expect(parseData(JSON.stringify(raw))).toEqual(raw)
+  })
+
+  it('money 为非对象时被丢弃为 undefined，不影响其余字段', () => {
+    const out = parseData(JSON.stringify({ ...baseData, money: 42 }))
+    expect(out.money).toBeUndefined()
+    expect(out.goals).toEqual(baseData.goals)
+  })
+
+  it('合法 money 往返保真（含一天已结算记录）', () => {
+    const out = parseData(JSON.stringify(sampleDataWithMoney))
+    expect(out.money).toEqual(sampleDataWithMoney.money)
   })
 })

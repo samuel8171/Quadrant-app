@@ -44,6 +44,94 @@ function validPhotos(value: unknown): boolean {
   return value === undefined || (Array.isArray(value) && value.every((id) => typeof id === 'string'))
 }
 
+const MONEY_NUMERIC_KEYS = [
+  'weeklyTC',
+  'tcPerHour',
+  'nightStartMin',
+  'nightEndMin',
+  'nightMultiplier',
+  'minCapRatio',
+  'weeklyLT',
+  'rewardLT',
+  'penaltyLT',
+  'missPenaltyLT'
+] as const
+
+const WEEK_SETTLEMENT_NUMERIC_KEYS = [
+  'weekTC',
+  'spentTC',
+  'weekOver',
+  'plannedMin',
+  'actualMin',
+  'doneCount',
+  'missCount',
+  'unplannedCount',
+  'unplannedMin',
+  'nightMin',
+  'overLimitDays',
+  'nextWeekTC',
+  'nextWeekLT'
+] as const
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value)
+}
+
+function isDateKey(value: unknown): value is string {
+  return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)
+}
+
+function validLedgerEntry(value: unknown): boolean {
+  if (!isRecord(value)) return false
+  if (typeof value.id !== 'string' || typeof value.title !== 'string') return false
+  if (value.kind !== 'planned' && value.kind !== 'unplanned') return false
+  if (typeof value.done !== 'boolean') return false
+  if (value.sourceId !== null && typeof value.sourceId !== 'string') return false
+  if (value.plannedMin !== null && !isFiniteNumber(value.plannedMin)) return false
+  if (!isFiniteNumber(value.actualMin) || !isFiniteNumber(value.nightMin)) return false
+  if (!isFiniteNumber(value.costTC) || !isFiniteNumber(value.deltaLT)) return false
+  return value.quadrant === null || [1, 2, 3, 4].includes(value.quadrant as number)
+}
+
+function validLedgerDay(value: unknown): boolean {
+  if (!isRecord(value)) return false
+  if (!isDateKey(value.date)) return false
+  if (value.settledAt !== null && typeof value.settledAt !== 'string') return false
+  if (typeof value.nightPending !== 'boolean') return false
+  if (!isFiniteNumber(value.dayLimit) || !isFiniteNumber(value.spentTC)) return false
+  if (!isFiniteNumber(value.overdraft) || !isFiniteNumber(value.deltaLT)) return false
+  return Array.isArray(value.entries) && value.entries.every(validLedgerEntry)
+}
+
+function validWeekSettlement(value: unknown): boolean {
+  if (!isRecord(value)) return false
+  if (!isDateKey(value.weekStart) || !isDateKey(value.weekEnd)) return false
+  if (![0, 1, 2, 3].includes(value.penaltyTier as number)) return false
+  if (!Array.isArray(value.notes) || !value.notes.every((note) => typeof note === 'string')) {
+    return false
+  }
+  return WEEK_SETTLEMENT_NUMERIC_KEYS.every((key) => isFiniteNumber(value[key]))
+}
+
+/**
+ * `money` 是**可选**字段（老数据没有），但一旦存在就必须整块合规。
+ *
+ * 与 `validPhotos` 同一套宽严标准：`undefined` 放行（由 `validAppData` 判断），
+ * 存在时逐字段校验。任何一处不合规都判整份数据非法——这是刻意的，宁可让用户
+ * 看到默认数据也不要让半截的账本进入渲染层。
+ */
+function validMoney(value: unknown): boolean {
+  if (!isRecord(value)) return false
+  if (typeof value.enabled !== 'boolean') return false
+  const config = value.config
+  if (!isRecord(config) || !MONEY_NUMERIC_KEYS.every((key) => isFiniteNumber(config[key]))) {
+    return false
+  }
+  if (!Array.isArray(value.days) || !value.days.every(validLedgerDay)) return false
+  if (!Array.isArray(value.weeks) || !value.weeks.every(validWeekSettlement)) return false
+  return true
+}
+
 function validAppData(value: unknown): value is AppData {
   if (!isRecord(value)) return false
   const data = value as Partial<AppData>
@@ -64,7 +152,8 @@ function validAppData(value: unknown): value is AppData {
       [1, 2, 3, 4].includes(preset.quadrant as number) && typeof preset.durationMin === 'number' && Number.isFinite(preset.durationMin)) &&
     data.weekEvents.every((event) => isRecord(event) && hasStringFields(event, ['id', 'date', 'title', 'color', 'remark', 'createdAt']) &&
       [1, 2, 3, 4].includes(event.quadrant as number) && typeof event.startMin === 'number' &&
-      typeof event.endMin === 'number' && Number.isFinite(event.startMin) && Number.isFinite(event.endMin) && typeof event.showInQuadrant === 'boolean')
+      typeof event.endMin === 'number' && Number.isFinite(event.startMin) && Number.isFinite(event.endMin) && typeof event.showInQuadrant === 'boolean') &&
+    (data.money === undefined || validMoney(data.money))
 }
 
 function getDefaultStorage(): WebStorage {

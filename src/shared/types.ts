@@ -96,6 +96,120 @@ export interface AppData {
   weekPresets: WeekPreset[]
   weekEvents: WeekEvent[]
   weekCounterOffset: number
+  /**
+   * 金钱系统状态。**可选**：`undefined` = 该功能从未启用（等价于关闭）。
+   *
+   * 关闭时字段必须保留、不得清除（否则「关一下开关」= 账本全删，不可逆）。
+   */
+  money?: MoneyState
+}
+
+/** 计费与结算的全局参数。默认值见 `shared/money.ts` 的 `DEFAULT_MONEY_CONFIG`。 */
+export interface MoneyConfig {
+  /** W：每周发放的时币总额。 */
+  weeklyTC: number
+  /** 币/小时。 */
+  tcPerHour: number
+  /** 深夜时段起点（分钟，自 0 点起算）；1410 = 23:30。 */
+  nightStartMin: number
+  /** 深夜时段终点；360 = 06:00。深夜区间左闭右开。 */
+  nightEndMin: number
+  /** 深夜倍率。 */
+  nightMultiplier: number
+  /** 额度保底比例：无论前一日透支多少，次日至少保留此比例的日额度。 */
+  minCapRatio: number
+  /** 娱币周定额。 */
+  weeklyLT: number
+  /** 高效完成的娱币奖励。 */
+  rewardLT: number
+  /** 低效完成的娱币惩罚。 */
+  penaltyLT: number
+  /** 有事情没做的娱币惩罚。 */
+  missPenaltyLT: number
+}
+
+export type LedgerEntryKind = 'planned' | 'unplanned'
+
+export interface LedgerEntry {
+  id: string
+  kind: LedgerEntryKind
+  /** planned → weekEvent.id / quadrantEvent.id；unplanned 为 null。 */
+  sourceId: string | null
+  /** 标题快照，源事件被删除后账本仍可读。 */
+  title: string
+  quadrant: Quadrant | null
+  /** 计划时长；计划外为 null。 */
+  plannedMin: number | null
+  actualMin: number
+  done: boolean
+  /** 落在深夜区间内的分钟数；0 表示无。 */
+  nightMin: number
+  costTC: number
+  deltaLT: number
+}
+
+export interface LedgerDay {
+  /** 'YYYY-MM-DD'，本地日期。 */
+  date: string
+  /** ISO 时刻；null = 未结算。 */
+  settledAt: string | null
+  entries: LedgerEntry[]
+  // —— 结算快照，settledAt 写入后不再变化 ——
+  /** 当日实际可用额度。 */
+  dayLimit: number
+  spentTC: number
+  /** 带入次日的透支额。 */
+  overdraft: number
+  /** 当日娱币净变化。 */
+  deltaLT: number
+  /** 深夜补记是否仍待确认。 */
+  nightPending: boolean
+}
+
+export type PenaltyTier = 0 | 1 | 2 | 3
+
+export interface WeekSettlement {
+  /** 周一。 */
+  weekStart: string
+  /** 周日。 */
+  weekEnd: string
+  /** 本周发放额度（已含上周惩罚后的值）。 */
+  weekTC: number
+  spentTC: number
+  /** 超支额；0 表示未超。 */
+  weekOver: number
+  plannedMin: number
+  actualMin: number
+  doneCount: number
+  missCount: number
+  unplannedCount: number
+  unplannedMin: number
+  /** 深夜做事总时长。 */
+  nightMin: number
+  /** 超日软上限的天数。 */
+  overLimitDays: number
+  /** 0 = 无惩罚。 */
+  penaltyTier: PenaltyTier
+  nextWeekTC: number
+  nextWeekLT: number
+  /** 自动生成的结论，逐条可解释。 */
+  notes: string[]
+}
+
+/**
+ * 金钱系统状态。
+ *
+ * **刻意不设 `balance` 字段**：当前周的额度与余额全部由 `weeks` 与 `days` 派生
+ * （本周额度 = `weeks.at(-1)?.nextWeekTC ?? config.weeklyTC`）。冗余的 `balance`
+ * 会成为唯一可能与账本不一致的状态，而数据量极小，派生成本可忽略。
+ */
+export interface MoneyState {
+  enabled: boolean
+  config: MoneyConfig
+  /** 日账本，按 date 升序。 */
+  days: LedgerDay[]
+  /** 周结算记录，按 weekStart 升序。 */
+  weeks: WeekSettlement[]
 }
 
 /**

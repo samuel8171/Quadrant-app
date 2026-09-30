@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { defaultData } from '../src/shared/defaults'
-import type { ReviewRecord } from '../src/shared/types'
+import type { AppData, ReviewRecord } from '../src/shared/types'
 import { createWebPlatformApi, type WebStorage } from '../src/renderer/src/lib/platformApi'
 
 function memoryStorage(): WebStorage {
@@ -8,6 +8,70 @@ function memoryStorage(): WebStorage {
   return {
     getItem: (key) => values.get(key) ?? null,
     setItem: (key, value) => { values.set(key, String(value)) }
+  }
+}
+
+/** 只读一份初始载荷的存储；`loadData` 不会回写，正合校验用例所需。 */
+function fakeStorage(initial: string): WebStorage {
+  let value = initial
+  return {
+    getItem: () => value,
+    setItem: (_key, next) => { value = String(next) }
+  }
+}
+
+const baseData: AppData = {
+  version: 2,
+  goals: [],
+  events: [],
+  weekPresets: [],
+  weekEvents: [],
+  weekCounterOffset: 0
+}
+
+const sampleDataWithMoney: AppData = {
+  ...baseData,
+  money: {
+    enabled: true,
+    config: {
+      weeklyTC: 350,
+      tcPerHour: 10,
+      nightStartMin: 1410,
+      nightEndMin: 360,
+      nightMultiplier: 1.5,
+      minCapRatio: 0.2,
+      weeklyLT: 10,
+      rewardLT: 0.5,
+      penaltyLT: 0.5,
+      missPenaltyLT: 1
+    },
+    days: [
+      {
+        date: '2026-09-28',
+        settledAt: '2026-09-28T23:20:00.000Z',
+        entries: [
+          {
+            id: 'le-1',
+            kind: 'planned',
+            sourceId: 'we-1',
+            title: '写周报',
+            quadrant: 1,
+            plannedMin: 120,
+            actualMin: 120,
+            done: true,
+            nightMin: 0,
+            costTC: 20,
+            deltaLT: 0.5
+          }
+        ],
+        dayLimit: 50,
+        spentTC: 20,
+        overdraft: 0,
+        deltaLT: 0.5,
+        nightPending: true
+      }
+    ],
+    weeks: []
   }
 }
 
@@ -115,5 +179,21 @@ describe('web platform API', () => {
       JSON.stringify({ ...defaultData(), events: [{ ...base, photos: [] }] })
     )
     expect((await api.loadData()).events).toHaveLength(1)
+  })
+
+  it('money === undefined 的数据是合法的（否则老数据会被静默重置）', async () => {
+    const api = createWebPlatformApi(fakeStorage(JSON.stringify(baseData)))
+    expect(await api.loadData()).toEqual(baseData)
+  })
+
+  it('money 存在但 enabled 不是布尔时整份数据被拒', async () => {
+    const bad = { ...baseData, money: { enabled: 'yes', config: {}, days: [], weeks: [] } }
+    const api = createWebPlatformApi(fakeStorage(JSON.stringify(bad)))
+    expect(await api.loadData()).toEqual(defaultData())
+  })
+
+  it('含合法 money 的数据通过校验', async () => {
+    const api = createWebPlatformApi(fakeStorage(JSON.stringify(sampleDataWithMoney)))
+    expect((await api.loadData()).money).toEqual(sampleDataWithMoney.money)
   })
 })

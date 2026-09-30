@@ -3,12 +3,19 @@ import {
   WEEK_COLORS,
   type AppData,
   type Goal,
+  type LedgerDay,
+  type LedgerEntry,
+  type MoneyConfig,
+  type MoneyState,
+  type PenaltyTier,
   type Quadrant,
   type QuadrantEvent,
   type Subtask,
   type WeekEvent,
-  type WeekPreset
+  type WeekPreset,
+  type WeekSettlement
 } from '../shared/types'
+import { DEFAULT_MONEY_CONFIG } from '../shared/money'
 
 export function serializeData(data: AppData): string {
   return JSON.stringify(data, null, 2)
@@ -35,6 +42,7 @@ export function parseData(raw: string): AppData {
         normalizeWeekEvent(e as Record<string, unknown>)
       )
     : []
+  const money = normalizeMoney(parsed.money)
   return {
     version: 2,
     goals,
@@ -42,7 +50,171 @@ export function parseData(raw: string): AppData {
     weekPresets,
     weekEvents,
     weekCounterOffset:
-      typeof parsed.weekCounterOffset === 'number' ? parsed.weekCounterOffset : 0
+      typeof parsed.weekCounterOffset === 'number' ? parsed.weekCounterOffset : 0,
+    ...(money ? { money } : {})
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object'
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value)
+}
+
+function isDateKey(value: unknown): value is string {
+  return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)
+}
+
+function isPenaltyTier(value: unknown): value is PenaltyTier {
+  return value === 0 || value === 1 || value === 2 || value === 3
+}
+
+const MONEY_NUMERIC_KEYS: readonly (keyof MoneyConfig)[] = [
+  'weeklyTC',
+  'tcPerHour',
+  'nightStartMin',
+  'nightEndMin',
+  'nightMultiplier',
+  'minCapRatio',
+  'weeklyLT',
+  'rewardLT',
+  'penaltyLT',
+  'missPenaltyLT'
+]
+
+/** `config` 逐键校验：非有限数字的键回退到 `DEFAULT_MONEY_CONFIG` 的同名值。 */
+function normalizeMoneyConfig(raw: unknown): MoneyConfig {
+  const source = isRecord(raw) ? raw : {}
+  const config: MoneyConfig = { ...DEFAULT_MONEY_CONFIG }
+  for (const key of MONEY_NUMERIC_KEYS) {
+    const value = source[key]
+    if (isFiniteNumber(value)) config[key] = value
+  }
+  return config
+}
+
+/** 结构不全的单条条目返回 `null`（由调用方丢弃），不使整份数据失效。 */
+function normalizeLedgerEntry(raw: unknown): LedgerEntry | null {
+  if (!isRecord(raw)) return null
+  if (typeof raw.id !== 'string' || typeof raw.title !== 'string') return null
+  if (raw.kind !== 'planned' && raw.kind !== 'unplanned') return null
+  if (typeof raw.done !== 'boolean') return null
+  if (raw.sourceId !== null && typeof raw.sourceId !== 'string') return null
+  if (raw.plannedMin !== null && !isFiniteNumber(raw.plannedMin)) return null
+  if (!isFiniteNumber(raw.actualMin) || !isFiniteNumber(raw.nightMin)) return null
+  if (!isFiniteNumber(raw.costTC) || !isFiniteNumber(raw.deltaLT)) return null
+  const quadrant =
+    raw.quadrant === null ? null : isQuadrant(raw.quadrant) ? raw.quadrant : undefined
+  if (quadrant === undefined) return null
+  return {
+    id: raw.id,
+    kind: raw.kind,
+    sourceId: raw.sourceId,
+    title: raw.title,
+    quadrant,
+    plannedMin: raw.plannedMin,
+    actualMin: raw.actualMin,
+    done: raw.done,
+    nightMin: raw.nightMin,
+    costTC: raw.costTC,
+    deltaLT: raw.deltaLT
+  }
+}
+
+function normalizeLedgerDay(raw: unknown): LedgerDay | null {
+  if (!isRecord(raw)) return null
+  if (!isDateKey(raw.date)) return null
+  if (raw.settledAt !== null && typeof raw.settledAt !== 'string') return null
+  if (typeof raw.nightPending !== 'boolean') return null
+  if (!isFiniteNumber(raw.dayLimit) || !isFiniteNumber(raw.spentTC)) return null
+  if (!isFiniteNumber(raw.overdraft) || !isFiniteNumber(raw.deltaLT)) return null
+  if (!Array.isArray(raw.entries)) return null
+  const entries = raw.entries
+    .map((entry) => normalizeLedgerEntry(entry))
+    .filter((entry): entry is LedgerEntry => entry !== null)
+  return {
+    date: raw.date,
+    settledAt: raw.settledAt,
+    entries,
+    dayLimit: raw.dayLimit,
+    spentTC: raw.spentTC,
+    overdraft: raw.overdraft,
+    deltaLT: raw.deltaLT,
+    nightPending: raw.nightPending
+  }
+}
+
+function normalizeWeekSettlement(raw: unknown): WeekSettlement | null {
+  if (!isRecord(raw)) return null
+  if (!isDateKey(raw.weekStart) || !isDateKey(raw.weekEnd)) return null
+  if (!isPenaltyTier(raw.penaltyTier)) return null
+  if (!Array.isArray(raw.notes) || !raw.notes.every((note) => typeof note === 'string')) {
+    return null
+  }
+  const numbers: (keyof WeekSettlement)[] = [
+    'weekTC',
+    'spentTC',
+    'weekOver',
+    'plannedMin',
+    'actualMin',
+    'doneCount',
+    'missCount',
+    'unplannedCount',
+    'unplannedMin',
+    'nightMin',
+    'overLimitDays',
+    'nextWeekTC',
+    'nextWeekLT'
+  ]
+  if (!numbers.every((key) => isFiniteNumber(raw[key]))) return null
+  return {
+    weekStart: raw.weekStart,
+    weekEnd: raw.weekEnd,
+    weekTC: raw.weekTC as number,
+    spentTC: raw.spentTC as number,
+    weekOver: raw.weekOver as number,
+    plannedMin: raw.plannedMin as number,
+    actualMin: raw.actualMin as number,
+    doneCount: raw.doneCount as number,
+    missCount: raw.missCount as number,
+    unplannedCount: raw.unplannedCount as number,
+    unplannedMin: raw.unplannedMin as number,
+    nightMin: raw.nightMin as number,
+    overLimitDays: raw.overLimitDays as number,
+    penaltyTier: raw.penaltyTier,
+    nextWeekTC: raw.nextWeekTC as number,
+    nextWeekLT: raw.nextWeekLT as number,
+    notes: raw.notes
+  }
+}
+
+/**
+ * 把持久化的 `money` 值规整成 `MoneyState`；不合法时返回 `undefined`。
+ *
+ * 语义与 `validAppData` 的「整体放行未知字段」不同：这里是**逐字段重建**。
+ * 非对象、或 `enabled` 不是布尔 → 整块丢弃（返回 `undefined`）；
+ * `days` / `weeks` 逐项结构过滤，字段不全的项丢弃但不使整份数据失效。
+ */
+export function normalizeMoney(raw: unknown): MoneyState | undefined {
+  if (!isRecord(raw)) return undefined
+  if (typeof raw.enabled !== 'boolean') return undefined
+  const days = Array.isArray(raw.days)
+    ? raw.days
+        .map((day) => normalizeLedgerDay(day))
+        .filter((day): day is LedgerDay => day !== null)
+    : []
+  const weeks = Array.isArray(raw.weeks)
+    ? raw.weeks
+        .map((week) => normalizeWeekSettlement(week))
+        .filter((week): week is WeekSettlement => week !== null)
+    : []
+  return {
+    enabled: raw.enabled,
+    config: normalizeMoneyConfig(raw.config),
+    days,
+    weeks
   }
 }
 
