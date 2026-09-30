@@ -8,6 +8,7 @@ import {
   dayLimitOf,
   ensureLedgerDays,
   ensureWeekRollover,
+  latestOpenNight,
   leisureDelta,
   nightMinutesOf,
   penaltyTierOf,
@@ -1157,5 +1158,97 @@ describe('ensureWeekRollover 推迟含深夜待补记的周', () => {
     )
     expect(withOld.weeks.map((w) => w.weekStart)).toEqual(['2026-09-14', '2026-09-21'])
     expect(withOld.weeks[1].spentTC).toBe(0)
+  })
+})
+
+// ============================================================================
+// Task 8（第四轮）：深夜补记不再依赖「日历上的昨天」
+// ============================================================================
+
+/**
+ * `latestOpenNight` 是「结算某天时该回头问哪一夜」的判定，取代了此前的「严格 `date − 1`」。
+ *
+ * 为什么必须换掉：`ensureLedgerDays` 只为**计划过的**日子建日账本记录，没计划的日子是空洞。
+ * 死等昨天时，一旦昨天没记录，前一个未收尾的深夜就永远没人问、`nightPending` 永远是 true，
+ * 而 `ensureWeekRollover` 用的是 `break` 不是 `skip` —— 那一周以及之后的每一周都被永久堵死。
+ */
+describe('latestOpenNight', () => {
+  it('取 date 之前「已结算且 nightPending」里日期最新的那一个', () => {
+    const older = settledDay('2026-09-24', [mkEntry({ actualMin: 60, plannedMin: 60, done: true })])
+    const newer = settledDay('2026-09-26', [mkEntry({ actualMin: 60, plannedMin: 60, done: true })])
+    expect(latestOpenNight([older, newer], '2026-09-29')?.date).toBe('2026-09-26')
+  })
+
+  it('跳过未结算的日账本（`nightPending` 虽为 true，但它还没到问深夜的时候）', () => {
+    const unsettled = unsettledDay('2026-09-26', [])
+    const settledOpen = settledDay('2026-09-24', [
+      mkEntry({ actualMin: 60, plannedMin: 60, done: true })
+    ])
+    expect(latestOpenNight([settledOpen, unsettled], '2026-09-29')?.date).toBe('2026-09-24')
+  })
+
+  it('跳过已答完（nightPending === false）的，以及 date 当天 / 之后的记录', () => {
+    const answered = nightAnsweredDay('2026-09-27', [
+      mkEntry({ actualMin: 60, plannedMin: 60, done: true })
+    ])
+    const sameDay = settledDay('2026-09-29', [mkEntry({ actualMin: 60, plannedMin: 60, done: true })])
+    expect(latestOpenNight([answered, sameDay], '2026-09-29')).toBeUndefined()
+  })
+})
+
+describe('跨空洞也能收尾的深夜（Critical 回归）', () => {
+  it('只在周六、周二有计划、周日 / 周一没记录时，周二仍能问出周六那一夜，并让周六那周结算', () => {
+    // 周六已结算但仍挂着 nightPending；周二还没结算；周日 / 周一**没有记录**（空洞）
+    const sat = settledDay('2026-09-26', [mkEntry({ actualMin: 120, plannedMin: 120, done: true })])
+    const tue = unsettledDay('2026-09-29', [mkEntry({ actualMin: 60, plannedMin: 60, done: true })])
+    const days = [sat, tue]
+
+    // 结算周二时挑「最近一个未收尾的深夜」→ 必须挑到周六，而不是不存在的前一天
+    expect(latestOpenNight(days, '2026-09-29')?.date).toBe('2026-09-26')
+
+    // 还没答之前：周六所在的 09-21 周被推迟（nightPending 未清，且是 break 不是 skip）
+    const before = ensureWeekRollover(
+      { enabled: true, config: DEFAULT_MONEY_CONFIG, days, weeks: [] },
+      '2026-09-30'
+    )
+    expect(before.weeks).toEqual([])
+
+    // 答完（= 面板结算周二时对周六调 confirmNight 的效果）后，09-21 周立即结算
+    const cleared: LedgerDay = { ...sat, nightPending: false }
+    const after = ensureWeekRollover(
+      { enabled: true, config: DEFAULT_MONEY_CONFIG, days: [cleared, tue], weeks: [] },
+      '2026-09-30'
+    )
+    expect(after.weeks.map((w) => w.weekStart)).toEqual(['2026-09-21'])
+    expect(after.weeks[0].spentTC).toBe(20)
+    expect(after.weeks[0].penaltyTier).toBe(0)
+  })
+})
+
+describe('「那天我什么都没做」释放被推迟的周', () => {
+  it('一周的日账本全清空后，周里不再有 nightPending，于是结算（而不是永远挂着）', () => {
+    // 面板「什么都没做」= settleDay（计划全记未完成）后再对**当天自己** confirmNight({worked:false})，
+    // 把当天的 nightPending 记成「否」。这里复刻那两步的产物：
+    const sat = nightAnsweredDay('2026-09-26', [
+      mkEntry({ plannedMin: 120, actualMin: 120, done: true })
+    ])
+    const sun: LedgerDay = {
+      ...settledDay('2026-09-27', [mkEntry({ plannedMin: 60, actualMin: 0, done: false })]),
+      nightPending: false
+    }
+    const state: MoneyState = {
+      enabled: true,
+      config: DEFAULT_MONEY_CONFIG,
+      days: [sat, sun],
+      weeks: []
+    }
+
+    // 周里不再有未收尾的深夜：下一个待结算日挑不到任何补记目标
+    expect(latestOpenNight(state.days, '2026-09-30')).toBeUndefined()
+
+    const next = ensureWeekRollover(state, '2026-09-30')
+    expect(next.weeks.map((w) => w.weekStart)).toEqual(['2026-09-21'])
+    expect(next.weeks[0].spentTC).toBe(20) // 周六 20 币；周日「什么都没做」0 币
+    expect(next.weeks[0].missCount).toBe(1) // 周日那条计划被记成未完成
   })
 })

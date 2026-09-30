@@ -817,6 +817,10 @@ export const useAppStore = create<AppState>((set, get) => ({
    * 写入的 `money` 是**四个字段齐全**的新对象（`...money` 只换 `days`）——
    * 半截 `money` 会被网页端校验器判非法，进而静默清空用户的全部数据。
    *
+   * 已结算的日子**直接拒绝**（与 `addUnplannedEntry` 同一道闸）：已冻结的快照只能由
+   * `confirmNight` 那一处改动。少了这道闸，「只有深夜补记能改快照」就只剩调用方自觉，
+   * 任何一次误调用都会把某天的快照整体覆盖掉。
+   *
    * 结算完再补一次周结算，这是推迟机制**闭环**的一半：`ensureWeekRollover` 只有在
    * 「这一周的日账本全部已结算、且没有任何 `nightPending`」时才结算该周。因此
    * - 「先结算了旧日账本、此前无周可补」时，这一天才让某个已结束的周第一次变得可结算；
@@ -828,6 +832,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const data = get().data
     const money = data.money
     if (money?.enabled !== true) return
+    if (money.days.find((d) => d.date === date)?.settledAt != null) return
     const settled = settleDay({
       date,
       entries,
@@ -882,6 +887,14 @@ export const useAppStore = create<AppState>((set, get) => ({
    * 「汇总与条目互相对不上」的隐性错误，并顺着 `overdraft` 传导到周结算。
    * `settledAt` 沿用旧值：补记不改变「这一天是什么时候结算的」。
    * 无论答「是」还是「否」，都把 `nightPending` 置 false —— 这一问已经问过了。
+   *
+   * `previousDate` **不要求是日历上的昨天**：面板会挑「正在结算的那一天之前、最近的
+   * 一个待收尾深夜」来问（见 `SettlePanel`）。materialization 只为计划过的日子建记录，
+   * 未计划的日子是空洞；若死等「昨天」，一旦昨天没记录，前一个未收尾的深夜就永远没人问、
+   * 那一周也就永远结算不了。
+   *
+   * 面板的「那天我什么都没做」也会对**当天自己**调用它并传 `worked: false`：一天既然
+   * 什么都没做，当晚 23:30 之后自然也没有做事，顺手把这一天自己的深夜问记成「否」。
    */
   confirmNight: (previousDate, answer) => {
     const data = get().data

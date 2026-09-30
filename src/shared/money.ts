@@ -679,3 +679,29 @@ export function pendingDays(money: MoneyState, today: string): string[] {
     .map((day) => day.date)
     .sort()
 }
+
+/**
+ * 结算 `date` 时该回头问哪一个「深夜」：`date` **之前**、已结算（`settledAt !== null`）、
+ * 且 `nightPending === true` 的日账本里，取日期**最新**的那一个；没有就返回 `undefined`。
+ *
+ * **不要求它是日历上的昨天** —— 这条是修一个 Critical 的关键。`ensureLedgerDays` 只为
+ * **计划过的**日子补日账本记录，没计划的日子是空洞。若死等「昨天」，一旦昨天没记录
+ * （例如只在周六、周二有计划，周日 / 周一都没有），前一天那个未收尾的深夜就永远没人问，
+ * `D.nightPending` 永远是 true；而 `ensureWeekRollover` 用的是 `break` 不是 `skip`，
+ * 于是 **D 所在的周以及之后的每一周都被永久堵死**，`currentQuota` 永远返回配置值，
+ * 整条周额度 / 惩罚链静默失效 —— 比它想防的「少报」更糟。
+ *
+ * 取「最新」而非「最早」：问刚刚过去的那一夜最符合直觉。更旧的若真的存在，也会在后续
+ * 逐日结算里被逐个问到（面板每次结算清掉一个、又新增一个，正常路径下同时最多只有一个
+ * 未收尾的深夜），所以「只挑最新」不会漏。
+ *
+ * 纯函数：只读入参，日期键定长 `YYYY-MM-DD`，直接字典序比较即可。
+ */
+export function latestOpenNight(days: LedgerDay[], date: string): LedgerDay | undefined {
+  let best: LedgerDay | undefined
+  for (const day of days) {
+    if (day.settledAt === null || !day.nightPending || day.date >= date) continue
+    if (!best || day.date > best.date) best = day
+  }
+  return best
+}

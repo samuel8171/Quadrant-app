@@ -8,7 +8,13 @@ import type {
   WeekEvent
 } from '../../../../shared/types'
 import { addDays, dateKey, parseDateKey } from '../../../../shared/dateKey'
-import { costOfEntry, leisureDelta, nightMinutesOf, pendingDays } from '../../../../shared/money'
+import {
+  costOfEntry,
+  latestOpenNight,
+  leisureDelta,
+  nightMinutesOf,
+  pendingDays
+} from '../../../../shared/money'
 import { QUADRANT_META } from '../../lib/quadrantMath'
 import { useAppStore } from '../../state/appStore'
 
@@ -137,8 +143,11 @@ interface DayFormProps {
   day: LedgerDay | undefined
   events: WeekEvent[]
   config: MoneyConfig
-  /** 昨日账本（若已结算且 `nightPending` 则要补记）。 */
-  previous: LedgerDay | undefined
+  /**
+   * 最近一个「已结算、但仍挂着 `nightPending`」的日账本（必须早于 `date`）。
+   * **不要求它是日历上的昨天** —— 见 `latestOpenNight` 的说明。
+   */
+  openNight: LedgerDay | undefined
   total: number
   onCommitted: () => void
 }
@@ -148,7 +157,7 @@ function DayForm({
   day,
   events,
   config,
-  previous,
+  openNight,
   total,
   onCommitted
 }: DayFormProps): JSX.Element {
@@ -164,7 +173,11 @@ function DayForm({
   const [nightWorked, setNightWorked] = useState(false)
   const [nightEndMin, setNightEndMin] = useState(60)
 
-  const needsBackfill = previous !== undefined && previous.settledAt !== null && previous.nightPending
+  const needsBackfill = openNight !== undefined
+  // 补记目标的日期（无目标时为空串，仅用于文案）。
+  const openDate = openNight?.date ?? ''
+  // 补记目标是不是日历上的昨天 —— 只影响文案：常态是昨天（夜里问昨夜），隔了空洞才点名日期。
+  const openIsYesterday = openDate === dateKey(addDays(parseDateKey(date), -1))
   const needed = rows.filter((r) => r.kind === 'planned')
   const extra = rows.filter((r) => r.kind === 'unplanned')
   const totalCost = rows.reduce((sum, r) => sum + rowCost(r, config), 0)
@@ -197,22 +210,25 @@ function DayForm({
     setNewTitle('')
   }
 
+  /** 回答「最近一个未收尾的深夜」那一问（若有）；radio 默认「否」，由用户改。 */
+  const answerOpenNight = (): void => {
+    if (!openNight) return
+    confirmNight(openNight.date, {
+      worked: nightWorked,
+      endMin: nightWorked ? nightEndMin : undefined
+    })
+  }
+
   const commitEntries = (entries: LedgerEntry[]): void => {
     /*
      * 顺序是**先补记、后结算当天**，不能反。
      *
      * `commitDaySettlement` 结算完会立刻补一次周结算，而周结算只读各日的冻结快照。
-     * 若先结算当天、再补记昨天，昨天的 spentTC 是在本周已经冻结之后才变的 ——
+     * 若先结算当天、再补记那一天的深夜，被补记那天的 spentTC 是在本周已经冻结之后才变的 ——
      * 那一周的账会永久少掉这笔深夜做事（周快照一经写入不许改）。
      * 反过来先补记，本周的账在滚动那一刻就已经是最终值。
      */
-    if (needsBackfill) {
-      // 补记回写的是**昨天**那一条已结算快照（全库唯一允许改动它的路径）。
-      confirmNight(dateKey(addDays(parseDateKey(date), -1)), {
-        worked: nightWorked,
-        endMin: nightWorked ? nightEndMin : undefined
-      })
-    }
+    answerOpenNight()
     commitDaySettlement(date, entries)
     onCommitted()
   }
@@ -220,16 +236,24 @@ function DayForm({
   const commit = (): void => commitEntries(rows.map((r) => toEntry(r, config)))
 
   /**
-   * 「那天我什么都没做」：走与正常结算**完全同一条** `commitDaySettlement` 路径，
-   * 只是把每一条计划内条目都记成 `done: false` / `actualMin: 0` ——
-   * 于是 `spentTC` 自然为 0、娱币按 `missPenaltyLT` 逐条扣，没有任何旁路、也没有单独的快照分支。
+   * 「那天我什么都没做」：结算本身走与正常结算**完全同一条** `commitDaySettlement`，
+   * 只是把每一条计划内条目都记成 `done: false` / `actualMin: 0` —— 于是 `spentTC` 为 0、
+   * 娱币按 `missPenaltyLT` 逐条扣，没有旁路、没有单独的快照分支。
    *
-   * 它的真正职责是**解开死锁**：周结算会推迟含未结算日的周（见 `ensureWeekRollover`），
-   * 若某天既不结算也不清掉，那一周的滚动就永远停在那里。面板里临时录入的计划外条目一并丢弃 ——
-   * 那天什么都没做，也就没有计划外的事。
+   * 它还要**真正解开周推迟**的结（见 `ensureWeekRollover`）：周结算会推迟含未结算日、
+   * 或含 `nightPending` 的周。此前这里只落一条 `nightPending: true` 的日账本，
+   * 于是「把一周每天都清空」也解不开 —— 最后一天始终挂着 `nightPending`。现在补上最后一步：
+   * 一天既然什么都没做，当晚 23:30 之后也不可能有做事，于是对**当天自己**再调
+   * `confirmNight(date, { worked: false })`，把这一天的深夜问记成「否」、清掉 `nightPending`。
+   * 面板里临时录入的计划外条目一并丢弃 —— 那天什么都没做，也就没有计划外的事。
    */
-  const commitNothingDone = (): void =>
-    commitEntries(needed.map((r) => toEntry({ ...r, done: false, actualMin: 0 }, config)))
+  const commitNothingDone = (): void => {
+    const entries = needed.map((r) => toEntry({ ...r, done: false, actualMin: 0 }, config))
+    answerOpenNight()
+    commitDaySettlement(date, entries)
+    confirmNight(date, { worked: false })
+    onCommitted()
+  }
 
   return (
     <div className="settle-day">
@@ -341,9 +365,11 @@ function DayForm({
 
       {needsBackfill && (
         <div className="settle-section settle-backfill">
-          <h3 className="settle-section-title">③ 补记昨天</h3>
+          <h3 className="settle-section-title">③ 补记{openIsYesterday ? '昨天' : ` ${openDate}`}</h3>
           <p className="settle-backfill-q">
-            昨夜 23:30 之后还在做事吗？（昨天 23:20 结算时深夜窗口还没开）
+            {openIsYesterday
+              ? '昨夜 23:30 之后还在做事吗？（昨天 23:20 结算时深夜窗口还没开）'
+              : `${openDate} 23:30 之后还在做事吗？（那天 23:20 结算时深夜窗口还没开）`}
           </p>
           <div className="settle-backfill-answer">
             <label>
@@ -385,8 +411,8 @@ function DayForm({
         </span>
         <button type="button" className="settle-nothing" onClick={commitNothingDone}>
           {needed.length > 0
-            ? `那天我什么都没做（计划内 ${needed.length} 条全记未完成，娱币 −${needed.length * config.missPenaltyLT}）`
-            : '那天我什么都没做'}
+            ? `那天我什么都没做（计划内 ${needed.length} 条全记未完成，娱币 −${needed.length * config.missPenaltyLT}；深夜也记为空）`
+            : '那天我什么都没做（深夜也记为空）'}
         </button>
         <button type="button" className="settle-commit" onClick={commit}>
           {total > 1 ? '结算这一天，下一天 →' : '结算这一天'}
@@ -416,9 +442,7 @@ export default function SettlePanel({ onClose }: Props): JSX.Element | null {
   const date = pending[0]
   const day = money.days.find((d) => d.date === date)
   const events = weekEvents.filter((event) => event.date === date)
-  const previous = money.days.find(
-    (d) => d.date === dateKey(addDays(parseDateKey(date), -1))
-  )
+  const openNight = latestOpenNight(money.days, date)
 
   const handleCommitted = (): void => {
     const fresh = useAppStore.getState().data.money
@@ -445,7 +469,7 @@ export default function SettlePanel({ onClose }: Props): JSX.Element | null {
           day={day}
           events={events}
           config={money.config}
-          previous={previous}
+          openNight={openNight}
           total={pending.length}
           onCommitted={handleCommitted}
         />
