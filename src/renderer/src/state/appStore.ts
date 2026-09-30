@@ -817,9 +817,12 @@ export const useAppStore = create<AppState>((set, get) => ({
    * 写入的 `money` 是**四个字段齐全**的新对象（`...money` 只换 `days`）——
    * 半截 `money` 会被网页端校验器判非法，进而静默清空用户的全部数据。
    *
-   * 结算完再补一次周结算：在「先结算了旧日账本、此前无周可补」的场景下，
-   * 这一天才让某个已结束的周第一次变得可结算。`ensureWeekRollover` 幂等，
-   * 后续每次调用都会原对象返回，所以跨周的那一天只触发一次。
+   * 结算完再补一次周结算，这是推迟机制**闭环**的一半：`ensureWeekRollover` 只有在
+   * 「这一周的日账本全部已结算、且没有任何 `nightPending`」时才结算该周。因此
+   * - 「先结算了旧日账本、此前无周可补」时，这一天才让某个已结束的周第一次变得可结算；
+   * - 「上周还挂着 `nightPending`」时，这一天的日结会在面板里先问过深夜那一问（见
+   *   `confirmNight`），把上周的标记清掉，这里的重跑随即把上周补结算掉。
+   * `ensureWeekRollover` 幂等，后续每次调用都原对象返回，所以只触发一次。
    */
   commitDaySettlement: (date, entries) => {
     const data = get().data
@@ -901,6 +904,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     const next = { ...data, money: { ...money, days: upsertLedgerDay(money.days, patched) } }
     saveSoon(next)
     set({ data: next })
+    // 清掉 `nightPending` 后补一次周结算，这是推迟机制**闭环**的另一半：某个被推迟的周
+    // （周日深夜待补记未清）正是在这里变得可结算。少了这一行，被推迟的周只能等下次开机才补上。
     get().rolloverMoneyWeek()
   },
 

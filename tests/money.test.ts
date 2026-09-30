@@ -629,6 +629,18 @@ function unsettledDay(date: string, entries: LedgerEntry[]): LedgerDay {
   }
 }
 
+/**
+ * 已结算、**且深夜那一问已经答过**（`nightPending === false`）的一天。
+ *
+ * 这是「一周可以滚动」的完整前提：`settleDay` 造出来的一律是 `nightPending: true`
+ * （结算发生在 23:20，深夜窗口 23:30 才开），要等次日的日结回头补记才置 false。
+ * 因此凡把「上周某天」当作已了结的样本喂给 `ensureWeekRollover`，都得用它，
+ * 而不是裸的 `settledDay` —— 后者会因 `nightPending` 未清而让整周按新规则推迟。
+ */
+function nightAnsweredDay(date: string, entries: LedgerEntry[], previousOverdraft = 0): LedgerDay {
+  return { ...settledDay(date, entries, previousOverdraft), nightPending: false }
+}
+
 /** 只带日账本、没有周结算记录的状态：本周额度回落到配置值 350 / 10。 */
 function mkMoney(days: LedgerDay[], weeks: WeekSettlement[] = []): MoneyState {
   return { enabled: true, config: DEFAULT_MONEY_CONFIG, days, weeks }
@@ -1017,14 +1029,14 @@ describe('ensureWeekRollover 推迟含未结算日的周', () => {
     expect(currentQuota(same)).toEqual({ weekTC: 350, weekLT: 10 })
   })
 
-  it('那一天标记为已结算后，滚动随即推进', () => {
+  it('那一天结算、且深夜答完后，滚动随即推进', () => {
     const pendingState: MoneyState = {
       enabled: true,
       config: DEFAULT_MONEY_CONFIG,
       days: [unsettledDay('2026-09-25', [])],
       weeks: []
     }
-    const settled = settledDay('2026-09-25', [
+    const settled = nightAnsweredDay('2026-09-25', [
       mkEntry({ actualMin: 60, plannedMin: 60, done: true })
     ])
     const next = ensureWeekRollover({ ...pendingState, days: [settled] }, '2026-09-30')
@@ -1036,7 +1048,7 @@ describe('ensureWeekRollover 推迟含未结算日的周', () => {
 
   it('推迟后重新扫描：先前的周已结算、本周未结算的那一周仍推迟', () => {
     // 前一周已全部结算（09-21 周），本周（09-28 周）里 09-29 未结算
-    const mon = settledDay('2026-09-21', [mkEntry({ actualMin: 60, plannedMin: 60, done: true })])
+    const mon = nightAnsweredDay('2026-09-21', [mkEntry({ actualMin: 60, plannedMin: 60, done: true })])
     const pendingThisWeek = unsettledDay('2026-09-29', [])
     const state: MoneyState = {
       enabled: true,
@@ -1062,7 +1074,84 @@ describe('ensureWeekRollover 推迟含未结算日的周', () => {
     const withOld = ensureWeekRollover(
       {
         ...state,
-        days: [settledDay('2026-09-14', [mkEntry({ actualMin: 60, plannedMin: 60, done: true })])]
+        days: [nightAnsweredDay('2026-09-14', [mkEntry({ actualMin: 60, plannedMin: 60, done: true })])]
+      },
+      '2026-09-30'
+    )
+    expect(withOld.weeks.map((w) => w.weekStart)).toEqual(['2026-09-14', '2026-09-21'])
+    expect(withOld.weeks[1].spentTC).toBe(0)
+  })
+})
+
+// ============================================================================
+// Task 8（第三轮）：含深夜待补记的周一律推迟
+// ============================================================================
+
+/**
+ * 周日 23:30 之后的做事只能由周一的日结回头补记（见 `confirmNight`）。若在周日那天
+ * `nightPending` 还没清掉时就结算了这一周，周快照会把周日深夜那一段永久排除在外 ——
+ * 周 `spentTC` 少报，可能压低 `penaltyTier`，再顺着 `nextWeekTC` 把额度错误传下去。
+ * 所以「一周可结算」的第二个前提是：这一周里没有任何 `nightPending === true` 的日账本。
+ */
+describe('ensureWeekRollover 推迟含深夜待补记的周', () => {
+  it('日账本都已结算、但有一天还挂着 nightPending → 整周不结算，额度停在配置值', () => {
+    // 09-21 那一周只有 09-25（周五）一天账本：已结算，但深夜那一问还没答
+    const fri: LedgerDay = {
+      ...settledDay('2026-09-25', [mkEntry({ actualMin: 60, plannedMin: 60, done: true })]),
+      nightPending: true
+    }
+    const state: MoneyState = {
+      enabled: true,
+      config: DEFAULT_MONEY_CONFIG,
+      days: [fri],
+      weeks: []
+    }
+    const same = ensureWeekRollover(state, '2026-09-30')
+    expect(same).toBe(state)
+    expect(same.weeks).toEqual([])
+    // 没有任何周结算 → 本周额度仍按配置值（推迟的代价只是「晚一点收敛」）
+    expect(currentQuota(same)).toEqual({ weekTC: 350, weekLT: 10 })
+  })
+
+  it('nightPending 清掉后，滚动立即补上那一周', () => {
+    const pending: LedgerDay = {
+      ...settledDay('2026-09-25', [mkEntry({ actualMin: 60, plannedMin: 60, done: true })]),
+      nightPending: true
+    }
+    const deferred: MoneyState = {
+      enabled: true,
+      config: DEFAULT_MONEY_CONFIG,
+      days: [pending],
+      weeks: []
+    }
+    // 先确认 nightPending 未清时确实推迟
+    expect(ensureWeekRollover(deferred, '2026-09-30').weeks).toEqual([])
+
+    // 次日日结（在本周周一 09-28）答完深夜那一问：09-25 的 nightPending 置 false
+    const cleared = nightAnsweredDay('2026-09-25', [
+      mkEntry({ actualMin: 60, plannedMin: 60, done: true })
+    ])
+    const next = ensureWeekRollover({ ...deferred, days: [cleared] }, '2026-09-30')
+    expect(next).not.toBe(deferred)
+    expect(next.weeks.map((w) => w.weekStart)).toEqual(['2026-09-21'])
+    expect(next.weeks[0].spentTC).toBe(10)
+    expect(next.weeks[0].penaltyTier).toBe(0)
+  })
+
+  it('一个记录都没有的周仍按空周结算（nightPending 不适用，假言真值）', () => {
+    const state: MoneyState = {
+      enabled: true,
+      config: DEFAULT_MONEY_CONFIG,
+      days: [],
+      weeks: []
+    }
+    expect(ensureWeekRollover(state, '2026-09-30')).toBe(state)
+    const withOld = ensureWeekRollover(
+      {
+        ...state,
+        days: [
+          nightAnsweredDay('2026-09-14', [mkEntry({ actualMin: 60, plannedMin: 60, done: true })])
+        ]
       },
       '2026-09-30'
     )

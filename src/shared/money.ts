@@ -373,13 +373,23 @@ export function ensureLedgerDays(
  * 补齐跨周结算（spec 7.5）：从「最后一次结算的下一周」一路补到「上一个已结束的周」，
  * 逐周调用 `settleWeek`。**本周不结算** —— 它还没结束。
  *
- * **含未结算日的周一律推迟**（本任务新增）：只要这一周里还有 `settledAt === null` 的日账本，
- * 就整周不结算，并**就此停止**、不再往后补。两条理由：
+ * **含未结算日、或含深夜待补记的周一律推迟**（本任务新增）：只要这一周里还有
+ * `settledAt === null` 的日账本，**或**还有 `nightPending === true` 的日账本，就整周不结算，
+ * 并**就此停止**、不再往后补。三条理由：
  * - `settleWeek` 只读 `day.spentTC`，而未结算的快照是 0 —— 现在结算等于把这一周冻结成一个
  *   永远为 0 的假数字，而快照一经写入就不许改（唯一豁免只有深夜补记）；
+ * - 周日 23:30 之后的做事只能由周一的日结回头补记（见 `confirmNight`）。`nightPending`
+ *   未清就结算，等于把「周日深夜那一段」永久排除在周快照之外：周 `spentTC` 少报，
+ *   可能把 `penaltyTier` 压低一档，再顺着 `nextWeekTC` 传导成下一周的额度错误 —— 全链静默。
  * - 若跳过它去结算后面的周，额度链（`currentQuota` → 本周 `nextWeekTC` → 下下周 `weekTC`）
  *   就会用错误的前序额度算下去，错得很安静。
- * 推迟的代价只是「本周额度暂时还停在上一次结算的值」，而那一天一旦结算完，滚动会自然继续。
+ *
+ * **推迟是有意的取舍，不是疏忽**：被罚的那一周，其缩水后的额度会**晚一点**才生效 ——
+ * 在新的一周里，`nightPending` 没清完之前，本周仍按配置额度运行；等上一周最后一个
+ * `nightPending` 清掉，滚动立即补上，额度随即收敛到正确值。我们**宁可要一个有界、
+ * 能自愈的延迟，也不要一个安静的账本错误** —— 未来的读者必须能看出这是选择，不是 bug。
+ * 闭环由调用方负责：`commitDaySettlement` 与 `confirmNight` 每次清 `nightPending` 后
+ * 都会重跑 `rolloverMoneyWeek`，所以推迟最多持续到「下一个能清标记的日子」，不会拖到重启。
  *
  * 中间没有任何数据的周按空周结算（`spentTC = 0`）：`[].some(...) === false` 是假言真值，
  * 所以「一个记录都没有的周」无需任何特判就会走原路径。
@@ -407,8 +417,9 @@ export function ensureWeekRollover(state: MoneyState, today: string): MoneyState
     const weekEnd = dateKey(addDays(cursor, 6))
     // 日账本按 date 升序，日期键可直接字典序比区间
     const days = state.days.filter((day) => day.date >= weekStart && day.date <= weekEnd)
-    // 还有没结算的日 → 整周推迟，且不再往后补（见函数头注释）
-    if (days.some((day) => day.settledAt === null)) break
+    // 还有没结算的日、或还有深夜待补记 → 整周推迟，且不再往后补（见函数头注释）。
+    // 深夜待补记这一条是刻意的：早结算会让周日 23:30 之后的事永远进不了周快照。
+    if (days.some((day) => day.settledAt === null || day.nightPending)) break
     const settlement = settleWeek({
       weekStart,
       weekEnd,
