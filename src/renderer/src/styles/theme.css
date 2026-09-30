@@ -2757,6 +2757,103 @@ body {
   }
 }
 
+/* ---------- mine page ---------- */
+
+/*
+ * 页面骨架：分组标题 + 分组容器 + 行。
+ * 刻意只给"一列卡片"的最低限度版式 —— 金钱组的卡片栅格是 Task 7 的事，
+ * 在这里预设 12 栏会与那边打架。
+ */
+.mine-group {
+  margin-bottom: 24px;
+}
+
+.mine-group-title {
+  margin: 0 0 10px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.mine-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+.mine-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  min-height: 52px;
+  padding: 12px 16px;
+}
+
+.mine-row-label {
+  font-size: 14px;
+  color: var(--text);
+}
+
+.mine-row-value {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+/*
+ * 开关：button[role=switch]，轨道 + 滑块。
+ * 46 × 26 是轨道尺寸，滑块 18px、四周各留 3px（46 − 2×1 边框 − 2×3 − 18 = 20，
+ * 正是位移量），所以开态的 translateX 必须与这几个数字同改。
+ */
+.mine-switch {
+  position: relative;
+  flex: none;
+  width: 46px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--card);
+  cursor: pointer;
+  transition: background 0.18s ease, border-color 0.18s ease;
+}
+
+.mine-switch.on {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.mine-switch-knob {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.18s ease;
+}
+
+.mine-switch.on .mine-switch-knob {
+  transform: translateX(20px);
+}
+
+.mine-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 28px;
+  transform: translateX(-50%);
+  background: var(--panel);
+  border: 1px solid var(--accent);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 9px 16px;
+  font-size: 13px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  z-index: 80;
+  animation: toast-in 0.2s ease-out;
+}
+
 @media (min-width: 768px) and (max-width: 1023px) {
   .sidebar {
     --sidebar-gap: 18px;
@@ -2939,7 +3036,7 @@ body {
   .nav {
     height: 100%;
     display: grid;
-    /* 五列：四个页面 + 一个外观设置入口。见 Sidebar.tsx 的说明 */
+    /* 五列：五个页面（外观入口在手机档隐藏）。见 Sidebar.tsx 的说明 */
     grid-template-columns: repeat(5, minmax(0, 1fr));
     gap: 2px;
   }
@@ -2950,8 +3047,7 @@ body {
    * 等于 grid 一格的步长，等分时不需要知道任何像素值——换列数只需改这里的分母。
    * 五列时 4 个间隙共 8px。
    *
-   * --nav-index 只由页面项给出（0~3），因此指示块永远不会滑到第五格
-   * （外观设置入口那一格）。
+   * --nav-index 由页面项给出（0~4），桌面端与手机端都由它驱动指示块。
    */
   .nav-indicator {
     display: block;
@@ -3112,7 +3208,8 @@ body {
     overflow-y: auto;
   }
 
-  .review-toast {
+  .review-toast,
+  .mine-toast {
     bottom: calc(20px + var(--mobile-nav-height) + env(safe-area-inset-bottom));
     max-width: calc(100vw - 32px);
     text-align: center;

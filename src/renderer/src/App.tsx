@@ -5,6 +5,7 @@ import GoalsPage from './pages/GoalsPage'
 import QuadrantPage from './pages/QuadrantPage'
 import WeeklyPage from './pages/WeeklyPage'
 import ReviewPage from './pages/ReviewPage'
+import MinePage from './pages/MinePage'
 import { installInertialScroll } from './lib/inertialScroll'
 import { useAppStore, type Page } from './state/appStore'
 import LoginPage from './pages/LoginPage'
@@ -12,7 +13,7 @@ import { subscribeSyncNotices, supabase } from './lib/cloudSync2'
 import { flushPendingSave } from './lib/scheduleSave'
 import { readSyncMeta } from './lib/syncMeta'
 
-const PAGE_ORDER: Page[] = ['goals', 'quadrant', 'weekly', 'review']
+const PAGE_ORDER: Page[] = ['goals', 'quadrant', 'weekly', 'review', 'mine']
 
 export default function App(): JSX.Element {
   const isDesktop = Boolean((window as any).quadrantApi)
@@ -100,6 +101,7 @@ export default function App(): JSX.Element {
           {page === 'quadrant' && <QuadrantPage />}
           {page === 'weekly' && <WeeklyPage />}
           {page === 'review' && <ReviewPage />}
+          {page === 'mine' && <MinePage />}
         </div>
       </main>
       {pendingPage && (

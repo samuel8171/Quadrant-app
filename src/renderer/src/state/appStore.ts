@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import type {
   AppData,
   CloudMeta,
+  MoneyState,
   Quadrant,
   QuadrantEvent,
   ReviewDraft,
@@ -9,6 +10,8 @@ import type {
   WeekPreset
 } from '../../../shared/types'
 import { defaultData, isEmptyData } from '../../../shared/defaults'
+import { dateKey } from '../../../shared/dateKey'
+import { DEFAULT_MONEY_CONFIG, ensureWeekRollover } from '../../../shared/money'
 import * as eventRules from '../lib/eventRules'
 import * as goalRules from '../lib/goalRules'
 import * as quadrantSync from '../lib/quadrantSync'
@@ -40,7 +43,7 @@ import {
   shouldPushOnStartup
 } from '../lib/syncMeta'
 
-export type Page = 'goals' | 'quadrant' | 'weekly' | 'review'
+export type Page = 'goals' | 'quadrant' | 'weekly' | 'review' | 'mine'
 
 export interface CloudInspect {
   ok: boolean
@@ -119,6 +122,8 @@ interface AppState {
   discardReviewDraft: () => void
   requestPage: (page: Page) => void
   resolveLeave: (action: 'save' | 'discard' | 'cancel') => void
+  setMoneyEnabled: (enabled: boolean) => void
+  rolloverMoneyWeek: () => void
 }
 
 let clipboard: QuadrantEvent | null = null
@@ -223,6 +228,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     // 先把本地数据渲染出来，云端对账放到后面——网络慢时首屏不该等它。
     const data = await getPlatformApi().loadData()
     set({ data, loaded: true })
+    // 本地可能已经跨了若干个周（上次打开是很久以前），补齐周结算。桌面端也要跑。
+    get().rolloverMoneyWeek()
     if (isDesktopRuntime()) return
     await reconcileWithCloud()
   },
@@ -286,6 +293,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     // 表现为"同步过的东西过一会儿自己变回去了"。
     set({ data })
     void getPlatformApi().saveData(data)
+    // 云端那份可能是在另一个设备上、跨了周才写下的，落地后立刻补一次周结算。
+    get().rolloverMoneyWeek()
   },
 
   setPage: (page) => set({ page }),
@@ -640,6 +649,45 @@ export const useAppStore = create<AppState>((set, get) => ({
     const data = { ...get().data, events }
     saveSoon(data)
     set({ data })
+  },
+
+  /**
+   * 金钱系统的总开关。
+   *
+   * **首次开启必须写一份完整的 `MoneyState`**：网页端的校验器要求四个顶层字段
+   * 齐全、`config` 十个键齐全，否则**整份 `AppData` 都会被判非法**，
+   * `loadData()` 随之回退到 `defaultData()` —— 用户的目标与事件会被无声清空。
+   * 所以 `config` 直接引用 `DEFAULT_MONEY_CONFIG`，不手抄字面量（抄一份就会漂移）。
+   *
+   * **关闭只翻 `enabled`**：`days` / `weeks` 原样保留（spec 4.3）。
+   * 关一下开关不该等于把账本删了 —— 那是不可逆的。
+   */
+  setMoneyEnabled: (enabled) => {
+    const current = get().data
+    // 从未启用过又要关：没有可改的状态，不凭空写出一份空账本。
+    if (!current.money && !enabled) return
+    const money: MoneyState = current.money
+      ? { ...current.money, enabled }
+      : { enabled: true, config: DEFAULT_MONEY_CONFIG, days: [], weeks: [] }
+    const data = { ...current, money }
+    saveSoon(data)
+    set({ data })
+  },
+
+  /**
+   * 补齐跨周结算（spec 7.5）。未启用时是空操作。
+   *
+   * `ensureWeekRollover` 在没有待补的周时**原对象返回**，据此短路：
+   * 既省掉一次无意义的落盘，也避免每次冷启动都白写一遍同步元信息。
+   */
+  rolloverMoneyWeek: () => {
+    const data = get().data
+    if (data.money?.enabled !== true) return
+    const money = ensureWeekRollover(data.money, dateKey(new Date()))
+    if (money === data.money) return
+    const next = { ...data, money }
+    saveSoon(next)
+    set({ data: next })
   },
 
   saveNow: () => {

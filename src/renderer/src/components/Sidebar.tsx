@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { CalendarDays, Cloud, CloudUpload, Grid2x2, Palette, RefreshCcw, Target } from 'lucide-react'
+import { CalendarDays, Cloud, CloudUpload, Grid2x2, Palette, RefreshCcw, Target, User } from 'lucide-react'
 import type { Page } from '../state/appStore'
 import { useAppStore } from '../state/appStore'
 import ConfirmDialog from './ConfirmDialog'
@@ -13,7 +13,8 @@ const NAV: { page: Page; label: string; icon: typeof Target }[] = [
   { page: 'goals', label: '目标', icon: Target },
   { page: 'quadrant', label: '四象限', icon: Grid2x2 },
   { page: 'weekly', label: '周计划', icon: CalendarDays },
-  { page: 'review', label: '周日复盘', icon: RefreshCcw }
+  { page: 'review', label: '周日复盘', icon: RefreshCcw },
+  { page: 'mine', label: '我的', icon: User }
 ]
 
 interface PendingConfirm {
@@ -146,12 +147,18 @@ export default function Sidebar(): JSX.Element {
           </button>
         ))}
         {/*
-         * 外观设置入口。放在 .nav 内部而不是另起一块：手机端底部 nav 是
-         * 五等分的 grid，多一个元素在 grid 外就会掉到第二行、溢出 66px 高的 dock。
+         * 外观设置入口。**手机档整条隐藏**（desktop-only）：竖屏的底部 dock 是
+         * 五等分的 grid，五格已经被五个页面占满，再挤一个入口就会掉到第二行、
+         * 溢出 66px 高的 dock。外观设置本身也需要宽屏才能预览，竖屏给不了。
+         *
+         * 判据跟着**版式档位**而不是设备：本项目唯一的断点按宽度（767px），
+         * 手机横屏超过它、拿到的是桌面版式，入口自然就回来了 —— 所以这里
+         * 既不需要 orientation 媒体查询，也不需要 matchMedia。
+         *
          * 它不参与 --nav-index（那不是页面项），因此永远不显示激活态。
          */}
         <button
-          className="nav-item appearance-button"
+          className="nav-item appearance-button desktop-only"
           onClick={() => setAppearanceOpen(true)}
           title="外观设置"
         >
