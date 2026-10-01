@@ -1,21 +1,10 @@
 import type { MoneyStats } from '../../../../shared/money'
 import MoneyIcon from '../money/MoneyIcon'
+import { formatMoney as fmt } from './formatMoney'
 import WidgetShell from './WidgetShell'
 
 interface Props {
   stats: MoneyStats
-}
-
-/**
- * 时币是整数、娱币以 0.5 为步长，所以非整数补一位小数就够了。
- *
- * **先四舍五入到一位小数再判整**，不是直接判整：额度是 `配置值 × 档位系数` 算出来的，
- * 而 `350 × 0.7` 在二进制里是 `244.99999999999997` —— 直接判整会显示成 "245.0"，
- * 又丑又误导。四舍五入到一位小数先把这点浮点尘埃清掉。
- */
-const fmt = (n: number): string => {
-  const rounded = Math.round(n * 10) / 10
-  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1)
 }
 
 /**

@@ -9,6 +9,12 @@
   --accent: #4da3ff;
   --success: #66bb6a;
   --danger: #e5484d;
+  /*
+   * 娱币荧光折线的**淡粉色**（spec R2 §7 第 3 项：「蓝色荧光 + 淡粉色荧光折线趋势图」）。
+   * 设计令牌里没有粉色、也造不出一档「淡粉」的既有色，所以这是 R2-I 唯一新增的字面色 ——
+   * 只给这一条趋势线用，不扩散成新色板。
+   */
+  --money-trend-lt: #ff9ecb;
   --radius-sm: 6px;
   --radius-md: 10px;
   --radius-lg: 12px;
@@ -3089,59 +3095,87 @@ body {
   fill: var(--accent);
 }
 
-/* ---- 手写图表 ---- */
+/* ---- 手写图表：荧光折线趋势（spec R2 §7 第 3 项）---- */
 
-.money-chart {
+/*
+ * 荧光 = **双层描边**：下面一条更宽、半透明、被 `feGaussianBlur` 糊开的线做光晕，
+ * 上面压一条细实线保证锐利。**不用渐变**（项目禁用）、**不用 `box-shadow`**
+ * （折线不是矩形元素，`box-shadow` 无从谈起）。颜色由 `--trend` 承接：
+ * tc = 蓝（既有令牌 `--accent`），lt = 淡粉（新增令牌 `--money-trend-lt`）。
+ *
+ * 光晕**显式裁在 SVG 框内**（下面那行 `overflow: hidden` 不是 UA 默认，实测是 `visible`）：
+ * `TrendChart` 又把绘图区上下各留了内边距、光晕半径只有几像素，所以裁边不会切到光晕；
+ * 而 SVG 框本身离卡片外沿还有 16px 内边距，荧光因此渗不到相邻卡片（验收实测缝里零线色）。
+ */
+.money-trend {
   display: block;
   width: 100%;
   height: auto;
+  overflow: hidden;
 }
 
-.money-bar {
-  fill: var(--accent);
+.money-trend-tc {
+  --trend: var(--accent);
 }
 
-.money-bar.over {
-  fill: var(--danger);
+.money-trend-lt {
+  --trend: var(--money-trend-lt);
 }
 
-/* 日额度基准线：虚线，与柱子区分开 */
-.money-baseline {
+.money-trend-glow,
+.money-trend-line {
+  fill: none;
+  stroke: var(--trend);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* 光晕层：宽、半透明、被 filter 糊开。 */
+.money-trend-glow {
+  stroke-width: 5;
+  stroke-opacity: 0.5;
+}
+
+/* 实线层：细、不透明，压在光晕之上，保证线本身不被光晕洗掉。 */
+.money-trend-line {
+  stroke-width: 2;
+}
+
+/* 顶点小圆点：帮读者数清七天，不参与光晕。 */
+.money-trend-dot {
+  fill: var(--trend);
+}
+
+/* 日额度基准线：虚线，与趋势线区分开。 */
+.money-trend-cap {
   stroke: var(--text-secondary);
   stroke-width: 1.5;
   stroke-dasharray: 5 4;
 }
 
 /*
- * 热力 4 档：0 = 空槽（仍是可见的方格），1/2 = 同一强调色的两档透明度，
- * 3 = 超过日软上限，与柱状图的警示柱同色。透明度而不是新颜色 —— 设计令牌里
- * 没有中间色阶，新造一个就等于多一套色板。
+ * 入场只做透明度淡入，**不做描边描线动画**：`polyline` 的 `pathLength` 并非所有
+ * 引擎都让 `stroke-dasharray` 尊重，画错会得到一条断线 —— 宁可要一个稳的淡入。
+ *
+ * **整块包在 `no-preference` 里**：系统开了「减弱动态效果」时一行动画都不挂。
  */
-.money-heat {
-  stroke: var(--border);
-  stroke-width: 1;
+@keyframes money-trend-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
-.money-heat-0 {
-  fill: var(--card);
-}
-
-.money-heat-1 {
-  fill: var(--accent);
-  fill-opacity: 0.35;
-}
-
-.money-heat-2 {
-  fill: var(--accent);
-  fill-opacity: 0.7;
-}
-
-.money-heat-3 {
-  fill: var(--danger);
+@media (prefers-reduced-motion: no-preference) {
+  .money-trend {
+    animation: money-trend-in 0.5s ease-out both;
+  }
 }
 
 /*
- * 文字轴与图表的 7 等分对齐：图表里每天的格子/柱子都居中于 viewBox 的 1/7，
+ * 文字轴与图表的 7 等分对齐：图表里每天的点都居中于 viewBox 的 1/7，
  * 这里也用 7 等分网格，两边因此天然对齐，不靠手算留白。
  */
 .money-axis {

@@ -2,11 +2,11 @@ import { useMemo, useState } from 'react'
 import { dateKey } from '../../../shared/dateKey'
 import { selectMoneyStats } from '../../../shared/money'
 import BalanceWidget from '../components/mine/BalanceWidget'
-import DailyHeatWidget from '../components/mine/DailyHeatWidget'
+import LeisureTrendWidget from '../components/mine/LeisureTrendWidget'
 import NightWidget from '../components/mine/NightWidget'
 import PenaltyWidget from '../components/mine/PenaltyWidget'
 import QualityWidget from '../components/mine/QualityWidget'
-import WeeklySpendWidget from '../components/mine/WeeklySpendWidget'
+import TimeCoinTrendWidget from '../components/mine/TimeCoinTrendWidget'
 import { useAppStore } from '../state/appStore'
 
 /**
@@ -64,13 +64,14 @@ export default function MinePage(): JSX.Element {
             DOM 顺序 = 屏幕顺序：两个 hero（双币余额、惩罚预告）在前，四个小卡随后。
             桌面端靠这条顺序自动排成「hero 占满第一行、四张小卡占满第二行」，
             手机档（单列）也就自然把最重要的两个排在最上面 —— 不需要第二套排布规则。
+            四张小卡里的前两张是 R2-I 的荧光折线（时币蓝 / 娱币淡粉），取代了旧的柱状图与热力格。
           */}
           {stats && (
             <div className="money-grid">
               <BalanceWidget stats={stats} />
               <PenaltyWidget stats={stats} />
-              <WeeklySpendWidget stats={stats} />
-              <DailyHeatWidget stats={stats} />
+              <TimeCoinTrendWidget stats={stats} />
+              <LeisureTrendWidget stats={stats} />
               <NightWidget stats={stats} />
               <QualityWidget stats={stats} />
             </div>

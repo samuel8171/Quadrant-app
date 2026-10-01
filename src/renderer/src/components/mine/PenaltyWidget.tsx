@@ -1,4 +1,5 @@
 import type { MoneyStats } from '../../../../shared/money'
+import { formatMoney as fmt } from './formatMoney'
 import WidgetShell from './WidgetShell'
 
 interface Props {
@@ -7,16 +8,6 @@ interface Props {
 
 /** 与 `PenaltyTier` 的下标一一对应。 */
 const TIER_LABELS = ['无惩罚', '轻度', '中度', '重度'] as const
-
-/**
- * 先四舍五入到一位小数再判整：`nextWeekTC = config.weeklyTC × 档位系数`，
- * 而 `350 × 0.7` 在二进制里是 `244.99999999999997` —— 直接判整会显示成 "245.0"。
- * 见 BalanceWidget 里同名函数的注释。
- */
-const fmt = (n: number): string => {
-  const rounded = Math.round(n * 10) / 10
-  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1)
-}
 
 /**
  * 组件 6（hero）：惩罚预告。

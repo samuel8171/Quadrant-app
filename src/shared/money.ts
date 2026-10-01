@@ -789,7 +789,7 @@ const WEEKDAY_LABELS = ['一', '二', '三', '四', '五', '六', '日']
  *
  * 每个字段都是**派生**值，没有一个落盘 —— 这正是 `MoneyState` 刻意不设 `balance` 的原因
  * （见 `currentQuota`）：额度与余额永远现算，就不可能和账本不一致。
- * 单条日统计里也没有 `balance`：只有 `spentTC` / `limit` / `ratio`。
+ * 单条日统计里也没有 `balance`：只有 `spentTC` / `limit` / `ratio` / `spentLT`。
  */
 export interface MoneyStats {
   /** 本周周一（'YYYY-MM-DD'）。 */
@@ -806,8 +806,21 @@ export interface MoneyStats {
   spentLT: number
   /** 本周剩余娱币，恒等于 `weekLT + spentLT`。 */
   remainingLT: number
-  /** 周一~周日**恒 7 项**，缺席的日按零花计。 */
-  daily: { date: string; weekday: string; spentTC: number; limit: number; ratio: number }[]
+  /**
+   * 周一~周日**恒 7 项**，缺席的日按零花计。
+   *
+   * `spentLT` 是该日娱币**净变化**（奖励为正、惩罚为负），与本周合计 `spentLT` 同源
+   * （已结算日读冻结快照，未结算日按条目现算并叠加两条纯消费）—— 是**视图模型字段**，
+   * 不落盘、不新增 `LedgerDay` 字段。图表（spec R2 §7 第 3 项）靠它画娱币趋势折线。
+   */
+  daily: {
+    date: string
+    weekday: string
+    spentTC: number
+    limit: number
+    ratio: number
+    spentLT: number
+  }[]
   /** 本周深夜做事总分钟数。 */
   nightMin: number
   /** 深夜分钟数占本周实际做事分钟数的比例（0~1；本周没有做事时为 0）。 */
@@ -939,7 +952,10 @@ export function selectMoneyStats(money: MoneyState, today: string): MoneyStats {
       spentTC: daySpent,
       limit,
       // limit 为 0 时不许出现 Infinity / NaN：无额度可谈，比例取 0
-      ratio: limit > 0 ? daySpent / limit : 0
+      ratio: limit > 0 ? daySpent / limit : 0,
+      // 娱币趋势的数据源：就是循环里已在算的 `dayDelta`（与本周 spentLT 同源），
+      // 不另写第三套推导 —— 否则「折线」与「合计」会对不上。
+      spentLT: dayDelta
     })
     spentTC += daySpent
     spentLT += dayDelta

@@ -1592,7 +1592,14 @@ describe('selectMoneyStats', () => {
       'weekStart',
       'weekTC'
     ])
-    expect(Object.keys(stats.daily[0]).sort()).toEqual(['date', 'limit', 'ratio', 'spentTC', 'weekday'])
+    expect(Object.keys(stats.daily[0]).sort()).toEqual([
+      'date',
+      'limit',
+      'ratio',
+      'spentLT',
+      'spentTC',
+      'weekday'
+    ])
   })
 
   it('未结算的日：钱按条目现算，与当天的质量计数同源', () => {
@@ -1657,6 +1664,58 @@ describe('selectMoneyStats', () => {
 
     expect(stats.daily[2].spentTC).toBe(20)
     expect(stats.daily[3].limit).toBe(80)
+  })
+})
+
+// ============================================================================
+// Task R2-I：每日娱币（「我的」页娱币趋势折线图的数据源）
+// ============================================================================
+
+/**
+ * `MoneyStats.daily` 新增的 `spentLT` 是**视图模型字段**，不落盘（无 `LedgerDay` 改动）。
+ * 它必须与本周合计 `spentLT` **同源**：已结算日读冻结快照、未结算日按条目现算并叠加两条
+ * 纯消费 —— 也就是复用循环里已经在算的 `dayDelta`，绝不能再写第三套推导。
+ * 下面四条把两种日状态各钉一次，并堵住空周产出 NaN 的可能。
+ */
+describe('selectMoneyStats · 每日娱币 spentLT', () => {
+  it('已结算日读冻结快照：周二 −0.5、周三 0，逐日之和等于本周 spentLT', () => {
+    const stats = selectMoneyStats(moneyWithTwoSettledDays, TODAY)
+
+    // 周二：一条没做 −1、一条按计划完成 +0.5 ⇒ −0.5；周三：恰好 1.5 倍 ⇒ 0
+    expect(stats.daily[1].spentLT).toBeCloseTo(-0.5)
+    expect(stats.daily[2].spentLT).toBe(0)
+    expect(stats.daily.reduce((sum, d) => sum + d.spentLT, 0)).toBeCloseTo(stats.spentLT)
+  })
+
+  it('未结算日按条目现算，且叠加两条纯消费（与合计同一套推导）', () => {
+    // 条目：恰好 1.5 倍 ⇒ 娱币 0；刷视频 30 分钟 ⇒ −0.5。合计应与该日逐字相等。
+    const wed = unsettledDay('2026-09-30', [
+      mkEntry({ kind: 'planned', plannedMin: 60, actualMin: 90, done: true })
+    ])
+    const stats = selectMoneyStats(
+      mkMoney([{ ...wed, videoMin: 30 }]),
+      TODAY
+    )
+
+    expect(stats.daily[2].spentLT).toBeCloseTo(-0.5)
+    expect(stats.spentLT).toBeCloseTo(-0.5)
+  })
+
+  it('未结算日的 spentLT 与「先结算再读快照」给出同一个值', () => {
+    const entry = mkEntry({ kind: 'planned', plannedMin: 60, actualMin: 0, done: false }) // −1
+    const settled = selectMoneyStats(mkMoney([settledDay('2026-09-30', [entry])]), TODAY)
+    const unsettled = selectMoneyStats(mkMoney([unsettledDay('2026-09-30', [entry])]), TODAY)
+
+    expect(unsettled.daily[2].spentLT).toBe(settled.daily[2].spentLT)
+    expect(unsettled.daily[2].spentLT).toBeCloseTo(-1)
+  })
+
+  it('空周：七天 spentLT 全为 0 且有限，不是 NaN', () => {
+    const stats = selectMoneyStats(mkMoney([]), TODAY)
+
+    expect(stats.daily.map((d) => d.spentLT)).toEqual([0, 0, 0, 0, 0, 0, 0])
+    expect(stats.daily.every((d) => Number.isFinite(d.spentLT))).toBe(true)
+    expect(Number.isFinite(stats.spentLT)).toBe(true)
   })
 })
 
