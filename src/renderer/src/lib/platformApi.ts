@@ -115,12 +115,25 @@ function validOptionalMinutes(value: unknown): boolean {
   return value === undefined || isFiniteNumber(value)
 }
 
+/**
+ * `isRestDay`（休息日申报）同样是**可选**字段：一旦存在就必须是布尔，缺席放行。
+ * 与 `validPhotos` / `validOptionalMinutes` 同一套宽严标准（「可选，但存在即严格」）。
+ *
+ * 缺席只意味着「这条记录产生于本字段之前」—— 那时还没有休息日这条路，
+ * 所以缺席的唯一安全解释就是 `false`。判它非法会让 `loadData` 的第二档把用户**整份账本**
+ * 静默丢掉，代价与收益不成比例（理由与 `validOptionalMinutes` 逐字相同）。
+ */
+function validOptionalBoolean(value: unknown): boolean {
+  return value === undefined || typeof value === 'boolean'
+}
+
 function validLedgerDay(value: unknown): boolean {
   if (!isRecord(value)) return false
   if (!isDateKey(value.date)) return false
   if (value.settledAt !== null && typeof value.settledAt !== 'string') return false
   if (typeof value.nightPending !== 'boolean') return false
   if (!validOptionalMinutes(value.videoMin) || !validOptionalMinutes(value.gameMin)) return false
+  if (!validOptionalBoolean(value.isRestDay)) return false
   if (!isFiniteNumber(value.dayLimit) || !isFiniteNumber(value.spentTC)) return false
   if (!isFiniteNumber(value.overdraft) || !isFiniteNumber(value.deltaLT)) return false
   return Array.isArray(value.entries) && value.entries.every(validLedgerEntry)

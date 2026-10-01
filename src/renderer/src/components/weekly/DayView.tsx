@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ArrowLeft, ChevronLeft, ChevronRight, Plus } from 'lucide-react'
+import { ArrowLeft, Check, ChevronLeft, ChevronRight, Plus } from 'lucide-react'
 import type { WeekEvent } from '../../../../shared/types'
 import ConfirmDialog from '../ConfirmDialog'
 import GlassSurface from '../glass/GlassSurface'
@@ -34,6 +34,11 @@ interface Props {
   date: Date
   onBack: () => void
   onShiftDay: (n: number) => void
+  /**
+   * 只在日结的**分支 B**（无计划之日去补计划）期间传入：它让顶栏右上角出现「完成」，
+   * 点它回到日结页（spec R2 §4.3）。正常浏览日视图时缺省 —— 顶栏不多出按钮。
+   */
+  onComplete?: () => void
   className?: string
   slideClass?: string
   onAnimationEnd?: React.AnimationEventHandler<HTMLDivElement>
@@ -75,6 +80,7 @@ export default function DayView({
   date,
   onBack,
   onShiftDay,
+  onComplete,
   className,
   slideClass,
   onAnimationEnd
@@ -373,6 +379,13 @@ export default function DayView({
           <Plus size={16} />
           添加
         </button>
+        {/* 日结分支 B 的出口，用户指定放右上角；只在补计划期间渲染（见 Props.onComplete）。 */}
+        {onComplete && (
+          <button className="day-done-btn" onClick={onComplete}>
+            <Check size={16} />
+            完成
+          </button>
+        )}
       </div>
       <div className={`day-body ${slideClass ?? ''}`} key={dayKey}>
         <div className="day-scroll" ref={scrollRef}>

@@ -183,7 +183,11 @@ function normalizeLedgerDay(raw: unknown): LedgerDay | null {
     spentTC: raw.spentTC,
     overdraft: raw.overdraft,
     deltaLT: raw.deltaLT,
-    nightPending: raw.nightPending
+    nightPending: raw.nightPending,
+    // `isRestDay` 与本字段之前的旧记录的关系同 `videoMin` / `gameMin`：缺席是合法的，
+    // 一律按 false（「不是休息日」）补齐，而不是判空即 `return null` 丢掉整个旧日账本。
+    // 非布尔同样回退 false：布尔快照字段没法像数字那样「修复成有限值」，只能取唯一安全的默认。
+    isRestDay: raw.isRestDay === true
   }
 }
 

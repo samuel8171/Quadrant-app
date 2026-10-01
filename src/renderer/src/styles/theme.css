@@ -1231,6 +1231,7 @@ body {
 .back-btn:focus-visible,
 .day-nav-btn:focus-visible,
 .day-add-btn:focus-visible,
+.day-done-btn:focus-visible,
 .review-btn:focus-visible,
 .streak-value:focus-visible {
   outline: 2px solid var(--accent);
@@ -1812,6 +1813,30 @@ body {
 
 .day-add-btn:hover {
   filter: brightness(1.08);
+}
+
+/*
+ * 日结分支 B 的「完成」按钮（无计划之日去时间轴补计划时的出口，用户指定放右上角）。
+ * 相邻的「添加」已占实心 accent，再做一颗实心会互相抢注意力：一个说「再加一块」，
+ * 一个说「这一步做完了」。所以完成用描边式的次要形态。
+ */
+.day-done-btn {
+  margin-left: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--accent);
+  background: transparent;
+  color: var(--accent);
+  font-weight: 600;
+  border-radius: var(--radius-sm);
+  padding: 6px 12px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.day-done-btn:hover {
+  background: var(--card);
 }
 
 .day-body {
@@ -3365,6 +3390,62 @@ body {
   color: var(--text-secondary);
 }
 
+/*
+ * 无计划之日的两条路（spec R2 §4.3）：休息日 / 去这天的时间轴补计划。
+ * 用虚线边框把它和「①②③ 三问」区分开 —— 它不是一问，而是这一天在问之前先要选的路。
+ */
+.settle-branch {
+  padding: 12px 14px;
+  background: var(--card);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-md);
+}
+
+.settle-branch-hint {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.settle-branch-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.settle-rest {
+  padding: 8px 14px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: #fff;
+  background: var(--accent);
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.settle-rest:hover {
+  filter: brightness(1.08);
+}
+
+.settle-gobackfill {
+  padding: 8px 14px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--accent);
+  background: transparent;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.settle-gobackfill:hover {
+  background: var(--panel);
+}
+
 .settle-rows {
   display: flex;
   flex-direction: column;
@@ -3630,6 +3711,14 @@ body {
   cursor: pointer;
 }
 
+/*
+ * 无计划之日没有「那天我什么都没做」按钮，提交按钮得自己顶上右侧的位置
+ * （`:first-of-type` 只在它前面没有同类按钮时命中，所以有计划的日子布局逐字节不变）。
+ */
+.settle-commit:first-of-type {
+  margin-left: auto;
+}
+
 @media (max-width: 767px) {
   .settle-card {
     margin: calc(14px + var(--safe-top)) 20px 0;
@@ -3664,6 +3753,22 @@ body {
   .settle-commit {
     width: 100%;
     margin-left: 0;
+  }
+
+  /* 手机档是纵向铺满的列，上面那条「顶到右侧」的规则在这里没有意义（且特异性更高，必须显式压回）。 */
+  .settle-commit:first-of-type {
+    margin-left: 0;
+  }
+
+  .settle-branch-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .settle-rest,
+  .settle-gobackfill {
+    width: 100%;
+    text-align: center;
   }
 
   .settle-nothing {
@@ -4168,6 +4273,7 @@ body {
   .back-btn,
   .day-nav-btn,
   .day-add-btn,
+  .day-done-btn,
   .review-btn,
   .modal-btn,
   .add-group-btn,
@@ -4316,6 +4422,13 @@ body {
   }
 
   .day-add-btn {
+    flex: none;
+    white-space: nowrap;
+    padding: 7px 10px;
+  }
+
+  /* 补计划期间顶栏会同时出现「添加」与「完成」：两者都压到最紧凑，把宽度留给日期。 */
+  .day-done-btn {
     flex: none;
     white-space: nowrap;
     padding: 7px 10px;

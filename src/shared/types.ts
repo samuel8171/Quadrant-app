@@ -212,6 +212,17 @@ export interface LedgerDay {
   deltaLT: number
   /** 深夜补记是否仍待确认。 */
   nightPending: boolean
+  /**
+   * 当日是否被**主动申报为休息日**（spec R2 §4.3 / §9.2）。
+   *
+   * 休息日是「没有安排计划的那一天」里的一条分支：固定扣 `dailyCapTC × restDayFactor`
+   * （默认 64）、娱币不动、条目恒为空。它与「逾期未结算的放弃日」不同 —— 放弃日是**未申报**
+   * 的满额全扣（80），休息日是**主动申报**的折扣（64），两者由 `spentTC` 的数值区分。
+   *
+   * **本字段加入之前**的旧记录没有它，一律按 `false`（「不是休息日」）处理：
+   * 旧记录只可能来自正常结算路径，那些日子要么有计划、要么压根没被结算过。
+   */
+  isRestDay: boolean
 }
 
 export type PenaltyTier = 0 | 1 | 2 | 3

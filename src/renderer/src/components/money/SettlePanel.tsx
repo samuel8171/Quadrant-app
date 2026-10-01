@@ -13,7 +13,8 @@ import {
   leisureDelta,
   nightMinutesOf,
   openNightsBefore,
-  pendingDays
+  pendingDays,
+  restDayCost
 } from '../../../../shared/money'
 import { QUADRANT_META } from '../../lib/quadrantMath'
 import { useAppStore } from '../../state/appStore'
@@ -32,6 +33,10 @@ import { useAppStore } from '../../state/appStore'
  * 面板**不玻璃化**（不加 `.gs-*`、不加 `backdrop-filter`）：普通面板色 + `var(--border)`
  * 已经够用，而每新增一个玻璃材质宿主都要重新满足「祖先链上不能有 fixed / sticky /
  * 非 auto 的 z-index」这条约束，本项目为此返工过多次（见 spec 12.4）。
+ *
+ * **无计划之日另给两条路**（spec R2 §4.3）：这类日子不显示「那天我什么都没做」，
+ * 而是给「休息日（固定扣 64）」与「去这一天的时间轴补计划」两个按钮（见 `DayForm` 的
+ * `settle-branch` 块）。
  */
 
 /** 面板里的一条待确认记录：计划内/计划外统一成同一种可编辑行。 */
@@ -169,6 +174,8 @@ interface DayFormProps {
   openNights: LedgerDay[]
   total: number
   onCommitted: () => void
+  /** 分支 B：跳到 `date` 那天的**时间轴**补计划（spec R2 §4.3，由宿主的日视图承接）。 */
+  onOpenDay: (date: string) => void
 }
 
 function DayForm({
@@ -178,11 +185,13 @@ function DayForm({
   config,
   openNights,
   total,
-  onCommitted
+  onCommitted,
+  onOpenDay
 }: DayFormProps): JSX.Element {
   const commitDaySettlement = useAppStore((s) => s.commitDaySettlement)
   const addUnplannedEntry = useAppStore((s) => s.addUnplannedEntry)
   const confirmNight = useAppStore((s) => s.confirmNight)
+  const markRestDay = useAppStore((s) => s.markRestDay)
 
   // 初始行只在本组件挂载时算一次 —— 外层用 `key={date}` 保证换一天就重挂载。
   const [rows, setRows] = useState<Row[]>(() => buildRows(day, events))
@@ -198,6 +207,15 @@ function DayForm({
   const extra = rows.filter((r) => r.kind === 'unplanned')
   const totalCost = rows.reduce((sum, r) => sum + rowCost(r, config), 0)
   const totalDelta = rows.reduce((sum, r) => sum + rowDelta(r, config), 0)
+  /**
+   * 这一天**有没有计划内的事件** —— 决定走哪条路（spec R2 §4.3 / §9.2）。
+   *
+   * `needed` 同时含「当天周计划里的事件」与「账本里已记录的计划内条目」，
+   * 两者都是「这一天被计划过」的证据，所以由它派生而不是只看 `events`。
+   */
+  const hasPlan = needed.length > 0
+  /** 休息日的固定扣款，从 config 现算（不写死 64）。 */
+  const restCost = restDayCost(config)
 
   const patchRow = (id: string, patch: Partial<Row>): void => {
     setRows((rs) => rs.map((r) => (r.id === id ? { ...r, ...patch } : r)))
@@ -289,8 +307,61 @@ function DayForm({
     onCommitted()
   }
 
+  /**
+   * 分支 A：把这一天**申报为休息日**并当场结算（spec R2 §4.3 / §9.2）。
+   *
+   * 与 `commitNothingDone` 同序：先把更早的未收尾深夜逐条答完，再结算当天 ——
+   * 顺序反了会让本周在周滚动冻结之后才被改动（见 `commitEntries` 的注释）。
+   * 休息日的 `nightPending` 由 `settleDay` 置为 false，因此它自己不是阻塞项。
+   *
+   * ⚠️ 休息日的契约是 `entries = []`：若用户在 ② 里已经记了计划外的事，再点这里会把它们
+   * **一并丢弃**（申报休息日 = 「这天什么都没做」，与「记了事」自相矛盾）。按钮文案在
+   * 这种情况下会当场把代价说出来，不让它变成一次静默的数据丢失。
+   */
+  const commitRestDay = (): void => {
+    answerOpenNights()
+    markRestDay(date)
+    onCommitted()
+  }
+
   return (
     <div className="settle-day">
+      {/*
+        * 无计划之日 = 两条路（spec R2 §4.3 / §9.2）。只在**这一天没有任何计划内事件**
+        * 时出现；有计划的日子仍走既有的逐条流程，一个字都不变。
+        *
+        * ⚠️ 与「那天我什么都没做」的**刻意不对称**，将来不要「顺手修正」：
+        * - 有计划的日子保留那条免费路（spentTC = 0），代价由娱币的 missPenaltyLT 出 ——
+        *   你承诺了却没做，娱币才是为「失约」付账的东西；
+        * - 没有计划的日子**不给**免费路：它的便宜路是申报休息日（固定 64）。
+        *   用户的原话把两者分得很清楚：休息日是「你烧掉了一份容量」，失约是「你破了承诺」。
+        * 所以这里不仅藏掉「什么都没做」，也藏掉空日的「结算」按钮 ——
+        * 少了后者，0 花费仍会从提交按钮漏出去，整条规则就形同虚设。
+        */}
+      {!hasPlan && (
+        <div className="settle-section settle-branch">
+          <h3 className="settle-section-title">这一天没有安排计划</h3>
+          <p className="settle-branch-hint">
+            休息日是「这天不安排、也没做事」的主动申报：固定扣 {restCost} 币、娱币不动。
+            不休息就去这一天的时间轴补上事件块；一个都不放也行，回来直接在下面记计划外的事。
+          </p>
+          <div className="settle-branch-actions">
+            <button type="button" className="settle-rest" onClick={commitRestDay}>
+              {`休息日（固定扣 ${restCost} 币${
+                extra.length > 0 ? `，丢弃已记的 ${extra.length} 条计划外事项` : ''
+              }）`}
+            </button>
+            <button
+              type="button"
+              className="settle-gobackfill"
+              onClick={() => onOpenDay(date)}
+            >
+              不休息，去这一天的时间轴
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="settle-section">
         <h3 className="settle-section-title">① 计划内的事</h3>
         {needed.length === 0 && <p className="settle-empty">这一天没有计划内的事件</p>}
@@ -457,14 +528,22 @@ function DayForm({
         <span className="settle-total">
           这一天：<b>{totalCost}</b> 币 · {signed(totalDelta)} LT
         </span>
-        <button type="button" className="settle-nothing" onClick={commitNothingDone}>
-          {needed.length > 0
-            ? `那天我什么都没做（计划内 ${needed.length} 条全记未完成，娱币 −${needed.length * config.missPenaltyLT}；深夜也记为空）`
-            : '那天我什么都没做（深夜也记为空）'}
-        </button>
-        <button type="button" className="settle-commit" onClick={commit}>
-          {total > 1 ? '结算这一天，下一天 →' : '结算这一天'}
-        </button>
+        {/* 免费路只留给「有计划却被放弃」的那一天，见上面分支块的注释。 */}
+        {hasPlan && (
+          <button type="button" className="settle-nothing" onClick={commitNothingDone}>
+            {`那天我什么都没做（计划内 ${needed.length} 条全记未完成，娱币 −${needed.length * config.missPenaltyLT}；深夜也记为空）`}
+          </button>
+        )}
+        {/*
+          * 空的无计划日**不显示**提交按钮：否则「直接提交」就是一条 0 花费的免费路，
+          * 与「休息日扣 64」的规则直接冲突。补了计划（hasPlan）或记了计划外的事（extra）
+          * 之后按钮才出现 —— 这也正是「不放事件块、直接完成、再在日结页添加事件与时间」的兜底。
+          */}
+        {(hasPlan || extra.length > 0) && (
+          <button type="button" className="settle-commit" onClick={commit}>
+            {total > 1 ? '结算这一天，下一天 →' : '结算这一天'}
+          </button>
+        )}
       </footer>
     </div>
   )
@@ -472,9 +551,11 @@ function DayForm({
 
 interface Props {
   onClose: () => void
+  /** 分支 B 的出口：请宿主把视图切到 `date` 那天的日视图（spec R2 §4.3）。 */
+  onOpenDay: (date: string) => void
 }
 
-export default function SettlePanel({ onClose }: Props): JSX.Element | null {
+export default function SettlePanel({ onClose, onOpenDay }: Props): JSX.Element | null {
   const money = useAppStore((s) => s.data.money)
   const weekEvents = useAppStore((s) => s.data.weekEvents)
   const today = dateKey(new Date())
@@ -521,6 +602,7 @@ export default function SettlePanel({ onClose }: Props): JSX.Element | null {
           openNights={openNights}
           total={pending.length}
           onCommitted={handleCommitted}
+          onOpenDay={onOpenDay}
         />
       </div>
     </div>

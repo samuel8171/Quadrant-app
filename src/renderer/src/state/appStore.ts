@@ -143,6 +143,8 @@ interface AppState {
   abandonExpiredLedgerDays: () => void
   /** 用 `entries` 结算 `date`（Task 8 的正向路径，快照只有这里能首次冻结）。 */
   commitDaySettlement: (date: string, entries: LedgerEntry[]) => void
+  /** 把 `date` 申报为**休息日**并当场结算（spec R2 §4.3 的分支 A，固定扣 64 币、娱币不动）。 */
+  markRestDay: (date: string) => void
   /** 把一条计划外条目追加进 `date`（未结算）的账本。 */
   addUnplannedEntry: (date: string, entry: LedgerEntry) => void
   /** 深夜补记：回写 `previousDate` 这一份**已结算**快照（全库唯一例外，见实现处注释）。 */
@@ -869,6 +871,36 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   /**
+   * 把一天申报为**休息日**并当场结算（spec R2 §4.3 的分支 A / §9.2）。
+   *
+   * 休息日是「没有安排计划的那一天」两条路里的那条便宜的：固定扣 `restDayCost(config)`
+   * （默认 `round(80 × 0.8) = 64`）、娱币不动、条目恒为空。它与 `commitDaySettlement` 走
+   * **同一个** `settleDay`，只是多传一个 `isRestDay: true` —— 没有旁路、没有第二套快照逻辑。
+   *
+   * 与 `commitDaySettlement` 同一道闸：已结算的日子直接拒绝（快照只许 `confirmNight` 改）。
+   * 结算完同样补一次周结算：休息日的 `nightPending` 为 false，所以这一天不会成为
+   * `ensureWeekRollover` 的阻塞项，被它挡住的周会在这里立刻补上。
+   */
+  markRestDay: (date) => {
+    const data = get().data
+    const money = data.money
+    if (money?.enabled !== true) return
+    if (money.days.find((d) => d.date === date)?.settledAt != null) return
+    const settled = settleDay({
+      date,
+      entries: [],
+      isRestDay: true,
+      previousOverdraft: carriedOverdraft(money, date),
+      settledAt: new Date().toISOString(),
+      config: money.config
+    })
+    const next = { ...data, money: { ...money, days: upsertLedgerDay(money.days, settled) } }
+    saveSoon(next)
+    set({ data: next })
+    get().rolloverMoneyWeek()
+  },
+
+  /**
    * 追加一条计划外条目到 `date` 的账本（日结面板「有没有计划外的事」）。
    *
    * 面板每录一条就落一次盘，而不是攒到结算时一起写 —— 计划外事项是账本里最有价值的
@@ -893,7 +925,9 @@ export const useAppStore = create<AppState>((set, get) => ({
           spentTC: 0,
           overdraft: 0,
           deltaLT: 0,
-          nightPending: true
+          nightPending: true,
+          // 未结算的记录不可能是休息日：休息日一经申报即结算（见 markRestDay）。
+          isRestDay: false
         }
     const next = { ...data, money: { ...money, days: upsertLedgerDay(money.days, day) } }
     saveSoon(next)
@@ -938,6 +972,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       // 漏传就等于把「那天刷视频 / 打游戏」的扣款从 deltaLT 里静默抹掉。
       videoMin: day.videoMin,
       gameMin: day.gameMin,
+      // 休息日的申报状态同样是**日级**输入：它是「无计划日」分支的产物，条目为空，
+      // 重算时若不透传，休息日会被当成一条 0 花费的普通日 —— 64 币被静默抹掉。
+      // （休息日的 nightPending 已是 false，正常情况下 confirmNight 根本选不中它；
+      //  这里透传是**第二道防线**：任何路径整日重跑都还原成休息日，而不是退化成 0。）
+      isRestDay: day.isRestDay === true,
       previousOverdraft: carriedOverdraft(money, previousDate),
       settledAt: day.settledAt,
       config: money.config

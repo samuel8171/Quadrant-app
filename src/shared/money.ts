@@ -192,6 +192,21 @@ export function dayLimitOf(previousOverdraft: number, config: MoneyConfig): numb
 }
 
 /**
+ * 休息日的固定时币花费（spec R2 §4.3 / §9.2）：`round(dailyCapTC × restDayFactor)`，
+ * 默认 `round(80 × 0.8) = 64`。
+ *
+ * 休息日是「没有安排计划的那一天」里的一条**主动申报**：申报了就只扣这 64 币，
+ * 比「逾期未结算」的满额全扣（默认 80）便宜，比一分不花贵。**主动申报能省钱**正是这条规则
+ * 存在的意义 —— 它是鼓励用户「看见日结就处理」的激励，不是惩罚。
+ *
+ * 两个因子都直读 `config`：休息日与日上限同源（`dailyCapTC` 是这条链的单一真源），
+ * 写死 64 会在调 `dailyCapTC` / `restDayFactor` 时静默失真。
+ */
+export function restDayCost(config: MoneyConfig): number {
+  return Math.round(config.dailyCapTC * config.restDayFactor)
+}
+
+/**
  * 对一天做结算（spec 6.2 / 7.3）。
  *
  * `spentTC` 与 `deltaLT` 都**由原始字段重新推导**（逐条 `costOfEntry` / `leisureDelta` 求和），
@@ -202,11 +217,21 @@ export function dayLimitOf(previousOverdraft: number, config: MoneyConfig): numb
  *
  * `nightPending` 恒为 `true`：结算发生在 23:20，而深夜窗口 23:30 才开启，
  * 「昨夜 23:30 之后是否还在做事」只能由**次日**的结算补记（Task 8 消费此字段）。
+ * —— 休息日是唯一的例外，见下。
  *
  * **娱币的第三条来源是两条纯消费**（`videoMin` / `gameMin`，spec R2 §6）：它们**只扣娱币、
  * 不产生时币**，因此在 `deltaLT` 上叠加 `consumptionDeltaLT`，而对 `spentTC` 毫无影响。
  * 两者都是**可选入参、缺省 0**：本字段加入之前的旧记录没有它们，语义上就是「那天没消费」；
  * 缺省保证了老调用方与老账本都不必改动，同时 `0` 也是唯一不凭空发明消费的取值。
+ *
+ * **`isRestDay` 为 true 时走休息日分支**（spec R2 §4.3 / §9.2）：固定扣 `restDayCost(config)`、
+ * `deltaLT` 为 0、条目恒为空。三处刻意的取舍：
+ * - **条目与两条消费一律不采纳**：休息日是一整天的主动申报，与「做了多久」无关；传进来的条目
+ *   只可能来自一次重跑（见下），若采纳就会把 64 静默抹成条目之和；
+ * - **`nightPending` 置 `false`**：休息日不走 23:20 的常规路径，也就没有「深夜补记」这一问。
+ *   这与 `abandonExpiredDays` 的处置同源，且同样是**不可重结**的关键 —— 置 false 就把它从
+ *   `openNightsBefore` 的候选里摘掉，`confirmNight` 因此永远不会整日重跑它；
+ * - `videoMin` / `gameMin` 归 0：那两问属于常规日结流程，休息日整日跳过了它。
  *
  * 返回值对条目数组做的是**浅拷贝**：数组归快照所有，但条目对象仍与调用方共享 ——
  * 调用方不得原地改这些对象（账本是追加写的，条目一旦记录即视为不可变）。
@@ -220,9 +245,33 @@ export function settleDay(input: {
   videoMin?: number
   /** 当日打游戏分钟数；缺省 0。 */
   gameMin?: number
+  /**
+   * 是否结算为休息日（spec R2 §4.3）。缺省 `false` ——
+   * 休息日必须**显式申报**，绝不能被当成默认计价。
+   */
+  isRestDay?: boolean
   config: MoneyConfig
 }): LedgerDay {
   const dayLimit = dayLimitOf(input.previousOverdraft, input.config)
+
+  // 休息日：整天的主动申报，与条目无关。显式 `=== true`，让缺省 / undefined 都落到普通分支。
+  if (input.isRestDay === true) {
+    const spentTC = restDayCost(input.config)
+    return {
+      date: input.date,
+      settledAt: input.settledAt,
+      entries: [],
+      videoMin: 0,
+      gameMin: 0,
+      dayLimit,
+      spentTC,
+      overdraft: Math.max(0, spentTC - dayLimit),
+      deltaLT: 0,
+      // 见函数头注释：休息日没有「深夜补记」这一问，置 false 同时使它不可重结。
+      nightPending: false,
+      isRestDay: true
+    }
+  }
 
   let spentTC = 0
   let deltaLT = 0
@@ -254,7 +303,9 @@ export function settleDay(input: {
     spentTC,
     overdraft: Math.max(0, spentTC - dayLimit),
     deltaLT,
-    nightPending: true
+    nightPending: true,
+    // 普通结算路径恒为 false：休息日必须显式申报（见函数头注释）。
+    isRestDay: false
   }
 }
 
@@ -470,7 +521,9 @@ export function ensureLedgerDays(money: MoneyState, today: string): MoneyState {
       spentTC: 0,
       overdraft: 0,
       deltaLT: 0,
-      nightPending: true
+      nightPending: true,
+      // 刚物化出来的空记录还不是休息日：休息日要由用户主动申报（spec R2 §4.3）。
+      isRestDay: false
     })
   }
   days.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))

@@ -23,6 +23,11 @@ export default function WeeklyPage(): JSX.Element {
   const [weekSlide, setWeekSlide] = useState<'left' | 'right' | null>(null)
   const [daySlide, setDaySlide] = useState<'left' | 'right' | null>(null)
   const [settleOpen, setSettleOpen] = useState(false)
+  /**
+   * 非 null = 正在为日结的**分支 B** 补计划：这一天的日视图要多出一个右上角「完成」，
+   * 点它回到日结页（spec R2 §4.3）。离开日视图时清掉，正常浏览日视图不再显示该按钮。
+   */
+  const [backfill, setBackfill] = useState<string | null>(null)
 
   const money = useAppStore((s) => s.data.money)
 
@@ -43,6 +48,7 @@ export default function WeeklyPage(): JSX.Element {
   }
 
   const closeDay = (): void => {
+    setBackfill(null)
     setClosing(true)
   }
 
@@ -66,12 +72,31 @@ export default function WeeklyPage(): JSX.Element {
     setView({ kind: 'week', monday: addDays(view.monday, weeks * 7) })
   }
 
+  /**
+   * 日结分支 B 的去程（spec R2 §4.3）：面板收起、视图切到该日的**时间轴**（日视图）。
+   * 复用既有编辑器，不新建界面；`backfill` 让日视图多出一个右上角「完成」。
+   */
+  const openDayForBackfill = (date: string): void => {
+    setBackfill(date)
+    setSettleOpen(false)
+    setBackAnim(false)
+    setDaySlide(null)
+    setView({ kind: 'day', date })
+  }
+
+  /** 日结分支 B 的回程：关掉补计划态、把日结面板重新打开（它仍会落在最早的那一天）。 */
+  const finishBackfill = (): void => {
+    setBackfill(null)
+    setSettleOpen(true)
+  }
+
   const content =
     view.kind === 'day' ? (
       <DayView
         date={parseDateKey(view.date)}
         onBack={closeDay}
         onShiftDay={shiftDay}
+        onComplete={backfill ? finishBackfill : undefined}
         className={closing ? 'day-close' : 'day-open'}
         slideClass={daySlide ? `day-slide-${daySlide}` : undefined}
         onAnimationEnd={(e) => {
@@ -92,7 +117,9 @@ export default function WeeklyPage(): JSX.Element {
     <div className="weekly-shell">
       <SettleCard count={pendingCount} onOpen={() => setSettleOpen(true)} />
       {content}
-      {settleOpen && <SettlePanel onClose={() => setSettleOpen(false)} />}
+      {settleOpen && (
+        <SettlePanel onClose={() => setSettleOpen(false)} onOpenDay={openDayForBackfill} />
+      )}
     </div>
   )
 }

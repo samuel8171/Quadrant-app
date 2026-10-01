@@ -22,6 +22,7 @@ import {
   openNightsBefore,
   penaltyTierOf,
   pendingDays,
+  restDayCost,
   selectMoneyStats,
   settleDay,
   settleWeek
@@ -160,7 +161,8 @@ function mkWeek(
       spentTC: daySpend,
       overdraft,
       deltaLT: 0,
-      nightPending: false
+      nightPending: false,
+      isRestDay: false
     })
     previousOverdraft = overdraft
   }
@@ -636,6 +638,140 @@ describe('settleDay', () => {
 })
 
 // ============================================================================
+// Task R2-E：休息日（无计划之日的两条分支之一，spec R2 §4.3 / §9.2）
+// ============================================================================
+
+describe('restDayCost', () => {
+  it('= round(dailyCapTC × restDayFactor)：默认 80 × 0.8 = 64', () => {
+    expect(restDayCost(DEFAULT_MONEY_CONFIG)).toBe(64)
+  })
+
+  it('两个因子都取自 config，而不是写死的 64', () => {
+    expect(restDayCost({ ...DEFAULT_MONEY_CONFIG, dailyCapTC: 90, restDayFactor: 0.5 })).toBe(45)
+    expect(restDayCost({ ...DEFAULT_MONEY_CONFIG, dailyCapTC: 35, restDayFactor: 1 })).toBe(35)
+  })
+
+  it('四舍五入到整数：50 × 0.35 = 17.5 → 18（不是截断成 17）', () => {
+    expect(restDayCost({ ...DEFAULT_MONEY_CONFIG, dailyCapTC: 50, restDayFactor: 0.35 })).toBe(18)
+  })
+})
+
+describe('settleDay · 休息日分支', () => {
+  const base = {
+    date: '2026-09-28',
+    previousOverdraft: 0,
+    settledAt: '2026-09-28T23:20:00.000Z',
+    config: DEFAULT_MONEY_CONFIG
+  }
+
+  it('休息日：固定扣 64、娱币不动、条目为空、isRestDay 为 true、settledAt 正常写入', () => {
+    const day = settleDay({ ...base, entries: [], isRestDay: true })
+    expect(day.spentTC).toBe(64)
+    expect(day.deltaLT).toBe(0)
+    expect(day.entries).toEqual([])
+    expect(day.isRestDay).toBe(true)
+    expect(day.settledAt).toBe(base.settledAt)
+    expect(day.date).toBe(base.date)
+    expect(day.dayLimit).toBe(80)
+    expect(day.overdraft).toBe(0)
+  })
+
+  it('对照组：其余入参完全相同、只是没有 isRestDay ⇒ spentTC = 0（休息日不是默认）', () => {
+    const day = settleDay({ ...base, entries: [] })
+    expect(day.spentTC).toBe(0)
+    expect(day.isRestDay).toBe(false)
+  })
+
+  it('休息日的花费与条目 / 两条纯消费无关：传进来也一律不采纳（重跑不能把它抹掉）', () => {
+    const day = settleDay({
+      ...base,
+      entries: [mkEntry({ actualMin: 120, plannedMin: 120, done: true })],
+      videoMin: 60,
+      gameMin: 120,
+      isRestDay: true
+    })
+    expect(day.spentTC).toBe(64)
+    expect(day.deltaLT).toBe(0)
+    expect(day.entries).toEqual([])
+    expect(day.videoMin).toBe(0)
+    expect(day.gameMin).toBe(0)
+  })
+
+  it('休息日不可重结：nightPending 置 false，因此不会被 openNightsBefore 选中', () => {
+    const rest = settleDay({ ...base, entries: [], isRestDay: true })
+    expect(rest.nightPending).toBe(false)
+    const later = unsettledDay('2026-09-29', [])
+    expect(openNightsBefore([rest, later], '2026-09-29')).toEqual([])
+    // 判别器：一个已结算但仍挂 nightPending 的日子**确实**会被选中 ——
+    // 证明「选不中」是 nightPending=false 的功劳，不是 openNightsBefore 恰好空转。
+    const stillOpen: LedgerDay = { ...rest, nightPending: true }
+    expect(openNightsBefore([stillOpen, later], '2026-09-29').map((d) => d.date)).toEqual([
+      '2026-09-28'
+    ])
+  })
+
+  it('休息日被整日重跑（confirmNight 的路径）后仍是休息日，不会退化成 0 花费的普通日', () => {
+    const original = settleDay({ ...base, entries: [], isRestDay: true })
+    // confirmNight 会把原条目 + 补记条目一起交回来、并透传 day.isRestDay
+    const recomputed = settleDay({
+      ...base,
+      entries: [
+        ...original.entries,
+        mkEntry({ kind: 'unplanned', actualMin: 30, plannedMin: null, done: true })
+      ],
+      settledAt: original.settledAt ?? base.settledAt,
+      isRestDay: original.isRestDay
+    })
+    expect(recomputed.isRestDay).toBe(true)
+    expect(recomputed.spentTC).toBe(64)
+    expect(recomputed.deltaLT).toBe(0)
+    expect(recomputed.entries).toEqual([])
+  })
+
+  it('休息日计入透支：前一日透支 30 ⇒ 当日额度 50、透支 14', () => {
+    const day = settleDay({ ...base, entries: [], previousOverdraft: 30, isRestDay: true })
+    expect(day.dayLimit).toBe(50)
+    expect(day.overdraft).toBe(14)
+  })
+
+  it('休息日的花费由 config 派生：改 restDayFactor ⇒ 结果随之改变', () => {
+    const day = settleDay({
+      ...base,
+      entries: [],
+      isRestDay: true,
+      config: { ...DEFAULT_MONEY_CONFIG, restDayFactor: 0.5 }
+    })
+    expect(day.spentTC).toBe(40)
+  })
+
+  it('有计划的日子的结算数据里不出现休息日产物（休息日不是默认计价）', () => {
+    const day = settleDay({
+      ...base,
+      entries: [mkEntry({ actualMin: 120, plannedMin: 120, done: true })]
+    })
+    expect(day.isRestDay).toBe(false)
+    expect(day.spentTC).toBe(20) // 条目之和，不是 64
+    expect(day.entries).toHaveLength(1)
+  })
+
+  it('selectMoneyStats：休息日按冻结快照计 64 币、娱币 0，且不产生质量分类 / 深夜计数', () => {
+    const rest = settleDay({
+      date: '2026-09-29',
+      entries: [],
+      previousOverdraft: 0,
+      settledAt: 'x',
+      isRestDay: true,
+      config: DEFAULT_MONEY_CONFIG
+    })
+    const stats = selectMoneyStats(mkMoney([rest]), TODAY)
+    expect(stats.spentTC).toBe(64)
+    expect(stats.spentLT).toBe(0)
+    expect(stats.quality).toEqual({ efficient: 0, normal: 0, inefficient: 0, missed: 0 })
+    expect(stats.nightMin).toBe(0)
+  })
+})
+
+// ============================================================================
 // Task 4：周结算、档位惩罚与跨周滚动
 // ============================================================================
 
@@ -873,7 +1009,8 @@ function unsettledDay(date: string, entries: LedgerEntry[]): LedgerDay {
     spentTC: 0,
     overdraft: 0,
     deltaLT: 0,
-    nightPending: true
+    nightPending: true,
+    isRestDay: false
   }
 }
 
@@ -1277,7 +1414,8 @@ function emptyLedgerDay(date: string): LedgerDay {
     spentTC: 0,
     overdraft: 0,
     deltaLT: 0,
-    nightPending: true
+    nightPending: true,
+    isRestDay: false
   }
 }
 

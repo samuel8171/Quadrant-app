@@ -75,7 +75,8 @@ const sampleDataWithMoney: AppData = {
         spentTC: 32,
         overdraft: 0,
         deltaLT: 0.5,
-        nightPending: true
+        nightPending: true,
+        isRestDay: false
       }
     ],
     weeks: []
@@ -359,6 +360,84 @@ describe('dataCodec', () => {
     expect(out.money?.days).toHaveLength(1)
     expect(out.money?.days[0].videoMin).toBe(0)
     expect(out.money?.days[0].gameMin).toBe(0)
+  })
+
+  it('老记录缺 isRestDay 时补 false，而不是把这一天的账本丢掉', () => {
+    // `isRestDay` 是 R2-E 才加的可选布尔：加字段之前的 plan.json 里没有它。
+    // 缺席的唯一安全解释是 false（「那时还没有休息日这条路」），绝不能判空丢帧。
+    const legacyDay = {
+      date: '2026-09-28',
+      settledAt: '2026-09-28T23:20:00.000Z',
+      entries: [],
+      videoMin: 0,
+      gameMin: 0,
+      dayLimit: 80,
+      spentTC: 0,
+      overdraft: 0,
+      deltaLT: 0,
+      nightPending: false
+    }
+    const out = parseData(
+      JSON.stringify({
+        ...baseData,
+        money: { enabled: true, config: DEFAULT_MONEY_CONFIG, days: [legacyDay], weeks: [] }
+      })
+    )
+    expect(out.money?.days).toHaveLength(1)
+    expect(out.money?.days[0].isRestDay).toBe(false)
+  })
+
+  it('isRestDay 不是布尔时回退 false（逐字段修复，不丢帧）', () => {
+    const out = parseData(
+      JSON.stringify({
+        ...baseData,
+        money: {
+          enabled: true,
+          config: DEFAULT_MONEY_CONFIG,
+          days: [
+            {
+              date: '2026-09-28',
+              settledAt: null,
+              entries: [],
+              videoMin: 0,
+              gameMin: 0,
+              dayLimit: 0,
+              spentTC: 0,
+              overdraft: 0,
+              deltaLT: 0,
+              nightPending: true,
+              isRestDay: 'yes'
+            }
+          ],
+          weeks: []
+        }
+      })
+    )
+    expect(out.money?.days).toHaveLength(1)
+    expect(out.money?.days[0].isRestDay).toBe(false)
+  })
+
+  it('isRestDay 为 true 的休息日往返保真', () => {
+    const restDay = {
+      date: '2026-09-28',
+      settledAt: '2026-09-28T23:20:00.000Z',
+      entries: [],
+      videoMin: 0,
+      gameMin: 0,
+      dayLimit: 80,
+      spentTC: 64,
+      overdraft: 0,
+      deltaLT: 0,
+      nightPending: false,
+      isRestDay: true
+    }
+    const out = parseData(
+      JSON.stringify({
+        ...baseData,
+        money: { enabled: true, config: DEFAULT_MONEY_CONFIG, days: [restDay], weeks: [] }
+      })
+    )
+    expect(out.money?.days[0]).toEqual(restDay)
   })
 
   it('桌面端不会因 money 坏了而丢掉用户数据（与 web 端 loadData 的三档降级对照）', () => {

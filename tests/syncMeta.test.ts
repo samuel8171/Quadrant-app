@@ -46,7 +46,8 @@ const settledDay: LedgerDay = {
   spentTC: 20,
   overdraft: 0,
   deltaLT: 0,
-  nightPending: false
+  nightPending: false,
+  isRestDay: false
 }
 
 describe('同步元信息：启动判定', () => {
