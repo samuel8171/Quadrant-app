@@ -265,7 +265,8 @@ function carriedOverdraft(money: MoneyState, date: string): number {
   if (prev.settledAt !== null) return prev.overdraft
   const limit = dayLimitOf(carriedOverdraft(money, prevDate), money.config)
   const spent = prev.entries.reduce(
-    (sum, e) => sum + costOfEntry({ actualMin: e.actualMin, nightMin: e.nightMin }, money.config),
+    (sum, e) =>
+      sum + costOfEntry({ actualMin: e.actualMin, nightMin: e.nightMin, quadrant: e.quadrant }, money.config),
     0
   )
   return Math.max(0, spent - limit)
@@ -296,7 +297,7 @@ function buildNightEntry(endMin: number, config: MoneyConfig): LedgerEntry {
     actualMin,
     done: true,
     nightMin,
-    costTC: costOfEntry({ actualMin, nightMin }, config),
+    costTC: costOfEntry({ actualMin, nightMin, quadrant: null }, config),
     deltaLT: leisureDelta(
       { kind: 'unplanned', done: true, actualMin, plannedMin: null },
       config

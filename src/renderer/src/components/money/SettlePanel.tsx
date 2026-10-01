@@ -59,10 +59,10 @@ function nightMinOf(row: Row, config: MoneyConfig): number {
   return nightMinutesOf({ startMin: row.startMin, actualMin: row.actualMin }, config)
 }
 
-/** 行产生的 TC 消耗（未做恒为 0）。 */
+/** 行产生的 TC 消耗（未做恒为 0；象限倍率随行携带，与 `settleDay` 同口径）。 */
 function rowCost(row: Row, config: MoneyConfig): number {
   if (!row.done) return 0
-  return costOfEntry({ actualMin: row.actualMin, nightMin: nightMinOf(row, config) }, config)
+  return costOfEntry({ actualMin: row.actualMin, nightMin: nightMinOf(row, config), quadrant: row.quadrant }, config)
 }
 
 /** 行产生的 LT 净变化（判定顺序与 `leisureDelta` 同源）。 */

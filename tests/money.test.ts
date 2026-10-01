@@ -34,6 +34,10 @@ let entrySeq = 0
  * 默认值：`kind: 'planned'`、`plannedMin: 60`、`actualMin: 0`、`nightMin: 0`、
  * `done: true`、`sourceId: null`、`quadrant: null`。
  *
+ * `quadrant` 默认**刻意留 null**（→ 计费倍率 1.0，中性）：夹具不替调用方编造象限，
+ * 于是所有既有用例仍在验证「时长 × 基准费率」这条公式本身，而不是被象限倍率悄悄改写。
+ * 象限倍率由 `costOfEntry` 的专门用例覆盖，另加一组「两个调用点同口径」的集成用例。
+ *
  * `costTC` / `deltaLT` 默认留 0：`settleDay` 一律从原始字段重新推导，不读这两个镜像字段 ——
  * 留 0 反而让用例顺带证明了「结算不是把 entry.costTC 加起来」。需要特定值请显式覆盖。
  */
@@ -199,17 +203,43 @@ function mkSettledWeek(over: Partial<WeekSettlement> = {}): WeekSettlement {
 
 describe('costOfEntry', () => {
   it('按实际时长计费：2 小时 × 10 币 = 20', () => {
-    expect(costOfEntry({ actualMin: 120, nightMin: 0 }, DEFAULT_MONEY_CONFIG)).toBe(20)
+    expect(costOfEntry({ actualMin: 120, nightMin: 0, quadrant: 2 }, DEFAULT_MONEY_CONFIG)).toBe(20)
   })
 
   it('深夜倍率只作用于落在深夜区间的那部分分钟数', () => {
     // 120 分钟中 60 分钟在深夜：(60 + 60 × 1.5) / 60 × 10 = 25
-    expect(costOfEntry({ actualMin: 120, nightMin: 60 }, DEFAULT_MONEY_CONFIG)).toBe(25)
-    expect(costOfEntry({ actualMin: 120, nightMin: 120 }, DEFAULT_MONEY_CONFIG)).toBe(30)
+    expect(costOfEntry({ actualMin: 120, nightMin: 60, quadrant: 2 }, DEFAULT_MONEY_CONFIG)).toBe(25)
+    expect(costOfEntry({ actualMin: 120, nightMin: 120, quadrant: 2 }, DEFAULT_MONEY_CONFIG)).toBe(30)
   })
 
   it('实际时长为 0 时不产生费用', () => {
-    expect(costOfEntry({ actualMin: 0, nightMin: 0 }, DEFAULT_MONEY_CONFIG)).toBe(0)
+    expect(costOfEntry({ actualMin: 0, nightMin: 0, quadrant: 2 }, DEFAULT_MONEY_CONFIG)).toBe(0)
+  })
+
+  it('象限倍率：同样 120 分钟 0 深夜，Q1 30、Q3 24、Q2 20、Q4 10', () => {
+    // 基准 base = 120 / 60 × 10 = 20，再乘各自倍率
+    expect(costOfEntry({ actualMin: 120, nightMin: 0, quadrant: 1 }, DEFAULT_MONEY_CONFIG)).toBe(30)
+    expect(costOfEntry({ actualMin: 120, nightMin: 0, quadrant: 3 }, DEFAULT_MONEY_CONFIG)).toBe(24)
+    expect(costOfEntry({ actualMin: 120, nightMin: 0, quadrant: 2 }, DEFAULT_MONEY_CONFIG)).toBe(20)
+    expect(costOfEntry({ actualMin: 120, nightMin: 0, quadrant: 4 }, DEFAULT_MONEY_CONFIG)).toBe(10)
+  })
+
+  it('Q3（不重要但紧急）刻意比 Q2（重要不紧急）贵：24 > 20', () => {
+    // 用户取向是「紧急 > 重要」——系统对「被紧急事推着走」收得更贵，这正是
+    // 艾森豪威尔矩阵要纠正的那件事。实现时不得「顺手修正」这个大小关系。
+    expect(costOfEntry({ actualMin: 120, nightMin: 0, quadrant: 3 }, DEFAULT_MONEY_CONFIG)).toBe(24)
+    expect(costOfEntry({ actualMin: 120, nightMin: 0, quadrant: 2 }, DEFAULT_MONEY_CONFIG)).toBe(20)
+  })
+
+  it('深夜倍率与象限倍率相乘：120 分钟全深夜、Q1 ⇒ round((120×1.5/60×10)×1.5) = 45', () => {
+    expect(costOfEntry({ actualMin: 120, nightMin: 120, quadrant: 1 }, DEFAULT_MONEY_CONFIG)).toBe(45)
+  })
+
+  it('quadrant 为 null 时取中性 1.0', () => {
+    // 无象限的条目（计划外，或计划内但没记录象限）不带价值信号 → 中性。
+    // 它数值上等于 Q2（1.0）只是查表的巧合，实现里必须是独立分支：
+    // 将来改 Q2 的取值不能静默改动无象限条目。
+    expect(costOfEntry({ actualMin: 120, nightMin: 0, quadrant: null }, DEFAULT_MONEY_CONFIG)).toBe(20)
   })
 })
 
@@ -401,7 +431,8 @@ describe('settleDay', () => {
     // 快照必须自洽：冻结的 spentTC 仍等于快照内条目之和
     expect(
       day.entries.reduce(
-        (sum, e) => sum + costOfEntry({ actualMin: e.actualMin, nightMin: e.nightMin }, DEFAULT_MONEY_CONFIG),
+        (sum, e) =>
+          sum + costOfEntry({ actualMin: e.actualMin, nightMin: e.nightMin, quadrant: e.quadrant }, DEFAULT_MONEY_CONFIG),
         0
       )
     ).toBe(day.spentTC)
@@ -875,7 +906,8 @@ describe('selectMoneyStats', () => {
 
     expect(
       frozen.entries.reduce(
-        (sum, e) => sum + costOfEntry({ actualMin: e.actualMin, nightMin: e.nightMin }, DEFAULT_MONEY_CONFIG),
+        (sum, e) =>
+          sum + costOfEntry({ actualMin: e.actualMin, nightMin: e.nightMin, quadrant: e.quadrant }, DEFAULT_MONEY_CONFIG),
         0
       )
     ).toBe(20) // 条目确实值 20 币……
@@ -908,6 +940,46 @@ describe('selectMoneyStats', () => {
 
     expect(stats.daily[2].spentTC).toBe(20)
     expect(stats.daily[3].limit).toBe(80)
+  })
+})
+
+// ============================================================================
+// Task R2-B：象限倍率接入计费的两个调用点（settleDay / selectMoneyStats 未结算推导）
+// ============================================================================
+
+/**
+ * `costOfEntry` 有**两个**会派生「一天花费」的调用点：`settleDay`（已结算日的冻结快照）
+ * 与 `selectMoneyStats`（未结算日按条目现算）。只改一处就会出现两套口径 ——
+ * 同一个事件，结算前一个价、结算后另一个价。下面三条用例把两处钉在同一个数上。
+ */
+describe('象限倍率接入结算的两个调用点', () => {
+  it('settleDay：已结算日的 spentTC 计入象限倍率', () => {
+    const day = settleDay({
+      date: '2026-09-28',
+      previousOverdraft: 0,
+      settledAt: 'x',
+      entries: [mkEntry({ actualMin: 120, plannedMin: 120, done: true, quadrant: 1 })],
+      config: DEFAULT_MONEY_CONFIG
+    })
+    expect(day.spentTC).toBe(30) // 20 × 1.5
+  })
+
+  it('selectMoneyStats：未结算日的现算花费同样计入象限倍率', () => {
+    const wed = unsettledDay('2026-09-30', [
+      mkEntry({ kind: 'planned', plannedMin: 120, actualMin: 120, done: true, quadrant: 1 })
+    ])
+    const stats = selectMoneyStats(mkMoney([wed]), TODAY)
+    expect(stats.daily[2].spentTC).toBe(30)
+    expect(stats.spentTC).toBe(30)
+  })
+
+  it('同一条目已结算与未结算给出同一个价（两个调用点同口径）', () => {
+    const entry = mkEntry({ kind: 'planned', plannedMin: 120, actualMin: 120, done: true, quadrant: 1 })
+    const settled = selectMoneyStats(mkMoney([settledDay('2026-09-30', [entry])]), TODAY)
+    const unsettled = selectMoneyStats(mkMoney([unsettledDay('2026-09-30', [entry])]), TODAY)
+    expect(settled.daily[2].spentTC).toBe(30)
+    expect(unsettled.daily[2].spentTC).toBe(30)
+    expect(settled.daily[2].spentTC).toBe(unsettled.daily[2].spentTC)
   })
 })
 

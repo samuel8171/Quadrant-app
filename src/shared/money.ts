@@ -6,6 +6,7 @@ import type {
   MoneyConfig,
   MoneyState,
   PenaltyTier,
+  Quadrant,
   WeekSettlement
 } from './types'
 
@@ -67,21 +68,47 @@ export function nightMinutesOf(
 }
 
 /**
- * 单条条目的时币花费（spec 6.3「单条条目」）：
+ * 单条条目的时币花费（spec 6.3「单条条目」+ spec R2 §9.1 的象限倍率）：
  *
  * ```
  * dayMin = actualMin − nightMin
  * base   = (dayMin + nightMin × nightMultiplier) / 60 × tcPerHour
+ * costTC = round(base × quadrantMultiplier[quadrant])
  * ```
  *
  * 只对落在深夜区间内的**那部分分钟数**乘倍率，不是整条乘 —— 这正是入参收
  * `nightMin` 这个数字而不是「是否深夜」布尔标记的原因：布尔表达不了部分倍率，
  * 且一旦与分钟数并存，两者就可能不一致。
+ *
+ * **深夜倍率与象限倍率相乘**：落在深夜的那部分分钟既带深夜倍率、也带象限倍率，
+ * 两者不是二选一。例：120 分钟全深夜、Q1 ⇒ `round((120 × 1.5 / 60 × 10) × 1.5) = 45`。
+ *
+ * `quadrant` 为 `null`（计划外，或计划内但没记录象限）取中性 1.0：象限倍率表达的是
+ * **计划工作的价值**，没有象限就没有价值信号，中性费率是唯一不凭空发明信息的取值。
+ * 它数值上等于 Q2，但那只是查表的巧合 —— 这里刻意把 `null` 与 `q2` 写成**两条分支**，
+ * 将来改 `q2` 的取值不会静默改变无象限条目。
+ *
+ * 象限权重的取向是「紧急 > 重要」，故 `q3`（1.2）**高于** `q2`（1.0）：
+ * 系统对「被紧急事推着走」收得更贵，这正是艾森豪威尔矩阵要纠正的事；`q4`（0.5）最便宜，
+ * 因为「无意义消耗」的惩罚通道在娱币那边，不必在时币上重复收一遍。**不要「顺手修正」。**
  */
-export function costOfEntry(input: { actualMin: number; nightMin: number }, config: MoneyConfig): number {
+export function costOfEntry(
+  input: { actualMin: number; nightMin: number; quadrant: Quadrant | null },
+  config: MoneyConfig
+): number {
   const dayMin = input.actualMin - input.nightMin
   const base = ((dayMin + input.nightMin * config.nightMultiplier) / 60) * config.tcPerHour
-  return Math.round(base)
+
+  const m = config.quadrantMultiplier
+  // null 与 q2 分成两条分支：数值相同是查表的巧合，语义不同（无信号 vs 重要不紧急）。
+  let multiplier: number
+  if (input.quadrant === null) multiplier = 1
+  else if (input.quadrant === 1) multiplier = m.q1
+  else if (input.quadrant === 2) multiplier = m.q2
+  else if (input.quadrant === 3) multiplier = m.q3
+  else multiplier = m.q4
+
+  return Math.round(base * multiplier)
 }
 
 /**
@@ -162,7 +189,10 @@ export function settleDay(input: {
   let spentTC = 0
   let deltaLT = 0
   for (const entry of input.entries) {
-    spentTC += costOfEntry({ actualMin: entry.actualMin, nightMin: entry.nightMin }, input.config)
+    spentTC += costOfEntry(
+      { actualMin: entry.actualMin, nightMin: entry.nightMin, quadrant: entry.quadrant },
+      input.config
+    )
     deltaLT += leisureDelta(
       { kind: entry.kind, done: entry.done, actualMin: entry.actualMin, plannedMin: entry.plannedMin },
       input.config
@@ -604,7 +634,10 @@ export function selectMoneyStats(money: MoneyState, today: string): MoneyStats {
         dayDelta = day.deltaLT
       } else {
         for (const entry of day.entries) {
-          daySpent += costOfEntry({ actualMin: entry.actualMin, nightMin: entry.nightMin }, money.config)
+          daySpent += costOfEntry(
+            { actualMin: entry.actualMin, nightMin: entry.nightMin, quadrant: entry.quadrant },
+            money.config
+          )
           dayDelta += leisureDelta(
             {
               kind: entry.kind,
