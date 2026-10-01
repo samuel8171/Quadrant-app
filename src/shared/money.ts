@@ -575,11 +575,43 @@ export function currentQuota(state: MoneyState): { weekTC: number; weekLT: numbe
  *
  * 若哪一处单独改数，就可能出现「同一次开机里刚物化、又被放弃」——对一个从未存在过的记录扣 80，
  * 直接违反「放弃只作用于已存在的记录」的裁定。
+ *
+ * ⚠️ 自 `enabledAt` 起，这个下界**还要再被 `max(..., enabledAt)` 夹一次**（见
+ * `ledgerWindowStart`）—— 三处消费者共享同一条夹取，理由同上面「单一真源」。
  */
 export const LEDGER_WINDOW_DAYS = 7
 
 /**
+ * 记账窗口的**生效下界**（含）：`max(today − LEDGER_WINDOW_DAYS, enabledAt)`。
+ *
+ * 三个消费者共享它，而不是各自写一遍：
+ * - `ensureLedgerDays` 只物化 `date ≥ ledgerWindowStart` 的日子；
+ * - `pendingDays` 只报 `date ≥ ledgerWindowStart` 的待结算日；
+ * - `abandonExpiredDays` 只在 `date < ledgerWindowStart`（且 ≥ `enabledAt`）时才放弃。
+ *
+ * **`enabledAt` 是「本功能最近一次关→开的生效日」**（`MoneyState.enabledAt`，日期键）。
+ * 少了它，`setMoneyEnabled(true)` 写下的空账本会在下次开机时被补满 `[today − 7, today − 1]`，
+ * 于是刚开启功能的第一屏就是「有 7 天待结算」；用户若不理它还会被满额逐日扣款 ——
+ * 把「缺席」当成「看见了却不结」，与本子系统自己声明的裁定自相矛盾。
+ *
+ * **`enabledAt` 缺席 ⇒ 返回 `today − LEDGER_WINDOW_DAYS`，不夹取**：缺席只意味着
+ * 「这条记录产生于本字段之前」，那时连启用日这个概念都没有，唯一安全的解释就是维持原行为。
+ * 绝不能替旧数据凭空发明一个生效日 —— 那会把旧账本里合法的待结算日直接夹掉。
+ *
+ * 日期键是定长 `YYYY-MM-DD`，字典序即时间序，所以 `max` 用字符串比较即可，不必解析回 `Date`。
+ */
+function ledgerWindowStart(money: MoneyState, today: string): string {
+  const base = dateKey(addDays(parseDateKey(today), -LEDGER_WINDOW_DAYS))
+  const enabledAt = money.enabledAt
+  return enabledAt !== undefined && enabledAt > base ? enabledAt : base
+}
+
+/**
  * 为 `[today − 7, today)` 里的**每一天**补出一条未结算的日账本（spec R2 §4）。
+ *
+ * **窗口的下界还要被 `enabledAt` 夹一次**（见 `ledgerWindowStart`）：功能生效之前的日子
+ * 永不物化。少了这条，刚开启功能（`enabledAt` = 今天）的人第一屏就会看到 7 天待结算 ——
+ * 那 7 天里功能根本不存在，属于「缺席」而不是「看见了却不结」。
  *
  * **为什么需要它**：`pendingDays` 只能扫出**已存在**的日账本，而计费是在象限页完成时才追加条目的。
  * 于是「当天没打开应用」这种最常见的情况下，压根没有人会为那天写下一条记录，日结卡片就永远不出现 ——
@@ -603,9 +635,13 @@ export function ensureLedgerDays(money: MoneyState, today: string): MoneyState {
   const todayDate = parseDateKey(today)
   const existing = new Set(money.days.map((day) => day.date))
   const missing: string[] = []
+  // 生效下界：`enabledAt` 之前的日子永不物化（见 `ledgerWindowStart`）。
+  const windowStart = ledgerWindowStart(money, today)
   // offset 从 LEDGER_WINDOW_DAYS 递减到 1：[today−7, today−1]，天然按 date 升序
   for (let offset = LEDGER_WINDOW_DAYS; offset >= 1; offset--) {
     const date = dateKey(addDays(todayDate, -offset))
+    // 早于生效下界：这一天在功能生效之前，不该被补出来、更不该出现在待结算里。
+    if (date < windowStart) continue
     if (!existing.has(date)) missing.push(date)
   }
   if (missing.length === 0) return money
@@ -658,6 +694,11 @@ export function ensureLedgerDays(money: MoneyState, today: string): MoneyState {
  *   一周 560 的池子会被击穿好几倍，产出的是无意义的数字。
  * 因此**不要**把本函数「修」成会物化无界历史的样子。
  *
+ * **`enabledAt` 之外的日子同样不罚**（本字段新增，见 `ledgerWindowStart`）：本函数只放弃
+ * `[enabledAt, 生效下界)` 这条带。功能生效之前的一周「时间即金钱」根本不存在，那几天与
+ * 「离开一个月」是同一类「缺席」——只是它发生在功能刚开启时。没有这条，`setMoneyEnabled(true)`
+ * 之后只要用户不理那张「7 天待结算」的卡，就会被逐日扣掉 80、最多约 560 币。
+ *
  * **「已主动结算的空日」与「被放弃的空日」不是一回事**：前者走「那天我什么都没做」的路径，
  * 落成 `spentTC === 0`；后者落成 `spentTC === abandonedDayTC`。数字已经把它俩分开了，
  * 所以**不新增** `LedgerDay` 字段来标记放弃（新标量要动 5 个同步点、多一轮校验，且暂无消费者）。
@@ -686,12 +727,35 @@ export function ensureLedgerDays(money: MoneyState, today: string): MoneyState {
  * 无逾期记录时**原对象返回**：调用方（appStore）据返回值恒等短路，避免无谓落盘。纯函数：`today` 是入参。
  */
 export function abandonExpiredDays(money: MoneyState, today: string): MoneyState {
-  const windowStart = dateKey(addDays(parseDateKey(today), -LEDGER_WINDOW_DAYS))
-  const expired = money.days.some((day) => day.settledAt === null && day.date < windowStart)
+  // 生效下界 = max(today − LEDGER_WINDOW_DAYS, enabledAt)（辅助见 `ledgerWindowStart`）。
+  const windowStart = ledgerWindowStart(money, today)
+  const enabledAt = money.enabledAt
+  /*
+   * 逾期 = 已掉出生效下界、且**落在这个功能的生效期内**的未结算日。
+   *
+   * `enabledAt` 之前的记录虽然「旧」，却属于「功能还不存在」的那几天 —— 满额扣款惩罚的是
+   * 「看见了却不结」，不是「缺席」（见函数头注释的裁定）。因此 `date < enabledAt` 一律不碰。
+   *
+   * 两个条件缺一不可，别把后一条当成多余：
+   * - `date < windowStart` 单独成立时，`windowStart = max(today−7, enabledAt)`；当 enabledAt
+   *   比 `today−7` 更近（例如刚启用三天）时 `windowStart = enabledAt`，于是 `[today−7, enabledAt)`
+   *   这几天会满足前者却根本不在生效期内 —— 若不加 `date ≥ enabledAt`，刚启用第一天就会把
+   *   窗口内的旧日子一并扣满额，正是本次要堵的漏洞。
+   * - 反过来，当 enabledAt 远在过去时 `windowStart = today−7`，后一条负责挡住「enabledAt 之前
+   *   那批更旧的记录」不被扣款。
+   * 合起来正是「只放弃 [enabledAt, 生效下界) 这条带」。
+   *
+   * `enabledAt` 缺席 ⇒ 跳过第二条，退回逐字不变的旧行为（`date < today − 7`）。
+   */
+  const isExpired = (day: LedgerDay): boolean =>
+    day.settledAt === null &&
+    day.date < windowStart &&
+    (enabledAt === undefined || day.date >= enabledAt)
+  const expired = money.days.some(isExpired)
   if (!expired) return money
 
   const days = money.days.map((day) => {
-    if (day.settledAt !== null || day.date >= windowStart) return day
+    if (!isExpired(day)) return day
     // 昨夜的连带扣款：一天不能靠「拒绝结算」把它抹掉（见函数头注释）。
     // 用与 settleDay / selectMoneyStats 同一个 `previousLatePhone(...)` 读，不另写一套查找；
     // 同样以 `=== true` 消费（Rider B：三个消费点判定口径一致）。
@@ -1055,9 +1119,9 @@ export function selectMoneyStats(money: MoneyState, today: string): MoneyStats {
  * 待结算的日期列表（spec 7.1 的日结卡片数据源），按日期升序。
  *
  * 判定有三条：`settledAt === null`（尚未结算）、`date < today`（这一天已经过完）、
- * 且 `date ≥ today − LEDGER_WINDOW_DAYS`（仍在固定 7 天窗口内）。
- * **今天不计入** —— 它还没结束，此刻结算等于拿半天的账当整天结；判定用的是日期字符串
- * 而非时间戳，正是因为「一天是否结束」在本地日历上是纯粹的日期比较。
+ * 且 `date ≥ 窗口生效下界`（`max(today − LEDGER_WINDOW_DAYS, enabledAt)`，见
+ * `ledgerWindowStart`）。**今天不计入** —— 它还没结束，此刻结算等于拿半天的账当整天结；
+ * 判定用的是日期字符串而非时间戳，正是因为「一天是否结束」在本地日历上是纯粹的日期比较。
  *
  * **下界是本函数的契约，不依赖 `abandonExpiredDays` 是否刚跑过**：桌面端只在 `init` 跑一次开机链，
  * 若应用跨零点一直开着，`today` 前进了而没有人重新物化 / 放弃，昨天还是 `today − 7` 的那天
@@ -1071,7 +1135,8 @@ export function selectMoneyStats(money: MoneyState, today: string): MoneyStats {
  * 与 `selectMoneyStats` 同源：两者都只读 `money`、把 `today` 当入参，不读时钟、不用随机数。
  */
 export function pendingDays(money: MoneyState, today: string): string[] {
-  const windowStart = dateKey(addDays(parseDateKey(today), -LEDGER_WINDOW_DAYS))
+  // 生效下界：`enabledAt` 之前的日子不报（见 `ledgerWindowStart`）—— 与物化、放弃同一条边界。
+  const windowStart = ledgerWindowStart(money, today)
   return money.days
     .filter((day) => day.settledAt === null && day.date < today && day.date >= windowStart)
     .map((day) => day.date)

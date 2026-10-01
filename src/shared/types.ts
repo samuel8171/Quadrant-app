@@ -282,6 +282,24 @@ export interface WeekSettlement {
 export interface MoneyState {
   enabled: boolean
   config: MoneyConfig
+  /**
+   * 本功能**最近一次「关 → 开」**的生效日，本地日期键 `YYYY-MM-DD`
+   * （与 `LedgerDay.date` 同一套约定，**不是** ISO 时刻）。
+   *
+   * **可选**：缺席 = 本字段加入之前的旧数据，语义是「不夹取窗口下界」—— 即完全维持
+   * 加本字段之前的行为。这是刻意的向后兼容：绝不能替旧数据凭空发明一个生效日，
+   * 否则旧账本里合法的待结算日会被下一句「窗口下界」直接夹掉。
+   *
+   * 用途只有一个：把记账窗口的**下界**夹到 `max(今天 − LEDGER_WINDOW_DAYS, enabledAt)`。
+   * 少了它，`setMoneyEnabled(true)` 写下的空账本会在下次开机时被
+   * `ensureLedgerDays` 补满 `[今天 − 7, 今天 − 1]`，于是**刚开启功能的第一屏就是
+   * 「有 7 天待结算」**；用户若不理它，`abandonExpiredDays` 还会按满额逐日扣款
+   * —— 把「缺席」当成「看见了却不结」，而那正是本子系统自己声明要避免的。
+   *
+   * **每一次「关 → 开」都要刷新**，不只是首次：中途停用三天的用户在那三天同样
+   * 「不在场」，重新开启后不能被追溯扣款。关闭（true → false）时**保留**旧值不清空。
+   */
+  enabledAt?: string
   /** 日账本，按 date 升序。 */
   days: LedgerDay[]
   /** 周结算记录，按 weekStart 升序。 */

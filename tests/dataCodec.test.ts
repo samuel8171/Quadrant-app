@@ -522,6 +522,47 @@ describe('dataCodec', () => {
     expect(out.money?.days[0]).toEqual(lateDay)
   })
 
+  it('enabledAt 为合法日期键时往返保真', () => {
+    const out = parseData(
+      JSON.stringify({
+        ...baseData,
+        money: {
+          enabled: true,
+          config: DEFAULT_MONEY_CONFIG,
+          days: [],
+          weeks: [],
+          enabledAt: '2026-09-27'
+        }
+      })
+    )
+    expect(out.money?.enabledAt).toBe('2026-09-27')
+  })
+
+  it('enabledAt 缺席时保持缺席（不替旧数据凭空补一个生效日）', () => {
+    // 缺席 = 本字段加入之前的旧数据 = 不夹取窗口下界。若这里补一个「今天」，
+    // 旧账本里合法的待结算日会被窗口夹取直接抹掉。
+    const out = parseData(serializeData(sampleDataWithMoney))
+    expect(out.money).toBeDefined()
+    expect(out.money).not.toHaveProperty('enabledAt')
+  })
+
+  it('enabledAt 非法（非日期键）时落成缺席，但账本整体保住', () => {
+    const out = parseData(
+      JSON.stringify({
+        ...baseData,
+        money: {
+          enabled: true,
+          config: DEFAULT_MONEY_CONFIG,
+          days: [],
+          weeks: [],
+          enabledAt: '2026/09/27'
+        }
+      })
+    )
+    expect(out.money?.enabled).toBe(true)
+    expect(out.money).not.toHaveProperty('enabledAt')
+  })
+
   it('桌面端不会因 money 坏了而丢掉用户数据（与 web 端 loadData 的三档降级对照）', () => {
     // parseData 是「逐字段重建」：goal / event / preset / weekEvent 各自独立规整，
     // money 的规整结果只影响 money 自己（`...(money ? { money } : {})`），

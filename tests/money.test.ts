@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type {
   LedgerDay,
   LedgerEntry,
@@ -7,6 +7,7 @@ import type {
   Quadrant,
   WeekSettlement
 } from '../src/shared/types'
+import { defaultData } from '../src/shared/defaults'
 import { addDays, dateKey, parseDateKey } from '../src/shared/dateKey'
 import {
   DEFAULT_MONEY_CONFIG,
@@ -29,6 +30,23 @@ import {
   settleDay,
   settleWeek
 } from '../src/shared/money'
+
+/*
+ * 「开关写入 enabledAt」那一组是**唯一的** store 级用例 —— 其余全是纯函数。
+ * `appStore` 顶层（间接）import 了 `cloudSync2`，而后者在顶层就 `createClient(...)`，
+ * 在没有原生 `WebSocket` 的环境（CI 锁 Node 20）一 import 就抛，会把整个套件拖垮。
+ * 用同名 mock 把那棵树隔掉（与 tests/cloudGuard.test.ts 同一手法）。
+ */
+const moneyCloud = vi.hoisted(() => ({
+  pushCloudData: vi.fn(),
+  fetchCloudData: vi.fn(),
+  fetchCloudMeta: vi.fn(),
+  hasCloudSession: vi.fn(),
+  announceSync: vi.fn()
+}))
+vi.mock('../src/renderer/src/lib/cloudSync2', () => moneyCloud)
+
+import { useAppStore } from '../src/renderer/src/state/appStore'
 
 // ============================================================================
 // 共享夹具与辅助函数（后续任务在下方追加用例，请保留本区块在最顶部）
@@ -2436,5 +2454,177 @@ describe('「那天我什么都没做」释放被推迟的周', () => {
     expect(next.weeks.map((w) => w.weekStart)).toEqual(['2026-09-21'])
     expect(next.weeks[0].spentTC).toBe(20) // 周六 20 币；周日「什么都没做」0 币
     expect(next.weeks[0].missCount).toBe(1) // 周日那条计划被记成未完成
+  })
+})
+
+// ============================================================================
+// Fix Wave：enabledAt —— 把记账窗口的下界夹到 max(今天 − 7, enabledAt)
+//
+// 病根：setMoneyEnabled(true) 写下空账本，下次开机 ensureLedgerDays 会补满
+// [今天 − 7, 今天 − 1]，于是新用户第一屏就是「有 7 天待结算」，不理它还会被
+// abandonExpiredDays 按满额逐日扣款 —— 把「缺席」当成「看见了却不结」。
+// ============================================================================
+
+/**
+ * 观察日 2026-09-30（周三），`enabledAt = 2026-09-27`（三天前）。
+ * 夹取后的窗口 = [2026-09-27, 2026-09-30) —— 恰好三天。
+ */
+const ENABLED_TODAY = '2026-09-30'
+const ENABLED_AT = '2026-09-27'
+
+/** 带 `enabledAt` 的状态（`mkMoney` 固定不带该字段）。 */
+function moneyEnabledAt(days: LedgerDay[], enabledAt?: string): MoneyState {
+  return {
+    enabled: true,
+    config: DEFAULT_MONEY_CONFIG,
+    days,
+    weeks: [],
+    ...(enabledAt === undefined ? {} : { enabledAt })
+  }
+}
+
+describe('enabledAt · 窗口下界夹取', () => {
+  it('enabledAt 三天前：只物化这三天（09-27 / 09-28 / 09-29）', () => {
+    const money = moneyEnabledAt([], ENABLED_AT)
+    const next = ensureLedgerDays(money, ENABLED_TODAY)
+    expect(next).not.toBe(money)
+    expect(next.days.map((d) => d.date)).toEqual(['2026-09-27', '2026-09-28', '2026-09-29'])
+    // 夹取只影响窗口，不吞掉字段本身
+    expect(next.enabledAt).toBe(ENABLED_AT)
+  })
+
+  it('enabledAt 就是今天：窗口为空，一条都不物化', () => {
+    // 这正是「刚开启功能」的那一刻：第一屏不该出现任何待结算日。
+    const money = moneyEnabledAt([], ENABLED_TODAY)
+    expect(ensureLedgerDays(money, ENABLED_TODAY)).toBe(money)
+  })
+
+  it('pendingDays 排除早于 enabledAt 的日子（即便它仍在 7 天窗口内）', () => {
+    const money = moneyEnabledAt(
+      [
+        unsettledDay('2026-09-25', []), // 早于 enabledAt：不报
+        unsettledDay('2026-09-27', []), // = enabledAt，窗口下界，报
+        unsettledDay('2026-09-28', []),
+        unsettledDay('2026-09-29', [])
+      ],
+      ENABLED_AT
+    )
+    expect(pendingDays(money, ENABLED_TODAY)).toEqual([
+      '2026-09-27',
+      '2026-09-28',
+      '2026-09-29'
+    ])
+  })
+
+  it('abandonExpiredDays 放过早于 enabledAt 的逾期未结算日（不按缺席扣款）', () => {
+    // 09-22 = 今天 − 8，已掉出 7 天窗口；但它早于 enabledAt，属于「功能还不存在」的那几天，
+    // 满额扣款惩罚的是「看见了却不结」，不是「不在场」—— 一分都不能扣。
+    const older = unsettledDay('2026-09-22', [])
+    const money = moneyEnabledAt([older], ENABLED_AT)
+    expect(abandonExpiredDays(money, ENABLED_TODAY)).toBe(money)
+    expect(money.days[0].settledAt).toBeNull()
+    expect(money.days[0].spentTC).toBe(0)
+  })
+
+  it('只放弃「生效之后、又掉出窗口」的那条带：enabledAt 之前不动，之后才扣', () => {
+    // enabledAt 很早（09-01）：09-22（今天−8）在 [enabledAt, 今天−7) 这条带里 ⇒ 正常放弃；
+    // 08-30 早于 enabledAt ⇒ 不动。
+    const afterEnable = unsettledDay('2026-09-22', [])
+    const beforeEnable = unsettledDay('2026-08-30', [])
+    const money = moneyEnabledAt([beforeEnable, afterEnable], '2026-09-01')
+    const next = abandonExpiredDays(money, ENABLED_TODAY)
+
+    const abandoned = next.days.find((d) => d.date === '2026-09-22')
+    const untouched = next.days.find((d) => d.date === '2026-08-30')
+    expect(abandoned?.settledAt).not.toBeNull()
+    expect(abandoned?.spentTC).toBe(DEFAULT_MONEY_CONFIG.abandonedDayTC)
+    expect(untouched).toBe(beforeEnable) // 同引用：一个字节都没动
+  })
+
+  it('enabledAt 缺席 ⇒ 三处行为与加本字段之前逐字一致（向后兼容不回退）', () => {
+    // 物化：仍是完整 7 天窗口
+    expect(ensureLedgerDays(mkMoney([]), R2D_TODAY).days.map((d) => d.date)).toEqual(R2D_WINDOW)
+    // 待结算：今天−7 仍在报（不被任何夹取挡掉）
+    expect(pendingDays(mkMoney([unsettledDay('2026-09-23', [])]), R2D_TODAY)).toEqual([
+      '2026-09-23'
+    ])
+    // 放弃：今天−8 仍按满额放弃
+    const expired = unsettledDay('2026-09-22', [])
+    const next = abandonExpiredDays(mkMoney([expired]), R2D_TODAY)
+    expect(next.days[0].settledAt).not.toBeNull()
+    expect(next.days[0].spentTC).toBe(DEFAULT_MONEY_CONFIG.abandonedDayTC)
+  })
+})
+
+// ============================================================================
+// Fix Wave：setMoneyEnabled 写 enabledAt（store 级；本文件唯一的非纯函数用例）
+// ============================================================================
+
+describe('setMoneyEnabled · enabledAt', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    // 固定「今天」= 2026-09-30，让写入值与断言同源
+    vi.setSystemTime(new Date('2026-09-30T10:00:00'))
+    useAppStore.setState({ data: defaultData(), loaded: true })
+  })
+
+  afterEach(() => {
+    useAppStore.setState({ data: defaultData(), loaded: true })
+    vi.useRealTimers()
+  })
+
+  it('首次开启写 enabledAt = 今天，并带上完整的 MoneyState', () => {
+    useAppStore.getState().setMoneyEnabled(true)
+    const money = useAppStore.getState().data.money
+    expect(money?.enabled).toBe(true)
+    expect(money?.enabledAt).toBe('2026-09-30')
+    expect(money?.config).toBe(DEFAULT_MONEY_CONFIG)
+    expect(money?.days).toEqual([])
+    expect(money?.weeks).toEqual([])
+  })
+
+  it('关 → 再开时刷新为新的启用日（不是首次才写）', () => {
+    useAppStore.setState({
+      data: {
+        ...defaultData(),
+        money: {
+          enabled: false,
+          config: DEFAULT_MONEY_CONFIG,
+          days: [],
+          weeks: [],
+          enabledAt: '2026-09-28'
+        }
+      }
+    })
+    useAppStore.getState().setMoneyEnabled(true)
+    expect(useAppStore.getState().data.money?.enabledAt).toBe('2026-09-30')
+  })
+
+  it('关闭只翻 enabled：保留 enabledAt、不清空账本', () => {
+    const money: MoneyState = {
+      enabled: true,
+      config: DEFAULT_MONEY_CONFIG,
+      days: [],
+      weeks: [],
+      enabledAt: '2026-09-28'
+    }
+    useAppStore.setState({ data: { ...defaultData(), money } })
+    useAppStore.getState().setMoneyEnabled(false)
+    const next = useAppStore.getState().data.money
+    expect(next?.enabled).toBe(false)
+    expect(next?.enabledAt).toBe('2026-09-28')
+  })
+
+  it('已是开启态时再开不刷新 enabledAt（非 false→true 转换）', () => {
+    const money: MoneyState = {
+      enabled: true,
+      config: DEFAULT_MONEY_CONFIG,
+      days: [],
+      weeks: [],
+      enabledAt: '2026-09-28'
+    }
+    useAppStore.setState({ data: { ...defaultData(), money } })
+    useAppStore.getState().setMoneyEnabled(true)
+    expect(useAppStore.getState().data.money?.enabledAt).toBe('2026-09-28')
   })
 })

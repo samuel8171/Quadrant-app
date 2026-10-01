@@ -585,4 +585,53 @@ describe('web platform API', () => {
     expect(loaded).toEqual(sampleDataWithMoney)
     expect(loaded.money).toEqual(sampleDataWithMoney.money)
   })
+
+  it('enabledAt 缺席是合法的（本字段加入之前的载荷）', async () => {
+    // 缺席 = 不夹取窗口下界。判它非法会让第 2 档把用户整份账本丢掉。
+    const legacy = {
+      ...baseData,
+      goals: [validGoal],
+      money: { enabled: true, config: validMoneyConfig, days: [], weeks: [] }
+    }
+    const api = createWebPlatformApi(fakeStorage(JSON.stringify(legacy)))
+    const loaded = await api.loadData()
+    expect(loaded.goals).toHaveLength(1)
+    expect(loaded.money?.enabled).toBe(true)
+  })
+
+  it('enabledAt 为合法日期键时原样通过校验', async () => {
+    const data = {
+      ...baseData,
+      money: {
+        enabled: true,
+        config: validMoneyConfig,
+        days: [],
+        weeks: [],
+        enabledAt: '2026-09-27'
+      }
+    }
+    const api = createWebPlatformApi(fakeStorage(JSON.stringify(data)))
+    const loaded = await api.loadData()
+    expect(loaded.money?.enabledAt).toBe('2026-09-27')
+  })
+
+  it('enabledAt 存在但不是日期键时只丢账本（存在即须严格）', async () => {
+    for (const bad of ['2026/09/27', 'yesterday', 20260927, null, {}] as unknown[]) {
+      const data = {
+        ...baseData,
+        goals: [validGoal],
+        money: {
+          enabled: true,
+          config: validMoneyConfig,
+          days: [],
+          weeks: [],
+          enabledAt: bad
+        }
+      }
+      const api = createWebPlatformApi(fakeStorage(JSON.stringify(data)))
+      const loaded = await api.loadData()
+      expect(loaded.goals).toHaveLength(1)
+      expect(loaded.money).toBeUndefined()
+    }
+  })
 })

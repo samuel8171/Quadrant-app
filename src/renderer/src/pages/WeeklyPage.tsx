@@ -35,10 +35,16 @@ export default function WeeklyPage(): JSX.Element {
    * 待结算天数。`money` 的引用只要没变（store 每次改动都换新对象）就不重算，
    * 所以周视图/日视图之间的切换、动画重渲染都不会反复跑选择器。
    * 关闭开关或从未启用时恒为 0，卡片随之不渲染。
+   *
+   * `today` 每次渲染都现算、并进依赖（与 `SettlePanel`、`MinePage` 取法一致）：
+   * 若只在 `[money]` 上记忆，跨零点后卡片计数会一直停在旧值，直到 `money` 再次变化
+   * （往往要等到用户结算某一天），与面板当场算出的数字对不上。不引入轮询定时器 ——
+   * 理由同 `MinePage`：`today` 只在渲染时有意义，而本页在交互/状态变化时必然重渲染。
    */
+  const today = dateKey(new Date())
   const pendingCount = useMemo(
-    () => (money?.enabled === true ? pendingDays(money, dateKey(new Date())).length : 0),
-    [money]
+    () => (money?.enabled === true ? pendingDays(money, today).length : 0),
+    [money, today]
   )
 
   const openDay = (key: string): void => {

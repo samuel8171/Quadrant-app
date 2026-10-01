@@ -128,6 +128,19 @@ function validOptionalBoolean(value: unknown): boolean {
   return value === undefined || typeof value === 'boolean'
 }
 
+/**
+ * `MoneyState.enabledAt`（最近一次「关 → 开」的生效日）同样是**可选**字段：缺席放行，
+ * 一旦存在就必须是日期键 `YYYY-MM-DD`。与 `validPhotos` / `validOptionalMinutes`
+ * 同一套宽严标准（「可选，但存在即严格」）。
+ *
+ * 缺席只意味着「这是本字段加入之前的旧数据」，语义是「不夹取窗口下界」；判它非法会让
+ * `loadData` 的第二档把用户**整份账本**静默丢掉，代价与收益不成比例。它挂在 `MoneyState`
+ * 上而不是 `LedgerDay` 上 —— 它是整份账本的启用日，不是某一天自己的字段。
+ */
+function validOptionalDateKey(value: unknown): boolean {
+  return value === undefined || isDateKey(value)
+}
+
 function validLedgerDay(value: unknown): boolean {
   if (!isRecord(value)) return false
   if (!isDateKey(value.date)) return false
@@ -172,6 +185,7 @@ function validQuadrantMultiplier(value: unknown): boolean {
 function validMoney(value: unknown): boolean {
   if (!isRecord(value)) return false
   if (typeof value.enabled !== 'boolean') return false
+  if (!validOptionalDateKey(value.enabledAt)) return false
   const config = value.config
   if (!isRecord(config) || !MONEY_NUMERIC_KEYS.every((key) => isFiniteNumber(config[key]))) {
     return false

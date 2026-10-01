@@ -20,6 +20,10 @@ interface Props {
    * - 计算口径与调用点留在日视图一处，和 `costOfEntry` 的其它调用点一样集中可审。
    *
    * `null` / `undefined` = 不显示（周视图走的就是这条）。
+   *
+   * ⚠️ 即便传了值，当块体**矮到装不下估值行**时也会被本组件丢弃（见 `COST_MIN_BLOCK_H`）：
+   * 块体是绝对定位 + `overflow: hidden`，一行字塞不进就只会被裁成一道残缺的条 ——
+   * 「被裁掉的信息等于没有」（同 theme.css 里 `day-event-head` 的注释）。
    */
   costTC?: number | null
   /** 正在拖动：块体留在原位并转半透明，落点由幽灵预览表示。 */
@@ -29,6 +33,22 @@ interface Props {
   onContextMenu?: (e: React.MouseEvent, event: WeekEvent) => void
   onEdit?: (event: WeekEvent) => void
 }
+
+/**
+ * 估值行（`≈N` + 手写图标）**装得下**所需的最小块高（px）。
+ *
+ * 实测（`tmp/money-block-probe.mjs`，1440×900 与 390×844 同值）：compact 档的估值行
+ * 高 **12px**（12px 图标与 9px 文字的行盒同高，后者才是决定项），块体上下各有 1px 描边
+ * ⇒ 块高 ≥ 12 + 2 = **14px** 时 padding box 才容得下它、不被 `overflow: hidden` 裁切。
+ *
+ * 判别器：这个阈值只跟 compact 档估值行的字号 / 行高（`.day-event.compact .day-event-cost`）
+ * 与块体描边走，**改那两处样式时要一并复核**（阈值 = 行高 + 上下描边）。
+ *
+ * 为什么不是「compact 档一律不显示」：`compact` 的边界是 18px（时长 < 22.5 分钟），比
+ * 「装不下」的边界宽 —— 20 分钟（16px）实测溢出 0px、完全装得下，一律禁掉是白白丢掉
+ * 一个能正常读的估值。所以按**能否装下**判，而不是按档位判。
+ */
+const COST_MIN_BLOCK_H = 14
 
 export default function EventBlock({
   event,
@@ -49,7 +69,8 @@ export default function EventBlock({
   const short = duration < 45
   const showTitle = overview ? height >= 10 : true
   const showMeta = !overview && !compact && !short
-  const showCost = costTC !== null && costTC !== undefined
+  // 装不下就不画：矮块里画出来只会被 overflow: hidden 裁成残条（见 COST_MIN_BLOCK_H）。
+  const showCost = costTC !== null && costTC !== undefined && height >= COST_MIN_BLOCK_H
 
   return (
     <div

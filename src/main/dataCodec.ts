@@ -244,6 +244,10 @@ function normalizeWeekSettlement(raw: unknown): WeekSettlement | null {
  * 语义与 `validAppData` 的「整体放行未知字段」不同：这里是**逐字段重建**。
  * 非对象、或 `enabled` 不是布尔 → 整块丢弃（返回 `undefined`）；
  * `days` / `weeks` 逐项结构过滤，字段不全的项丢弃但不使整份数据失效。
+ *
+ * `enabledAt` 是**后加的可选字段**：只有合法日期键才保留，缺席或非法一律落成 undefined
+ * （= 不夹取窗口下界）。这必须与 `MoneyState.enabledAt` 的语义一致 —— 若在这里替旧数据
+ * 补一个「今天」，旧账本里合法的待结算日会被下一步的窗口夹取直接抹掉。
  */
 export function normalizeMoney(raw: unknown): MoneyState | undefined {
   if (!isRecord(raw)) return undefined
@@ -262,7 +266,8 @@ export function normalizeMoney(raw: unknown): MoneyState | undefined {
     enabled: raw.enabled,
     config: normalizeMoneyConfig(raw.config),
     days,
-    weeks
+    weeks,
+    ...(isDateKey(raw.enabledAt) ? { enabledAt: raw.enabledAt } : {})
   }
 }
 

@@ -1767,7 +1767,11 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
-/* 极短块（< 22.5 分钟）标题会缩到 8px，估值跟着缩，免得比标题还大。 */
+/*
+ * 极短块（< 22.5 分钟）标题会缩到 8px，估值跟着缩，免得比标题还大。
+ * ⚠️ 这里的字号/行高决定「估值行有多高」，进而决定 EventBlock 的 `COST_MIN_BLOCK_H`
+ * （装不下就不画）：改这里要一并复核那个阈值（阈值 = 本行高 + 块体上下描边）。
+ */
 .day-event.compact .day-event-cost {
   font-size: 9px;
 }

@@ -23,13 +23,22 @@ export default function MinePage(): JSX.Element {
   const [notice, setNotice] = useState<string | null>(null)
 
   /*
-   * 派生统计只在开启时算。`money` 的引用只要没变（store 每次改动都换新对象）
-   * 就不会重算，所以拖动/输入引起的重渲染不会反复跑选择器。
-   * `today` 取本地日期键，与 store 里 `rolloverMoneyWeek` 的取法一致。
+   * `today` 每次渲染都现算（与 `SettlePanel` 取法一致），并进 `useMemo` 的依赖。
+   *
+   * 为什么不把 `dateKey(new Date())` 写进回调里只按 `[money]` 记忆：那样 `today` 只在
+   * `money` 变化时被捕获一次，跨零点（尤其是**跨周**，`selectMoneyStats` 的周一与周额度
+   * 都会整体换一档）以后组件若因别的原因重渲染，读到的仍是旧的 `today`，与日结面板当场
+   * 算出来的那份直接矛盾 —— 同一屏两个数字不同源。
+   *
+   * 依赖收的是 `today` 这个**字符串**：一天之内它恒定，`useMemo` 因而不会多做功；跨零点
+   * 它变化，下一次渲染就会重算。**不引入轮询定时器**：`today` 只在渲染时才有意义，而
+   * 「我的」页只会在用户交互/状态变化时重渲染 —— 那一刻现算即是正确值，为此常驻一个
+   * 每 60 秒的定时器，代价（无谓的重渲染与 selector 重跑）远大于收益（一天一次的边界）。
    */
+  const today = dateKey(new Date())
   const stats = useMemo(
-    () => (money?.enabled === true ? selectMoneyStats(money, dateKey(new Date())) : null),
-    [money]
+    () => (money?.enabled === true ? selectMoneyStats(money, today) : null),
+    [money, today]
   )
 
   const isDesktop = Boolean((window as any).quadrantApi)

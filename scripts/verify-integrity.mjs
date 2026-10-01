@@ -431,6 +431,10 @@ const validOptionalMinutes = (v) => v === undefined || isFiniteNum(v)
 // 存在则必须是布尔，与 platformApi.validLedgerDay 的 validOptionalBoolean 同口径。
 const validOptionalBoolean = (v) => v === undefined || typeof v === 'boolean'
 
+// enabledAt（最近一次「关 → 开」的生效日，挂在 MoneyState 上而非 LedgerDay）同样是后加的
+// 可选字段：缺席放行、存在则必须是日期键，与 platformApi.validMoney 的 validOptionalDateKey 同口径。
+const validOptionalDateKey = (v) => v === undefined || isDateKey(v)
+
 function validLedgerDay(v) {
   if (!isRecord(v)) return false
   if (!isDateKey(v.date)) return false
@@ -458,6 +462,7 @@ function validQuadrantMultiplier(v) {
 function validMoney(v) {
   if (!isRecord(v)) return false
   if (typeof v.enabled !== 'boolean') return false
+  if (!validOptionalDateKey(v.enabledAt)) return false
   if (!isRecord(v.config) || !MONEY_NUMERIC_KEYS.every((k) => isFiniteNum(v.config[k]))) return false
   if (!validQuadrantMultiplier(v.config.quadrantMultiplier)) return false
   if (!Array.isArray(v.days) || !v.days.every(validLedgerDay)) return false
@@ -522,7 +527,7 @@ function firstViolation(value) {
     quad(e.quadrant) && num(e.startMin) && num(e.endMin) && typeof e.showInQuadrant === 'boolean')
   if (i >= 0) return `weekEvents[${i}] 不合规（检查 id/date/title/color/remark/createdAt/quadrant/startMin/endMin/showInQuadrant）`
 
-  if (d.money !== undefined && !validMoney(d.money)) return 'money 不合规（检查 enabled/config/days/weeks）'
+  if (d.money !== undefined && !validMoney(d.money)) return 'money 不合规（检查 enabled/enabledAt/config/days/weeks）'
 
   return '未知'
 }

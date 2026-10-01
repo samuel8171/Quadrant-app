@@ -782,16 +782,25 @@ export const useAppStore = create<AppState>((set, get) => ({
    * `loadData()` 随之回退到 `defaultData()` —— 用户的目标与事件会被无声清空。
    * 所以 `config` 直接引用 `DEFAULT_MONEY_CONFIG`，不手抄字面量（抄一份就会漂移）。
    *
-   * **关闭只翻 `enabled`**：`days` / `weeks` 原样保留（spec 4.3）。
+   * **关闭只翻 `enabled`**：`days` / `weeks` / `enabledAt` 原样保留（spec 4.3）。
    * 关一下开关不该等于把账本删了 —— 那是不可逆的。
+   *
+   * **每次「关 → 开」都刷新 `enabledAt`（不只是首次）**：记账窗口的下界会被夹到
+   * `max(今天 − 7, enabledAt)`（见 `shared/money.ts` 的 `ledgerWindowStart`）。中途停用
+   * 三天的用户在那三天同样「不在场」，重新开启后不能被追溯扣款，所以启用日必须跟着这次
+   * 开启走。`enabled` 已经是 `true` 时再调本动作不是「转换」，不刷新 —— 否则一次多余的
+   * 重开就会把窗口往前推、把已经物化出来的待结算日全部夹掉。
    */
   setMoneyEnabled: (enabled) => {
     const current = get().data
     // 从未启用过又要关：没有可改的状态，不凭空写出一份空账本。
     if (!current.money && !enabled) return
+    // false → true 才算「开启」；首次启用时 current.money 为 undefined，同样是开启。
+    const entering = enabled && current.money?.enabled !== true
+    const enabledAt = dateKey(new Date())
     const money: MoneyState = current.money
-      ? { ...current.money, enabled }
-      : { enabled: true, config: DEFAULT_MONEY_CONFIG, days: [], weeks: [] }
+      ? { ...current.money, enabled, ...(entering ? { enabledAt } : {}) }
+      : { enabled: true, config: DEFAULT_MONEY_CONFIG, days: [], weeks: [], enabledAt }
     const data = { ...current, money }
     saveSoon(data)
     set({ data })
