@@ -414,37 +414,36 @@ export function currentQuota(state: MoneyState): { weekTC: number; weekLT: numbe
 }
 
 /**
- * 为「计划过、但账本里还没有记录」的过去日期补出一条未结算的日账本（spec 7.1）。
+ * 为 `[today − 7, today)` 里的**每一天**补出一条未结算的日账本（spec R2 §4）。
  *
  * **为什么需要它**：`pendingDays` 只能扫出**已存在**的日账本，而计费是在象限页完成时才追加条目的。
- * 于是「周末排了计划、当天没打开应用」这种最常见的情况下，压根没有人会为那天写下一条记录，
- * 日结卡片就永远不出现 —— 整个子系统唯一的日常交互入口形同虚设。本函数就是那条缺失的接线。
+ * 于是「当天没打开应用」这种最常见的情况下，压根没有人会为那天写下一条记录，日结卡片就永远不出现 ——
+ * 整个子系统唯一的日常交互入口形同虚设。本函数就是那条缺失的接线。
  *
- * **窗口只回看两周**：`[本周一 − 7, 今天)`。上限是刻意的 —— 用户离开一个月再回来时，
- * 若把整月的计划日全部物化出来，卡片会一次报出几十天待结算，那不是提醒而是惩罚；
- * 两周足够覆盖「隔了一个周末才回来」。窗口**不含今天**：它还没结束，此刻谈结算为时过早。
+ * **窗口是固定 7 天、且不再看「有没有计划」**：用户明确要求「没有安排计划的天同样也要问」。
+ * 因此本函数**不接受** `plannedDates` —— 它过去只补「计划过的日子」，那正是 R2 推翻的行为：
+ * 只在周六、周二有计划的人，周日 / 周一永远不是空洞（空洞会让周滚动永久堵死，见 `openNightsBefore`）。
+ * 窗口**不含今天**：它还没结束，此刻谈结算为时过早。
  *
  * **只补不碰**：`days` 里已有该日期的记录（无论已结算还是未结算）一律原样跳过 ——
  * 已结算的快照不可变，未结算的记录里可能已经有用户录入的条目，物化不能覆盖它们。
  *
+ * **不物化窗口之外的历史**：用户离开一个月再回来时，只补最近 7 天，更早的日子**不会**被凭空补出来
+ * （所以也不会被 `abandonExpiredDays` 扣款 —— 放弃只惩罚「看见了却不结」，不惩罚「不在场」）。
+ *
  * 无变化时**原对象返回**：调用方（appStore）据返回值恒等短路，避免每次冷启动都白写一遍盘。
- * 纯函数：`today` 与 `plannedDates` 都是入参，不读时钟；`plannedDates` 里的重复项在内部去重，
- * 不要求调用方先去重。
+ * 纯函数：`today` 是入参，不读时钟。
  */
-export function ensureLedgerDays(
-  money: MoneyState,
-  plannedDates: string[],
-  today: string
-): MoneyState {
-  const windowStart = dateKey(addDays(mondayOf(parseDateKey(today)), -7))
+export function ensureLedgerDays(money: MoneyState, today: string): MoneyState {
+  const todayDate = parseDateKey(today)
   const existing = new Set(money.days.map((day) => day.date))
-  const missing = new Set<string>()
-  for (const date of plannedDates) {
-    if (date < windowStart || date >= today) continue
-    if (existing.has(date)) continue
-    missing.add(date)
+  const missing: string[] = []
+  // offset 从 7 递减到 1：[today−7, today−1]，天然按 date 升序
+  for (let offset = 7; offset >= 1; offset--) {
+    const date = dateKey(addDays(todayDate, -offset))
+    if (!existing.has(date)) missing.push(date)
   }
-  if (missing.size === 0) return money
+  if (missing.length === 0) return money
 
   const days = [...money.days]
   for (const date of missing) {
@@ -462,6 +461,63 @@ export function ensureLedgerDays(
     })
   }
   days.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
+  return { ...money, days }
+}
+
+/**
+ * 逾期放弃（spec R2 §4「逾期即放弃」）：把掉出 7 天窗口、却仍未结算的日账本
+ * 按 `config.abandonedDayTC` **全额**落账（默认 80 = 日上限全额），并冻结为已结算。
+ *
+ * 用户的规则：日结范围为往前推 7 天，超过范围视为放弃日结，未结算的金钱按照时币当日全扣、娱币不扣。
+ * 所以这里只改 `spentTC`（→ 满额），**不动** `deltaLT`（娱币不扣，且条目层面的娱币判定也不再重算）。
+ *
+ * **放弃只作用于「已经存在的记录」，不补、也不罚「不在场」。** 这是刻意的裁定，不是漏洞：
+ * - `ensureLedgerDays` 只物化最近 7 天，一个离开一个月的用户对那几周**没有任何记录**，
+ *   于是这里也一分不扣。满额扣款惩罚的是**「看见了日结却不结」**，不是**「缺席」**。
+ * - 若改成「按缺席天数无限往回补记录再逐日扣 80」，一个离开整月的人会被扣掉 2000 多币，
+ *   一周 560 的池子会被击穿好几倍，产出的是无意义的数字。
+ * 因此**不要**把本函数「修」成会物化无界历史的样子。
+ *
+ * **「已主动结算的空日」与「被放弃的空日」不是一回事**：前者走「那天我什么都没做」的路径，
+ * 落成 `spentTC === 0`；后者落成 `spentTC === abandonedDayTC`。数字已经把它俩分开了，
+ * 所以**不新增** `LedgerDay` 字段来标记放弃（新标量要动 5 个同步点、多一轮校验，且暂无消费者）。
+ *
+ * **三个被写死的字段**（其余全部原样保留）：
+ * - `spentTC` → `config.abandonedDayTC`（满额）；
+ * - `settledAt` → **到期日**，即这个日子最后一次还在窗口内的那一天（`date + 7`），而不是执行时刻 ——
+ *   本函数是纯的、不读时钟，只有由 `date` 推出的到期日是可复现的；
+ * - `nightPending` → `false`。这一步**必需**，见下。
+ *
+ * 其余快照字段（`dayLimit` / `overdraft` / `entries` / `videoMin` / `gameMin`）**原样保留**，不是疏忽：
+ * 它们对「放弃日」没有消费者 —— `selectMoneyStats` 的日额度走 `dayLimitOf` 现算、`settleWeek` 只累加
+ * `spentTC`。满额 80 恰好等于默认日上限，故 `overdraft` 留 0 也表示「一天恰好花掉整天额度、不透支」，
+ * 语义自洽；去重算它们只会凭空发明一个从未发生过的结算过程。
+ *
+ * **为什么必须清 `nightPending`（不可重结的关键）**：`confirmNight` 是唯一获准改动已结算快照的地方，
+ * 而它的前提恰恰是「`settledAt !== null`」——**它不拒绝已结算日，它要求的正是已结算日**，然后拿
+ * 原来的条目整日重跑 `settleDay`。若被放弃的那天还挂着 `nightPending: true`，`openNightsBefore` 会在
+ * 后续某次结算时把它选中，`confirmNight` 随即重跑整天：条目的花费（多为 0）会把这 80 币**静默抹成 0**。
+ * 把 `nightPending` 置 false 就把它从 `openNightsBefore` 的候选里摘掉，于是它永不会被重跑。
+ * 语义上也成立：从没结算过的一天本来就没有「深夜补记」这一问。
+ *
+ * 无逾期记录时**原对象返回**：调用方（appStore）据返回值恒等短路，避免无谓落盘。纯函数：`today` 是入参。
+ */
+export function abandonExpiredDays(money: MoneyState, today: string): MoneyState {
+  const windowStart = dateKey(addDays(parseDateKey(today), -7))
+  const expired = money.days.some((day) => day.settledAt === null && day.date < windowStart)
+  if (!expired) return money
+
+  const days = money.days.map((day) =>
+    day.settledAt === null && day.date < windowStart
+      ? {
+          ...day,
+          // date + 7：这个日子最后一次仍在 [today−7, today) 里的那天（见函数头注释）
+          settledAt: dateKey(addDays(parseDateKey(day.date), 7)),
+          spentTC: money.config.abandonedDayTC,
+          nightPending: false
+        }
+      : day
+  )
   return { ...money, days }
 }
 
@@ -806,9 +862,11 @@ export function pendingDays(money: MoneyState, today: string): string[] {
  * 的 `break` 永久推迟，后面的周跟着一起堵死，`currentQuota` 永远返回配置值。问遍全部就没有
  * 「选不中」这回事：任何一次晚于它的结算都会把它清掉。
  *
- * **不要求它是日历上的昨天**（第四轮引入，保留）：`ensureLedgerDays` 只为**计划过的**日子补
- * 日账本，没计划的日子是空洞。若死等「昨天」，一旦昨天没记录（例如只在周六、周二有计划，
- * 周日 / 周一都没有），前一天那个未收尾的深夜就永远没人问，同样会永久堵死周滚动。
+ * **不要求它是日历上的昨天**（第四轮引入，R2-D 保留）：R2-D 之后 `ensureLedgerDays` 会物化
+ * `[today − 7, today)` 的**每一天**，窗口内因此不再有空洞；但窗口**左界**那一天（`today − 7`）的前一天
+ * `today − 8` 在窗口之外（可能没有记录，或已被 `abandonExpiredDays` 放弃成已结算），所以「严格昨天」
+ * 仍会在左界落空。更根本的是：一次结算可能距上一次开机好几天，中途的日子没人问过 —— 死等「昨天」
+ * 就会让更早那个未收尾的深夜永远没人问，永久堵死周滚动（见 `ensureWeekRollover` 的 `break`）。
  *
  * **本函数与 `ensureWeekRollover` 共同依赖的不变量**：面板每结算一天，都会先清掉**所有**
  * 早于它的未收尾深夜（逐条问、逐条清）。因此一次结算之后，账本里不会再留下「比被结算日更早

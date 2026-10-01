@@ -16,6 +16,7 @@ import { defaultData, isEmptyData } from '../../../shared/defaults'
 import { addDays, dateKey, parseDateKey } from '../../../shared/dateKey'
 import {
   DEFAULT_MONEY_CONFIG,
+  abandonExpiredDays,
   costOfEntry,
   dayLimitOf,
   ensureLedgerDays,
@@ -136,8 +137,10 @@ interface AppState {
   resolveLeave: (action: 'save' | 'discard' | 'cancel') => void
   setMoneyEnabled: (enabled: boolean) => void
   rolloverMoneyWeek: () => void
-  /** 为「计划过、但账本里还没有记录」的过去日期补出未结算日账本（日结卡片的入口）。 */
+  /** 补出 `[今天 − 7, 今天)` 里每一天的未结算日账本（日结卡片的入口）。 */
   materializeLedgerDays: () => void
+  /** 把掉出 7 天窗口仍未结算的日账本按满额扣款并冻结（spec R2 §4「逾期即放弃」）。 */
+  abandonExpiredLedgerDays: () => void
   /** 用 `entries` 结算 `date`（Task 8 的正向路径，快照只有这里能首次冻结）。 */
   commitDaySettlement: (date: string, entries: LedgerEntry[]) => void
   /** 把一条计划外条目追加进 `date`（未结算）的账本。 */
@@ -318,10 +321,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     // 先把本地数据渲染出来，云端对账放到后面——网络慢时首屏不该等它。
     const data = await getPlatformApi().loadData()
     set({ data, loaded: true })
-    // 顺序不能反：先把「计划过但没有记录」的过去日补进账本，周结算才看得到它们；
-    // 否则含未结算日的那些周会被当成空周冻结成一个再也改不了的 0。
+    // 顺序不能反：先物化 [今天−7, 今天) 的每一天，再把掉出窗口的未结算日放弃冻结，
+    // 最后才滚动周结算。放弃必须在滚动之前 —— 被放弃的一天会变成「已结算」，
+    // 而一周只有在它的日账本全部已结算、且没有 nightPending 时才结算（见 ensureWeekRollover）。
     get().materializeLedgerDays()
-    // 本地可能已经跨了若干个周（上次打开是很久以前），补齐周结算。桌面端也要跑。
+    get().abandonExpiredLedgerDays()
     get().rolloverMoneyWeek()
     if (isDesktopRuntime()) return
     await reconcileWithCloud()
@@ -386,9 +390,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     // 表现为"同步过的东西过一会儿自己变回去了"。
     set({ data })
     void getPlatformApi().saveData(data)
-    // 云端那份可能是另一台设备写的：先补出「计划过但没记录」的过去日，再补周结算
-    // （顺序同 init —— 物化必须在滚动之前）。
+    // 云端那份可能是另一台设备写的：先补出窗口内的未结算日、放弃逾期日，再补周结算
+    // （顺序同 init —— 物化与放弃都必须在滚动之前）。
     get().materializeLedgerDays()
+    get().abandonExpiredLedgerDays()
     // 云端那份可能是在另一个设备上、跨了周才写下的，落地后立刻补一次周结算。
     get().rolloverMoneyWeek()
   },
@@ -771,23 +776,38 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   /**
-   * 补出「计划过、但账本里还没有记录」的过去日期（spec 7.1）。
+   * 补出 `[今天 − 7, 今天)` 里**每一天**的未结算日账本（spec R2 §4）。
    *
    * 这是日结卡片能出现的**前提**：没有它，`pendingDays` 永远扫不到任何东西 ——
-   * 计费只发生在象限页完成事件的那一刻，而「排了计划但当天没打开应用」根本不会产生日账本。
+   * 计费只发生在象限页完成事件的那一刻，而「当天没打开应用」根本不会产生日账本。
+   * R2-D 起不再看「有没有计划」：没有安排计划的天同样要问。
    * 未启用时是空操作；`ensureLedgerDays` 无变化时原对象返回，据此短路掉无谓的落盘。
    *
-   * 必须在 `rolloverMoneyWeek` **之前**调用：物化出来的未结算日会让含它的那一周被推迟结算
-   * （见 `ensureWeekRollover`），而不是先被冻结成一个 0。
+   * 必须在 `abandonExpiredLedgerDays` 与 `rolloverMoneyWeek` **之前**调用：物化出来的未结算日会让
+   * 含它的那一周被推迟结算（见 `ensureWeekRollover`），而不是先被冻结成一个 0。
    */
   materializeLedgerDays: () => {
     const data = get().data
     if (data.money?.enabled !== true) return
-    const money = ensureLedgerDays(
-      data.money,
-      data.weekEvents.map((event) => event.date),
-      dateKey(new Date())
-    )
+    const money = ensureLedgerDays(data.money, dateKey(new Date()))
+    if (money === data.money) return
+    const next = { ...data, money }
+    saveSoon(next)
+    set({ data: next })
+  },
+
+  /**
+   * 把掉出 7 天窗口、却仍未结算的日账本按满额扣款并冻结（spec R2 §4「逾期即放弃」）。
+   *
+   * 必须在 `materializeLedgerDays` **之后**、`rolloverMoneyWeek` **之前**调用：
+   * 放弃会把一天从「未结算」翻成「已结算」，而一周只有在它的日账本全部已结算、且没有
+   * `nightPending` 时才结算 —— 顺序反了，被放弃的那一周就到不了可结算状态。
+   * 未启用时是空操作；`abandonExpiredDays` 无逾期记录时原对象返回，据此短路掉无谓的落盘。
+   */
+  abandonExpiredLedgerDays: () => {
+    const data = get().data
+    if (data.money?.enabled !== true) return
+    const money = abandonExpiredDays(data.money, dateKey(new Date()))
     if (money === data.money) return
     const next = { ...data, money }
     saveSoon(next)
@@ -894,8 +914,8 @@ export const useAppStore = create<AppState>((set, get) => ({
    *
    * `previousDate` **不要求是日历上的昨天**：面板会挑出「正在结算的那一天之前、**所有**
    * 还挂着 `nightPending` 的已结算日」逐个来问（见 `SettlePanel` 与 `openNightsBefore`）。
-   * materialization 只为计划过的日子建记录，未计划的日子是空洞；若死等「昨天」，一旦昨天
-   * 没记录，前一个未收尾的深夜就永远没人问、那一周也就永远结算不了。也正因为要问「所有」，
+   * 一次结算可能距上次开机好几天，且窗口左界那天（今天 − 7）的前一天落在窗口之外、可能没有记录；
+   * 若死等「昨天」，更早那个未收尾的深夜就永远没人问、那一周也就永远结算不了。也正因为要问「所有」，
    * 这个 action 一次只清一天 —— 面板逐条调用它，谁也不会被落下。
    *
    * 面板的「那天我什么都没做」也会对**当天自己**调用它并传 `worked: false`：一天既然

@@ -10,6 +10,7 @@ import type {
 import { addDays, dateKey, parseDateKey } from '../src/shared/dateKey'
 import {
   DEFAULT_MONEY_CONFIG,
+  abandonExpiredDays,
   consumptionDeltaLT,
   costOfEntry,
   currentQuota,
@@ -1231,75 +1232,212 @@ describe('pendingDays', () => {
 })
 
 // ============================================================================
-// Task 8 追加：补建「计划过的过去日」与「周结算推迟」
+// Task 8 追加：补建过去日与「周结算推迟」
+// Task R2-D 修正：窗口固定为 [今天 − 7, 今天)，不再要求「有计划」
 // ============================================================================
 
 /**
- * `ensureLedgerDays` 的观察日：2026-09-30（周三），本周一 2026-09-28，
- * 于是回看窗口 = `[2026-09-21, 2026-09-30)` —— 上周一（含）到昨天（含）。
+ * `ensureLedgerDays` / `abandonExpiredDays` 的观察日：2026-09-30（周三）。
+ * 固定 7 天窗口 = `[2026-09-23, 2026-09-30)`：
+ * - `2026-09-23`（= 今天 − 7）在窗口内，必须被物化；
+ * - `2026-09-22`（= 今天 − 8）在窗口外，已有记录则被放弃；
+ * - `2026-09-30`（今天）不在窗口内，永不物化。
  */
+const R2D_TODAY = '2026-09-30'
+const R2D_WINDOW = [
+  '2026-09-23',
+  '2026-09-24',
+  '2026-09-25',
+  '2026-09-26',
+  '2026-09-27',
+  '2026-09-28',
+  '2026-09-29'
+]
+
+/** 一条「窗口内未结算空记录」的逐字形状（与 `ensureLedgerDays` 的产物对齐）。 */
+function emptyLedgerDay(date: string): LedgerDay {
+  return {
+    date,
+    settledAt: null,
+    entries: [],
+    videoMin: 0,
+    gameMin: 0,
+    dayLimit: 0,
+    spentTC: 0,
+    overdraft: 0,
+    deltaLT: 0,
+    nightPending: true
+  }
+}
+
 describe('ensureLedgerDays', () => {
-  it('窗口内、有计划、但没有记录的日期 → 补出一条未结算的空记录', () => {
+  it('窗口内每一天都补一条未结算空记录 —— 没有安排计划的天同样要问', () => {
     const money = mkMoney([])
-    const next = ensureLedgerDays(money, ['2026-09-29'], '2026-09-30')
+    const next = ensureLedgerDays(money, R2D_TODAY)
     expect(next).not.toBe(money)
-    expect(next.days).toEqual([
-      {
-        date: '2026-09-29',
-        settledAt: null,
-        entries: [],
-        videoMin: 0,
-        gameMin: 0,
-        dayLimit: 0,
-        spentTC: 0,
-        overdraft: 0,
-        deltaLT: 0,
-        nightPending: true
-      }
-    ])
+    // 逐字形状：窗口 7 条，每条的所有字段都钉死（与改前「只钉一条」同等强度）
+    expect(next.days).toEqual(R2D_WINDOW.map(emptyLedgerDay))
     // 其余字段原样带过
     expect(next.enabled).toBe(true)
     expect(next.config).toBe(DEFAULT_MONEY_CONFIG)
     expect(next.weeks).toEqual([])
   })
 
-  it('窗口外的日期一律忽略（上周一之前 / 今天 / 未来）', () => {
-    const money = mkMoney([])
-    expect(ensureLedgerDays(money, ['2026-09-20'], '2026-09-30')).toBe(money) // 早于窗口起点
-    expect(ensureLedgerDays(money, ['2026-09-30'], '2026-09-30')).toBe(money) // 今天尚未结束
-    expect(ensureLedgerDays(money, ['2026-10-05'], '2026-09-30')).toBe(money) // 未来
-  })
-
-  it('窗口的边界含两端：上周一补得出来、更早一天补不出来', () => {
-    const atStart = ensureLedgerDays(mkMoney([]), ['2026-09-21'], '2026-09-30')
-    expect(atStart.days.map((d) => d.date)).toEqual(['2026-09-21'])
-    expect(pendingDays(atStart, '2026-09-30')).toEqual(['2026-09-21'])
+  it('窗口是固定 7 天：今天 − 7 在内、今天 − 8 与今天都在外', () => {
+    const dates = ensureLedgerDays(mkMoney([]), R2D_TODAY).days.map((d) => d.date)
+    expect(dates).toHaveLength(7)
+    expect(dates[0]).toBe('2026-09-23') // 今天 − 7，窗口下界（含）
+    expect(dates[6]).toBe('2026-09-29') // 今天 − 1
+    expect(dates).not.toContain('2026-09-22') // 今天 − 8，窗口外
+    expect(dates).not.toContain('2026-09-30') // 今天尚未结束，永不物化
   })
 
   it('已有记录的日期（已结算或未结算）一个字节都不动', () => {
     const pending = unsettledDay('2026-09-25', [])
-    const settled = settledDay('2026-09-29', [mkEntry({ actualMin: 60, plannedMin: 60, done: true })])
+    const settled = settledDay('2026-09-29', [
+      mkEntry({ actualMin: 60, plannedMin: 60, done: true })
+    ])
     const money = mkMoney([pending, settled])
-    const next = ensureLedgerDays(money, ['2026-09-25', '2026-09-29'], '2026-09-30')
-    expect(next).toBe(money)
-    expect(next.days[0]).toBe(pending)
-    expect(next.days[1]).toBe(settled)
+    const next = ensureLedgerDays(money, R2D_TODAY)
+    // 窗口里还有另外 5 天空缺，所以整体是新对象；但两条已有记录必须是同一个引用
+    expect(next).not.toBe(money)
+    expect(next.days.find((d) => d.date === '2026-09-25')).toBe(pending)
+    expect(next.days.find((d) => d.date === '2026-09-29')).toBe(settled)
+    expect(next.days.map((d) => d.date)).toEqual(R2D_WINDOW)
   })
 
-  it('没有计划过的日期不会凭空补记录', () => {
-    const money = mkMoney([])
-    expect(ensureLedgerDays(money, [], '2026-09-30')).toBe(money)
-    // 计划日期全在窗口外，同样不产生新对象
-    expect(ensureLedgerDays(money, ['2026-09-20', '2026-09-30'], '2026-09-30')).toBe(money)
+  it('窗口内每天都已有记录时，原对象返回（无变化不落盘）', () => {
+    const full = mkMoney(R2D_WINDOW.map((date) => unsettledDay(date, [])))
+    expect(ensureLedgerDays(full, R2D_TODAY)).toBe(full)
   })
 
-  it('计划日期重复只补一条，且返回值按 date 升序', () => {
-    const next = ensureLedgerDays(
-      mkMoney([]),
-      ['2026-09-29', '2026-09-22', '2026-09-29'],
-      '2026-09-30'
+  it('返回值按 date 升序，即使已有记录乱序', () => {
+    const money = mkMoney([unsettledDay('2026-09-29', []), unsettledDay('2026-09-25', [])])
+    const next = ensureLedgerDays(money, R2D_TODAY)
+    expect(next.days.map((d) => d.date)).toEqual(R2D_WINDOW)
+    // 物化出来的每一天都进待结算（含窗口下界 09-23）
+    expect(pendingDays(next, R2D_TODAY)).toEqual(R2D_WINDOW)
+  })
+})
+
+// ============================================================================
+// Task R2-D：逾期放弃 —— 掉出 7 天窗口的未结算日按满额扣款
+// ============================================================================
+
+describe('abandonExpiredDays', () => {
+  it('超过窗口的未结算日：按 abandonedDayTC 全额落账，娱币不动（Step 1）', () => {
+    // deltaLT 故意给一个非零哨兵：既证明它「不被清零」，也证明它「不被重算」
+    const old: LedgerDay = {
+      ...unsettledDay('2026-09-22', [
+        mkEntry({ actualMin: 120, plannedMin: 120, done: true })
+      ]),
+      deltaLT: -3
+    }
+    const money = mkMoney([old])
+    const next = abandonExpiredDays(money, R2D_TODAY)
+    expect(next).not.toBe(money)
+    const day = next.days[0]
+    expect(day.spentTC).toBe(80) // abandonedDayTC，全额
+    expect(day.deltaLT).toBe(-3) // 逐字不变：不扣娱币、不重算
+    expect(day.dayLimit).toBe(0) // 其余快照字段保持未结算时的值
+    expect(day.overdraft).toBe(0)
+    expect(day.entries).toBe(old.entries) // 条目原样保留（同引用，不重建）
+    // 其余字段原样带过
+    expect(next.enabled).toBe(true)
+    expect(next.config).toBe(DEFAULT_MONEY_CONFIG)
+    expect(next.weeks).toEqual([])
+  })
+
+  it('窗口边界：今天 − 7 不放弃、今天 − 8 放弃', () => {
+    const edgeIn = unsettledDay('2026-09-23', []) // 今天 − 7，仍在窗口内
+    const edgeOut = unsettledDay('2026-09-22', []) // 今天 − 8，已掉出窗口
+    const next = abandonExpiredDays(mkMoney([edgeOut, edgeIn]), R2D_TODAY)
+    const inDay = next.days.find((d) => d.date === '2026-09-23')
+    const outDay = next.days.find((d) => d.date === '2026-09-22')
+    expect(inDay).toBe(edgeIn) // 未结算、未被动过
+    expect(inDay?.settledAt).toBeNull()
+    expect(outDay).not.toBe(edgeOut)
+    expect(outDay?.settledAt).not.toBeNull()
+    expect(outDay?.spentTC).toBe(80)
+  })
+
+  it('今天本身永不放弃（它既不在窗口内、也不该被落账）', () => {
+    const today = unsettledDay(R2D_TODAY, [])
+    const money = mkMoney([today])
+    expect(abandonExpiredDays(money, R2D_TODAY)).toBe(money)
+  })
+
+  it('没有逾期记录时原对象返回', () => {
+    const money = mkMoney([unsettledDay('2026-09-25', []), settledDay('2026-09-26', [])])
+    expect(abandonExpiredDays(money, R2D_TODAY)).toBe(money)
+  })
+
+  it('已结算的往日不进放弃：settledAt 非 null 即不可碰', () => {
+    const settled = settledDay('2026-09-22', [
+      mkEntry({ actualMin: 60, plannedMin: 60, done: true })
+    ])
+    const money = mkMoney([settled])
+    const next = abandonExpiredDays(money, R2D_TODAY)
+    expect(next).toBe(money) // 无未结算逾期 → 原对象
+    expect(next.days[0].spentTC).toBe(settled.spentTC) // 10，不是 80
+  })
+
+  it('放弃日被冻结：settledAt 置为到期日、nightPending 清掉', () => {
+    const next = abandonExpiredDays(mkMoney([unsettledDay('2026-09-22', [])]), R2D_TODAY)
+    const day = next.days[0]
+    // 2026-09-22 在窗口里待到 2026-09-29（= date + 7）—— 那就是它的到期日
+    expect(day.settledAt).toBe('2026-09-29')
+    expect(day.nightPending).toBe(false)
+  })
+
+  it('放弃日不可重结：不再是待结算日，也不会被 confirmNight 重跑（nightPending 已清）', () => {
+    const next = abandonExpiredDays(mkMoney([unsettledDay('2026-09-22', [])]), R2D_TODAY)
+
+    // 不再是待结算日（从日结卡片彻底消失）
+    expect(pendingDays(next, R2D_TODAY)).toEqual([])
+
+    // 判别器：「已结算」本身挡不住 confirmNight —— 它会整日重跑 settleDay，
+    // 而一个已结算但仍挂 nightPending 的日子确实会被 openNightsBefore 选中。
+    const stillOpen: LedgerDay = { ...next.days[0], nightPending: true }
+    expect(openNightsBefore([stillOpen], R2D_TODAY)).toHaveLength(1)
+    // 放弃日显式清了 nightPending，所以选不中 → 永不被重跑、80 不会被抹成 0
+    expect(openNightsBefore(next.days, R2D_TODAY)).toEqual([])
+  })
+
+  it('缺席不罚：账本里没有记录的往日不会被凭空扣款（放弃只作用于已存在的记录）', () => {
+    // 一个月没打开：账本空白。开机链只补出窗口内的 7 天空记录，没有任何一天被扣 80。
+    const money = abandonExpiredDays(ensureLedgerDays(mkMoney([]), R2D_TODAY), R2D_TODAY)
+    expect(money.days).toHaveLength(7)
+    expect(money.days.every((d) => d.settledAt === null && d.spentTC === 0)).toBe(true)
+  })
+
+  it('已结算日（含放弃日）在两次开机后逐字节不变', () => {
+    const abandoned = abandonExpiredDays(mkMoney([unsettledDay('2026-09-22', [])]), R2D_TODAY)
+    const settled = settledDay('2026-09-25', [
+      mkEntry({ actualMin: 60, plannedMin: 60, done: true })
+    ])
+    const money: MoneyState = {
+      ...abandoned,
+      days: [...abandoned.days, settled].sort((a, b) => (a.date < b.date ? -1 : 1))
+    }
+
+    // 一次开机 = 物化 → 放弃 → 周结算（appStore.init 的顺序）
+    const boot = (m: MoneyState): MoneyState =>
+      ensureWeekRollover(
+        abandonExpiredDays(ensureLedgerDays(m, R2D_TODAY), R2D_TODAY),
+        R2D_TODAY
+      )
+
+    const first = boot(money)
+    const second = boot(first)
+    // 第二次开机整条链原地短路（无变化 → 同一对象 → 不触发落盘）
+    expect(second).toBe(first)
+    // 被放弃那天与被正常结算那天，数字与标记逐字不动
+    expect(second.days.find((d) => d.date === '2026-09-22')).toEqual(
+      first.days.find((d) => d.date === '2026-09-22')
     )
-    expect(next.days.map((d) => d.date)).toEqual(['2026-09-22', '2026-09-29'])
+    expect(second.days.find((d) => d.date === '2026-09-25')).toBe(settled)
+    expect(second.days.find((d) => d.date === '2026-09-22')?.spentTC).toBe(80)
   })
 })
 
