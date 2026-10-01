@@ -1,4 +1,5 @@
 import type { MoneyStats } from '../../../../shared/money'
+import MoneyIcon from '../money/MoneyIcon'
 import WidgetShell from './WidgetShell'
 
 interface Props {
@@ -41,15 +42,21 @@ export default function BalanceWidget({ stats }: Props): JSX.Element {
       <div className="money-balances">
         <div className="money-balance">
           <span className="money-balance-label">时币剩余</span>
-          <strong className={`money-balance-value${stats.remainingTC < 0 ? ' neg' : ''}`}>
-            {fmt(stats.remainingTC)}
-          </strong>
+          <span className="money-balance-line">
+            <MoneyIcon kind="tc" size={22} />
+            <strong className={`money-balance-value${stats.remainingTC < 0 ? ' neg' : ''}`}>
+              {fmt(stats.remainingTC)}
+            </strong>
+          </span>
         </div>
         <div className="money-balance">
           <span className="money-balance-label">娱币剩余</span>
-          <strong className={`money-balance-value${stats.remainingLT < 0 ? ' neg' : ''}`}>
-            {fmt(stats.remainingLT)}
-          </strong>
+          <span className="money-balance-line">
+            <MoneyIcon kind="lt" size={22} />
+            <strong className={`money-balance-value${stats.remainingLT < 0 ? ' neg' : ''}`}>
+              {fmt(stats.remainingLT)}
+            </strong>
+          </span>
         </div>
       </div>
 

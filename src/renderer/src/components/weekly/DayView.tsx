@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ArrowLeft, Check, ChevronLeft, ChevronRight, Plus } from 'lucide-react'
-import type { WeekEvent } from '../../../../shared/types'
+import type { MoneyConfig, WeekEvent } from '../../../../shared/types'
+import { costOfEntry, nightMinutesOf } from '../../../../shared/money'
 import ConfirmDialog from '../ConfirmDialog'
 import GlassSurface from '../glass/GlassSurface'
 import { menuGeometry, useMenuRowHeight } from '../glass/glassMenu'
@@ -76,6 +77,26 @@ const HOURS = Array.from({ length: 18 }, (_, i) => 420 + i * 60)
 /** 拖动/取消结束后忽略 click 的时间窗：浏览器的补发 click 会紧随 pointerup 到达。 */
 const CLICK_SUPPRESS_MS = 350
 
+/**
+ * 事件块的**预估**时币（spec R2 §7 第 2 项）：块还没发生，能知道的只有计划时长。
+ *
+ * 三个入参在这里的取值，与日结时同一事件的实际值**刻意不同**，正是
+ * 「估值 ≠ 结算额」的成因（不缩放成一致，因为结算才知道实际做了多久）：
+ * - `actualMin` = 计划时长（`endMin − startMin`）——结算时是用户填的实际时长；
+ * - `nightMin` = 用 `nightMinutesOf` 从计划时刻推出（夜间 23:30–06:00）——
+ *   结算时是同样从实际时刻推，但基于实际时长；
+ * - `quadrant` = 事件自己的象限（**显式传入**，`costOfEntry` 的该参数是必填的：
+ *   一旦漏传或改成可选，同一条事件会算出第二个价）。
+ *
+ * 复用 `costOfEntry` 而不另写公式：这两处必须是同一套算法，否则界面上显示的估值
+ * 与结算出来的账永远差一点，且差在哪没人说得清。
+ */
+function estimateCostTC(event: WeekEvent, config: MoneyConfig): number {
+  const actualMin = Math.max(0, event.endMin - event.startMin)
+  const nightMin = nightMinutesOf({ startMin: event.startMin, actualMin }, config)
+  return costOfEntry({ actualMin, nightMin, quadrant: event.quadrant }, config)
+}
+
 export default function DayView({
   date,
   onBack,
@@ -87,6 +108,7 @@ export default function DayView({
 }: Props): JSX.Element {
   const weekEvents = useAppStore((s) => s.data.weekEvents)
   const weekPresets = useAppStore((s) => s.data.weekPresets)
+  const money = useAppStore((s) => s.data.money)
   const addWeekEvent = useAppStore((s) => s.addWeekEvent)
   const deleteWeekEvent = useAppStore((s) => s.deleteWeekEvent)
   const moveWeekEvent = useAppStore((s) => s.moveWeekEvent)
@@ -109,6 +131,8 @@ export default function DayView({
 
   const dayKey = dateKey(date)
   const dayEvents = eventsOnDate(weekEvents, dayKey)
+  /** 金钱开关关着时整个子系统不参与 —— 事件块也就不显示预估时币（面板根本不会出现）。 */
+  const moneyConfig = money?.enabled === true ? money.config : null
 
   const updateDrag = useCallback((next: DragState | null): void => {
     dragRef.current = next
@@ -468,6 +492,7 @@ export default function DayView({
                   key={event.id}
                   event={event}
                   interactive
+                  costTC={moneyConfig ? estimateCostTC(event, moneyConfig) : null}
                   dragging={drag?.id === event.id}
                   armed={gestures.armedId === event.id}
                   top={DAY_PAD_PX + eventTopPx(event.startMin, DAY_HOUR_PX)}

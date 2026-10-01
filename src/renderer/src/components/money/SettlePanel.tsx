@@ -18,6 +18,7 @@ import {
 } from '../../../../shared/money'
 import { QUADRANT_META } from '../../lib/quadrantMath'
 import { useAppStore } from '../../state/appStore'
+import MoneyIcon from './MoneyIcon'
 
 /**
  * 结算面板：按**最早优先**逐日走完所有待结算的日子（spec 7.1 / 7.2）。
@@ -393,6 +394,7 @@ function DayForm({
                 <span className="settle-miss">没做</span>
               )}
               <span className="settle-row-cost">
+                <MoneyIcon kind="tc" size={12} />
                 <b>{rowCost(row, config)}</b> 币
                 <em>{signed(rowDelta(row, config))} LT</em>
               </span>
@@ -422,6 +424,7 @@ function DayForm({
                 <span className="settle-unit">分钟</span>
               </span>
               <span className="settle-row-cost">
+                <MoneyIcon kind="tc" size={12} />
                 <b>{rowCost(row, config)}</b> 币
                 <em>{signed(rowDelta(row, config))} LT</em>
               </span>
@@ -526,7 +529,8 @@ function DayForm({
 
       <footer className="settle-foot">
         <span className="settle-total">
-          这一天：<b>{totalCost}</b> 币 · {signed(totalDelta)} LT
+          这一天：<MoneyIcon kind="tc" size={12} /> <b>{totalCost}</b> 币 ·{' '}
+          <MoneyIcon kind="lt" size={12} /> {signed(totalDelta)} LT
         </span>
         {/* 免费路只留给「有计划却被放弃」的那一天，见上面分支块的注释。 */}
         {hasPlan && (

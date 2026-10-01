@@ -1724,6 +1724,48 @@ body {
   line-height: 1.1;
 }
 
+/*
+ * 标题行 = 标题（可省略号收缩）+ 预估时币。
+ *
+ * 估值**挂在标题行尾而不是另起一行**：事件块是绝对定位 + 固定高度，
+ * 多一行不会被撑开、只会被 `overflow: hidden` 裁掉 —— 被裁掉的信息等于没有。
+ * 标题 `flex: 1 1 auto` + `min-width: 0` 才能在窄列里让省略号生效，
+ * 估值 `flex: none` 保证它永远完整可见。
+ */
+.day-event-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.day-event-head .day-event-title {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/*
+ * 预估时币。**刻意让它读起来像估值而不是结算额**（spec §7 第 2 项）：
+ * 带 `≈` 前缀、降透明度、并挂 title 说明「结算时按实际时长与深夜占比重算」。
+ * 颜色沿用 `var(--text)` 再降透明度，不新造颜色。
+ */
+.day-event-cost {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--text);
+  opacity: 0.78;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 极短块（< 22.5 分钟）标题会缩到 8px，估值跟着缩，免得比标题还大。 */
+.day-event.compact .day-event-cost {
+  font-size: 9px;
+}
+
 .day-event-meta {
   display: flex;
   align-items: center;
@@ -2938,6 +2980,22 @@ body {
   min-width: 0;
 }
 
+/* ---- 货币小图标（MoneyIcon，spec R2 §7 第 1 项）---- */
+
+/*
+ * 颜色一律由 `currentColor` 承接外层文字色，**这里不写 fill / stroke** ——
+ * 图标会落在余额卡（var(--text) 白）、日结行（var(--text-secondary) 灰）、
+ * 事件块（事件色半透明底）三种底色上，硬编码一种颜色必然有一处看不清。
+ *
+ * `vertical-align` 只作用于**行内排版**（日结页脚那种 inline 上下文）：
+ * 在 flex 容器里它是 flex 项，由 align-items 决定对齐，不受这条影响。
+ */
+.money-icon {
+  display: inline-block;
+  flex: none;
+  vertical-align: -0.125em;
+}
+
 /* ---- 双币余额 ---- */
 
 .money-balances {
@@ -2950,6 +3008,13 @@ body {
   display: flex;
   flex-direction: column;
   gap: 2px;
+}
+
+/* 图标与金额同一行（`MoneyIcon` 是 flex 项，纵向居中于 30px 的大数字）。 */
+.money-balance-line {
+  display: flex;
+  align-items: center;
+  gap: 7px;
 }
 
 .money-balance-label {
