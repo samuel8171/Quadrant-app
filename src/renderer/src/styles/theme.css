@@ -3489,6 +3489,28 @@ body {
   color: var(--text-secondary);
 }
 
+/* 三问的说明文字：解释「只扣娱币 / 扣次日」以及两个深夜追问的区别。 */
+.settle-hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+/* 底部总账里的连带扣款来源说明，跟在总数后面，字号更小。 */
+.settle-carry {
+  color: var(--text-secondary);
+}
+
+/* 免费的无计划日被挡住时的说明：用危险色，指明这不是可忽略的提示。 */
+.settle-guard {
+  flex: 1 1 100%;
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--danger);
+}
+
 /*
  * 无计划之日的两条路（spec R2 §4.3）：休息日 / 去这天的时间轴补计划。
  * 用虚线边框把它和「①②③ 三问」区分开 —— 它不是一问，而是这一天在问之前先要选的路。

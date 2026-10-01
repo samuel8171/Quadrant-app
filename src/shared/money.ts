@@ -207,6 +207,43 @@ export function restDayCost(config: MoneyConfig): number {
 }
 
 /**
+ * 这份条目集会不会把「无计划之日」结算成一次**0 花费的免费日** ——
+ * 休息日规则（spec R2 §4.3 / §9.2）的闭环守卫。
+ *
+ * **规则**：一天若没有任何**计划内**条目（= 无计划之日），它只有两条正当出路 ——
+ * 主动申报休息日（固定扣 `restDayCost`，默认 64），或把实际做过的事记成条目。
+ * 直接以 `spentTC === 0` 结算会让「主动申报休息日反而更贵」这条激励失效：
+ * 用户只要在那天随手加一条计划外事项、再把它的时长改成 0 就能免费过关，
+ * 于是 `restDayCost` 永远收不到，整条规则形同虚设。本函数就是拒绝这种结算的判据。
+ *
+ * **判定**：
+ * - 只要有一条计划内条目 ⇒ `false`。有计划的日子有它自己的免费路（逐条记「没做」、
+ *   由娱币 `missPenaltyLT` 付账），那不是这条规则要管的事 —— 这条规则只针对无计划之日。
+ * - 否则看**条目自身**的时币花费之和是否为 0：为 0 ⇒ `true`（必须拒绝）。
+ *
+ * ⚠️ **只算条目自身的花费，不含昨夜的连带扣款**（`latePhoneTC`）。那笔账记的是
+ * **昨夜做了什么**，与今天有没有做事无关；若把它算进来，「昨夜刷手机 + 今天空着」
+ * 就能凑出一个大于 0 的花费、从而以低于休息日的价格蒙混过关，重新打开本条要堵的门。
+ *
+ * 花费逐条由 `costOfEntry` 现算（与 `settleDay` 同一口径），不在调用点另写一套公式。
+ * 注意时长非 0 不等于花费非 0：`costOfEntry` 会四舍五入，1 分钟 Q4 也算 0 币，
+ * 所以这里必须比「花费」而不是比「时长」。
+ */
+export function isFreeUnplannedSettlement(entries: LedgerEntry[], config: MoneyConfig): boolean {
+  if (entries.some((entry) => entry.kind === 'planned')) return false
+  const cost = entries.reduce(
+    (sum, entry) =>
+      sum +
+      costOfEntry(
+        { actualMin: entry.actualMin, nightMin: entry.nightMin, quadrant: entry.quadrant },
+        config
+      ),
+    0
+  )
+  return cost === 0
+}
+
+/**
  * 对一天做结算（spec 6.2 / 7.3）。
  *
  * `spentTC` 与 `deltaLT` 都**由原始字段重新推导**（逐条 `costOfEntry` / `leisureDelta` 求和），

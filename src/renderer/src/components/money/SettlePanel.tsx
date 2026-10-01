@@ -9,11 +9,14 @@ import type {
 } from '../../../../shared/types'
 import { addDays, dateKey, parseDateKey } from '../../../../shared/dateKey'
 import {
+  consumptionDeltaLT,
   costOfEntry,
+  isFreeUnplannedSettlement,
   leisureDelta,
   nightMinutesOf,
   openNightsBefore,
   pendingDays,
+  previousLatePhone,
   restDayCost
 } from '../../../../shared/money'
 import { QUADRANT_META } from '../../lib/quadrantMath'
@@ -23,11 +26,16 @@ import MoneyIcon from './MoneyIcon'
 /**
  * 结算面板：按**最早优先**逐日走完所有待结算的日子（spec 7.1 / 7.2）。
  *
- * 每一天依次问三件事：① 计划内事件逐条「做了吗 / 实际多久」；② 有没有计划外的事；
- * ③ 深夜补记（见 `DayForm` 与 `confirmNight`）。每条实时显示它产生的 TC / LT，
+ * 每一天依次问这几件事：① 计划内事件逐条「做了吗 / 实际多久」；② 有没有计划外的事；
+ * ③ 今天刷视频 / 打游戏用了多久（只扣娱币）；④ 昨天 24:00 之后有没有刷手机（定额扣
+ * **次日**）；⑤ 深夜补记（见 `DayForm` 与 `confirmNight`）。每条实时显示它产生的 TC / LT，
  * 让规则当场可解释，而不是结算完给一个黑箱数字。
  *
- * ③ 补记**一次问遍所有**早于当天的未收尾深夜（最早优先），而不是只问最新的那一个：
+ * ⚠️ ④ 与 ⑤ 长得像、实则不同：④ 问的是**刷手机**（定额扣次日时币 + 娱币），
+ * ⑤ 问的是**做事**（按时长 × 深夜倍率算时币）。两者在同一次日结里**并列问出**，
+ * 谁也不替代谁，④ 的说明文字把区别点明，免得用户以为被问了同一件事两遍。
+ *
+ * ⑤ 补记**一次问遍所有**早于当天的未收尾深夜（最早优先），而不是只问最新的那一个：
  * 只挑最新会让更旧的那个永远选不中、把它所在的那一周永久堵死。判定住在
  * `openNightsBefore`（shared 纯函数），面板只负责逐条渲染与逐条清理。
  *
@@ -37,7 +45,7 @@ import MoneyIcon from './MoneyIcon'
  *
  * **无计划之日另给两条路**（spec R2 §4.3）：这类日子不显示「那天我什么都没做」，
  * 而是给「休息日（固定扣 64）」与「去这一天的时间轴补计划」两个按钮（见 `DayForm` 的
- * `settle-branch` 块）。
+ * `settle-branch` 块）。它同样不能以 0 花费结算 —— 守卫见 `isFreeUnplannedSettlement`。
  */
 
 /** 面板里的一条待确认记录：计划内/计划外统一成同一种可编辑行。 */
@@ -148,6 +156,12 @@ function buildRows(day: LedgerDay | undefined, events: WeekEvent[]): Row[] {
 /** 有符号数字的显示：奖励 / 惩罚都要能一眼看出方向（0 不带符号）。 */
 const signed = (value: number): string => `${value > 0 ? '+' : ''}${value}`
 
+/** 输入框里的文本 → 非负整数分钟：空串 / 非数字 / 负数一律取 0。 */
+function toMinutes(value: string): number {
+  const n = Math.round(Number(value))
+  return Number.isFinite(n) && n > 0 ? n : 0
+}
+
 /**
  * 深夜补记的问句。目标就是日历上的昨天时用「昨夜」（常态），隔了空洞则点名日期，
  * 免得用户以为问的是昨天。
@@ -173,6 +187,12 @@ interface DayFormProps {
    * （见 `openNightsBefore` 的说明）。空数组表示没有待补记的深夜。
    */
   openNights: LedgerDay[]
+  /**
+   * **前一日**记录下的「昨夜刷手机」答案，决定**本日**是否被连带扣款。
+   * 由宿主的 `previousLatePhone(money.days, date)` 现查（唯一的查找真源），
+   * 面板只读不算 —— 它既用于把本日总账显示准，也用于提醒用户这笔钱从何而来。
+   */
+  carriedLatePhone: boolean
   total: number
   onCommitted: () => void
   /** 分支 B：跳到 `date` 那天的**时间轴**补计划（spec R2 §4.3，由宿主的日视图承接）。 */
@@ -185,6 +205,7 @@ function DayForm({
   events,
   config,
   openNights,
+  carriedLatePhone,
   total,
   onCommitted,
   onOpenDay
@@ -204,6 +225,17 @@ function DayForm({
     Record<string, { worked: boolean; endMin: number }>
   >(() => Object.fromEntries(openNights.map((night) => [night.date, DEFAULT_NIGHT_ANSWER])))
 
+  /*
+   * 本日三问的答案（spec R2 §7 第 4 项）。
+   *
+   * 前两问是**本日纯消费**（只扣娱币、不花时币），第三问是**本日对「昨晚」的回答**，
+   * 它记在本日、扣在**次**日。三者都是日级输入，随提交一起交给 `commitDaySettlement`
+   * —— 不是条目，所以不放进 `rows`。
+   */
+  const [videoMin, setVideoMin] = useState(0)
+  const [gameMin, setGameMin] = useState(0)
+  const [latePhone, setLatePhone] = useState(false)
+
   const needed = rows.filter((r) => r.kind === 'planned')
   const extra = rows.filter((r) => r.kind === 'unplanned')
   const totalCost = rows.reduce((sum, r) => sum + rowCost(r, config), 0)
@@ -217,6 +249,37 @@ function DayForm({
   const hasPlan = needed.length > 0
   /** 休息日的固定扣款，从 config 现算（不写死 64）。 */
   const restCost = restDayCost(config)
+
+  /*
+   * 三问的实时数字 —— 一律走既有纯函数，组件里不写任何公式（spec R2 §7 第 4 项）。
+   *
+   * - 前两问各自的花费由 `consumptionDeltaLT` 单独算（只传一项、另一项为 0），
+   *   于是「刷视频这一问」显示的正是它自己的 −LT，而不是两问的合计；
+   * - 合计同样由同一个纯函数给出，用于底部总账；
+   * - 第三问的扣款是定额（`config.latePhoneTC` / `config.latePhoneLT`），
+   *   `settleDay` 也是直读这两个 config 值，这里照读即同源，没有第二套算法。
+   */
+  const videoDelta = consumptionDeltaLT({ videoMin, gameMin: 0 }, config)
+  const gameDelta = consumptionDeltaLT({ videoMin: 0, gameMin }, config)
+  const consumptionDelta = consumptionDeltaLT({ videoMin, gameMin }, config)
+  const carriedTC = carriedLatePhone ? config.latePhoneTC : 0
+  const carriedLT = carriedLatePhone ? config.latePhoneLT : 0
+
+  /*
+   * 本日总账 = 条目 + 两条纯消费 + **前一日**带来的连带扣款。
+   * 刷手机这一问本身**不进**本日总账：它记在本日、扣在次日（见 ④ 的说明与
+   * `settleDay` 的 latePhone / previousLatePhone 两个入参）。
+   */
+  const dayCost = totalCost + carriedTC
+  const dayDelta = totalDelta + consumptionDelta - carriedLT
+
+  /*
+   * 免费的无计划日守卫（spec R2 §4.3 / §9.2）：提交按钮只要「有内容」就会出现，
+   * 而计划外事项的时长可以被改成 0（或短到计费后仍是 0 币），从而把 spentTC 抹平、
+   * 绕开休息日的固定扣款。规则住在纯函数里，store 的提交闸门读同一条规则。
+   */
+  const entryList = rows.map((r) => toEntry(r, config))
+  const freeUnplanned = isFreeUnplannedSettlement(entryList, config)
 
   const patchRow = (id: string, patch: Partial<Row>): void => {
     setRows((rs) => rs.map((r) => (r.id === id ? { ...r, ...patch } : r)))
@@ -281,11 +344,11 @@ function DayForm({
      * 反过来先补记（所有未收尾的深夜都先答完），本周的账在滚动那一刻就已经是最终值。
      */
     answerOpenNights()
-    commitDaySettlement(date, entries)
+    commitDaySettlement(date, entries, { videoMin, gameMin, latePhone })
     onCommitted()
   }
 
-  const commit = (): void => commitEntries(rows.map((r) => toEntry(r, config)))
+  const commit = (): void => commitEntries(entryList)
 
   /**
    * 「那天我什么都没做」：结算本身走与正常结算**完全同一条** `commitDaySettlement`，
@@ -297,13 +360,17 @@ function DayForm({
    * 于是「把一周每天都清空」也解不开 —— 最后一天始终挂着 `nightPending`。现在补上最后一步：
    * 一天既然什么都没做，当晚 23:30 之后也不可能有做事，于是对**当天自己**再调
    * `confirmNight(date, { worked: false })`，把这一天的深夜问记成「否」、清掉 `nightPending`。
-   * 更早的未收尾深夜同样先由 `answerOpenNights` 逐条答掉（它们也在 ③ 里被问过）。
+   * 更早的未收尾深夜同样先由 `answerOpenNights` 逐条答掉（它们也在 ⑤ 里被问过）。
    * 面板里临时录入的计划外条目一并丢弃 —— 那天什么都没做，也就没有计划外的事。
+   *
+   * ⚠️ 但**三问的答案照样带过去**，不随「什么都没做」一起丢弃：按钮的契约是「计划内条目
+   * 全记未完成」（见它的文案），而两条纯消费与「昨晚刷手机」是独立的日级事实 ——
+   * 当天没做计划内的事，不代表没刷视频、更不代表昨晚没刷手机。静默丢弃它们就是数据丢失。
    */
   const commitNothingDone = (): void => {
     const entries = needed.map((r) => toEntry({ ...r, done: false, actualMin: 0 }, config))
     answerOpenNights()
-    commitDaySettlement(date, entries)
+    commitDaySettlement(date, entries, { videoMin, gameMin, latePhone })
     confirmNight(date, { worked: false })
     onCommitted()
   }
@@ -318,12 +385,19 @@ function DayForm({
    * ⚠️ 休息日的契约是 `entries = []`：若用户在 ② 里已经记了计划外的事，再点这里会把它们
    * **一并丢弃**（申报休息日 = 「这天什么都没做」，与「记了事」自相矛盾）。按钮文案在
    * 这种情况下会当场把代价说出来，不让它变成一次静默的数据丢失。
+   * 同理，③ 里填的刷视频 / 打游戏时长也会被 `settleDay` 的休息日分支归 0（休息日没有消费），
+   * 按钮文案一并点明；但 ④ 的「昨晚刷手机」**照记不误**（它记的是昨晚，见 `markRestDay`）。
    */
   const commitRestDay = (): void => {
     answerOpenNights()
-    markRestDay(date)
+    markRestDay(date, { videoMin, gameMin, latePhone })
     onCommitted()
   }
+
+  /** 休息按钮上如实列出的丢弃项，避免「申报休息日」变成一次静默的数据丢失。 */
+  const restDiscards: string[] = []
+  if (extra.length > 0) restDiscards.push(`${extra.length} 条计划外事项`)
+  if (videoMin > 0 || gameMin > 0) restDiscards.push('已填的娱乐时长')
 
   return (
     <div className="settle-day">
@@ -349,7 +423,7 @@ function DayForm({
           <div className="settle-branch-actions">
             <button type="button" className="settle-rest" onClick={commitRestDay}>
               {`休息日（固定扣 ${restCost} 币${
-                extra.length > 0 ? `，丢弃已记的 ${extra.length} 条计划外事项` : ''
+                restDiscards.length > 0 ? `，丢弃已记的${restDiscards.join('、')}` : ''
               }）`}
             </button>
             <button
@@ -471,10 +545,103 @@ function DayForm({
         </div>
       </div>
 
+      {/*
+        * ③ 今天的两条娱乐消费（spec R2 §5 / §7 第 4 项）。
+        * 它们**只扣娱币、不花时币**，也不进周计划、不进 `quality` 四分类 ——
+        * 所以这里没有象限选择，也没有「做了什么」的标题，只有时长。底部的实时数字
+        * 走 `consumptionDeltaLT`，组件里不写公式。
+        */}
+      <div className="settle-section">
+        <h3 className="settle-section-title">③ 今天的娱乐消费</h3>
+        <p className="settle-hint">
+          刷视频与打游戏只扣娱币，不产生任何时币消耗。
+        </p>
+        <ul className="settle-rows">
+          <li className="settle-row">
+            <span className="settle-row-title">刷视频</span>
+            <span className="settle-row-input">
+              <input
+                type="number"
+                min={0}
+                value={videoMin}
+                onChange={(e) => setVideoMin(toMinutes(e.target.value))}
+              />
+              <span className="settle-unit">分钟</span>
+            </span>
+            <span className="settle-row-cost">
+              <MoneyIcon kind="lt" size={12} />
+              <b>{signed(videoDelta)}</b> LT
+            </span>
+          </li>
+          <li className="settle-row">
+            <span className="settle-row-title">打游戏</span>
+            <span className="settle-row-input">
+              <input
+                type="number"
+                min={0}
+                value={gameMin}
+                onChange={(e) => setGameMin(toMinutes(e.target.value))}
+              />
+              <span className="settle-unit">分钟</span>
+            </span>
+            <span className="settle-row-cost">
+              <MoneyIcon kind="lt" size={12} />
+              <b>{signed(gameDelta)}</b> LT
+            </span>
+          </li>
+        </ul>
+      </div>
+
+      {/*
+        * ④ 昨夜刷手机（spec R2 §6 / §7 第 4 项）。
+        * 与 ⑤ 的「昨夜 23:30 之后还在做事吗」是**两个不同**的追问，两个都保留：
+        * 那一问问的是**做事**（按时长 × 深夜倍率算时币），本问问的是**刷手机**
+        * （定额扣**次日**的时币与娱币）。下方一句话把区别点明，免得用户以为被问了同一件事。
+        */}
+      <div className="settle-section">
+        <h3 className="settle-section-title">④ 昨夜刷手机</h3>
+        <p className="settle-backfill-q">昨天 24:00 之后还有没有刷手机？</p>
+        <div className="settle-backfill-answer">
+          <label>
+            <input
+              type="radio"
+              name={`late-phone-${date}`}
+              checked={!latePhone}
+              onChange={() => setLatePhone(false)}
+            />
+            否
+          </label>
+          <label>
+            <input
+              type="radio"
+              name={`late-phone-${date}`}
+              checked={latePhone}
+              onChange={() => setLatePhone(true)}
+            />
+            有
+          </label>
+          <span className="settle-row-cost">
+            {latePhone ? (
+              <>
+                次日加扣 <MoneyIcon kind="tc" size={12} />
+                <b>{config.latePhoneTC}</b> 币 · <MoneyIcon kind="lt" size={12} />
+                {signed(-config.latePhoneLT)} LT
+              </>
+            ) : (
+              '不扣'
+            )}
+          </span>
+        </div>
+        <p className="settle-hint">
+          这一问问的是<strong>刷手机</strong>，与「昨夜 23:30 之后还在做事吗」是两个不同的问题：
+          做事按时长 × 深夜倍率算时币，刷手机是定额扣<strong>次日</strong>的时币与娱币。
+        </p>
+      </div>
+
       {openNights.length > 0 && (
         <div className="settle-section settle-backfill">
           <h3 className="settle-section-title">
-            ③ 补记
+            ⑤ 补记
             {openNights.length > 1 ? ` ${openNights.length} 个深夜（最早优先）` : ''}
           </h3>
           {openNights.map((night) => {
@@ -529,8 +696,13 @@ function DayForm({
 
       <footer className="settle-foot">
         <span className="settle-total">
-          这一天：<MoneyIcon kind="tc" size={12} /> <b>{totalCost}</b> 币 ·{' '}
-          <MoneyIcon kind="lt" size={12} /> {signed(totalDelta)} LT
+          这一天：<MoneyIcon kind="tc" size={12} /> <b>{dayCost}</b> 币 ·{' '}
+          <MoneyIcon kind="lt" size={12} /> {signed(dayDelta)} LT
+          {carriedLatePhone && (
+            <span className="settle-carry">
+              （含昨夜刷手机连带 {config.latePhoneTC} 币 / {signed(-config.latePhoneLT)} LT）
+            </span>
+          )}
         </span>
         {/* 免费路只留给「有计划却被放弃」的那一天，见上面分支块的注释。 */}
         {hasPlan && (
@@ -539,11 +711,21 @@ function DayForm({
           </button>
         )}
         {/*
-          * 空的无计划日**不显示**提交按钮：否则「直接提交」就是一条 0 花费的免费路，
-          * 与「休息日扣 64」的规则直接冲突。补了计划（hasPlan）或记了计划外的事（extra）
-          * 之后按钮才出现 —— 这也正是「不放事件块、直接完成、再在日结页添加事件与时间」的兜底。
+          * 无计划之日若会被结算成 0 花费，**不显示**提交按钮，并说明原因。
+          *
+          * 病根：按钮只要「有内容」就会出现，而计划外事项的时长可以被改成 0（或短到计费后
+          * 仍是 0 币），从而把 spentTC 抹平、绕开休息日的固定扣款。这条规则与上面分支块注释
+          * 里说的「无计划之日不给免费路」是同一件事的两半：藏按钮只是 UI，真正把关的是
+          * store 里的 `isFreeUnplannedSettlement`。判据住在纯函数里，两处读同一条规则。
           */}
-        {(hasPlan || extra.length > 0) && (
+        {freeUnplanned && extra.length > 0 && (
+          <p className="settle-guard">
+            这一天的时币花费是 0，不能这样结算：没有计划的一天要么申报休息日（固定扣{' '}
+            {restCost} 币），要么填写实际做了多久。把时长删成 0（或短到计费后仍是 0 币）
+            并不免费 —— 那正是这条规则要挡住的路。
+          </p>
+        )}
+        {(hasPlan || extra.length > 0) && !freeUnplanned && (
           <button type="button" className="settle-commit" onClick={commit}>
             {total > 1 ? '结算这一天，下一天 →' : '结算这一天'}
           </button>
@@ -577,6 +759,8 @@ export default function SettlePanel({ onClose, onOpenDay }: Props): JSX.Element 
   const events = weekEvents.filter((event) => event.date === date)
   // 所有早于这一天的未收尾深夜，最早优先 —— 一次结算全部问完（不是只问最新的那一个）。
   const openNights = openNightsBefore(money.days, date)
+  // 前一日「昨夜刷手机」的答案决定本日是否被连带扣款：由纯函数现查（不另写一套查找）。
+  const carriedLatePhone = previousLatePhone(money.days, date)
 
   const handleCommitted = (): void => {
     const fresh = useAppStore.getState().data.money
@@ -604,6 +788,7 @@ export default function SettlePanel({ onClose, onOpenDay }: Props): JSX.Element 
           events={events}
           config={money.config}
           openNights={openNights}
+          carriedLatePhone={carriedLatePhone}
           total={pending.length}
           onCommitted={handleCommitted}
           onOpenDay={onOpenDay}

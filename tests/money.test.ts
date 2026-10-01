@@ -17,6 +17,7 @@ import {
   dayLimitOf,
   ensureLedgerDays,
   ensureWeekRollover,
+  isFreeUnplannedSettlement,
   leisureDelta,
   nightMinutesOf,
   openNightsBefore,
@@ -655,6 +656,61 @@ describe('restDayCost', () => {
 
   it('四舍五入到整数：50 × 0.35 = 17.5 → 18（不是截断成 17）', () => {
     expect(restDayCost({ ...DEFAULT_MONEY_CONFIG, dailyCapTC: 50, restDayFactor: 0.35 })).toBe(18)
+  })
+})
+
+// ============================================================================
+// 免费的无计划日守卫（spec R2 §4.3 / §9.2 的闭环）
+// ============================================================================
+
+describe('isFreeUnplannedSettlement（无计划之日不得以 0 花费结算）', () => {
+  it('空条目集 ⇒ true：这就是「无计划日直接提交」那条要给堵掉的免费路', () => {
+    expect(isFreeUnplannedSettlement([], DEFAULT_MONEY_CONFIG)).toBe(true)
+  })
+
+  it('只有一条 0 分钟的计划外条目 ⇒ 仍是 true：复现「把时长改成 0」的漏洞现场', () => {
+    const zero = mkEntry({ kind: 'unplanned', plannedMin: null, actualMin: 0 })
+    // 漏洞现场：settleDay 确实会把它结算成 0 花费（这正是面板提交按钮漏出去的价）……
+    const settled = settleDay({
+      date: '2026-09-28',
+      entries: [zero],
+      previousOverdraft: 0,
+      settledAt: 'x',
+      config: DEFAULT_MONEY_CONFIG
+    })
+    expect(settled.spentTC).toBe(0)
+    // ……所以必须由本函数把它判成「免费的无计划日」而被拒绝。
+    expect(isFreeUnplannedSettlement([zero], DEFAULT_MONEY_CONFIG)).toBe(true)
+  })
+
+  it('判据比的是花费不是时长：1 分钟的计划外条目计费后仍是 0 币，故也是 true', () => {
+    const tiny = mkEntry({ kind: 'unplanned', plannedMin: null, actualMin: 1 })
+    expect(costOfEntry({ actualMin: 1, nightMin: 0, quadrant: null }, DEFAULT_MONEY_CONFIG)).toBe(0)
+    expect(isFreeUnplannedSettlement([tiny], DEFAULT_MONEY_CONFIG)).toBe(true)
+  })
+
+  it('真有花费的计划外条目 ⇒ false：无计划之日只要确实花了时币就不拦', () => {
+    const real = mkEntry({ kind: 'unplanned', plannedMin: null, actualMin: 30 })
+    expect(isFreeUnplannedSettlement([real], DEFAULT_MONEY_CONFIG)).toBe(false)
+  })
+
+  it('只要有一条计划内条目 ⇒ false，哪怕它花费为 0（计划日的免费路不归这条规则管）', () => {
+    const missed = mkEntry({ kind: 'planned', plannedMin: 60, actualMin: 0, done: false })
+    expect(isFreeUnplannedSettlement([missed], DEFAULT_MONEY_CONFIG)).toBe(false)
+  })
+
+  it('只看条目自身的花费，不含昨夜连带扣款：不能拿「昨夜刷手机」凑出非零花费蒙混过关', () => {
+    // 前一日答「有」只让**次日**多扣 latePhoneTC，与今天的条目花费无关。若把连带扣款算进来，
+    // 「刷完手机 + 今天空着」就能凑出一个 >0 的花费、以低于休息日的价格过关 —— 正是要堵的路。
+    const zero = mkEntry({ kind: 'unplanned', plannedMin: null, actualMin: 0 })
+    expect(DEFAULT_MONEY_CONFIG.latePhoneTC).toBeGreaterThan(0)
+    expect(isFreeUnplannedSettlement([zero], DEFAULT_MONEY_CONFIG)).toBe(true)
+  })
+
+  it('花费逐条由 costOfEntry 现算、随 config 变：费率归零后同一份条目才变免费', () => {
+    const real = mkEntry({ kind: 'unplanned', plannedMin: null, actualMin: 30 })
+    expect(isFreeUnplannedSettlement([real], { ...DEFAULT_MONEY_CONFIG, tcPerHour: 0 })).toBe(true)
+    expect(isFreeUnplannedSettlement([real], DEFAULT_MONEY_CONFIG)).toBe(false)
   })
 })
 

@@ -21,6 +21,7 @@ import {
   dayLimitOf,
   ensureLedgerDays,
   ensureWeekRollover,
+  isFreeUnplannedSettlement,
   leisureDelta,
   nightMinutesOf,
   previousLatePhone,
@@ -58,6 +59,20 @@ import {
 } from '../lib/syncMeta'
 
 export type Page = 'goals' | 'quadrant' | 'weekly' | 'review' | 'mine'
+
+/**
+ * 日结面板三问的答案 —— **日级**输入，不属于任何单条条目。
+ *
+ * 它们与 `entries` 一起交给 `settleDay`：`videoMin` / `gameMin` 是本日两条纯消费
+ * （只扣娱币），`latePhone` 是本日对「昨天 24:00 后有没有刷手机」的答案（**记在本日、
+ * 扣在次日**）。三个字段都必须随每次结算一起透传，漏传任一都会被 `settleDay` 的缺省值
+ * 静默抹成 0 / false（见 `confirmNight` 的重跑）。
+ */
+export interface DayAnswers {
+  videoMin: number
+  gameMin: number
+  latePhone: boolean
+}
 
 export interface CloudInspect {
   ok: boolean
@@ -142,10 +157,14 @@ interface AppState {
   materializeLedgerDays: () => void
   /** 把掉出 7 天窗口仍未结算的日账本按满额扣款并冻结（spec R2 §4「逾期即放弃」）。 */
   abandonExpiredLedgerDays: () => void
-  /** 用 `entries` 结算 `date`（Task 8 的正向路径，快照只有这里能首次冻结）。 */
-  commitDaySettlement: (date: string, entries: LedgerEntry[]) => void
+  /**
+   * 用 `entries` + 日级答案 `answers` 结算 `date`（Task 8 的正向路径，快照只有这里能首次冻结）。
+   *
+   * 无计划之日若会被结算成 0 花费，本动作直接拒绝（见 `isFreeUnplannedSettlement`）。
+   */
+  commitDaySettlement: (date: string, entries: LedgerEntry[], answers: DayAnswers) => void
   /** 把 `date` 申报为**休息日**并当场结算（spec R2 §4.3 的分支 A，固定扣 64 币、娱币不动）。 */
-  markRestDay: (date: string) => void
+  markRestDay: (date: string, answers: DayAnswers) => void
   /** 把一条计划外条目追加进 `date`（未结算）的账本。 */
   addUnplannedEntry: (date: string, entry: LedgerEntry) => void
   /** 深夜补记：回写 `previousDate` 这一份**已结算**快照（全库唯一例外，见实现处注释）。 */
@@ -838,12 +857,17 @@ export const useAppStore = create<AppState>((set, get) => ({
    *
    * `entries` 是这一天的**完整**条目集（面板把计划内 + 计划外一起交上来），
    * 由 `settleDay` 从原始字段重新推导 `spentTC` / `overdraft` / `deltaLT`。
+   * `answers` 是**日级**的三问答案（两条纯消费 + 昨夜刷手机），它们不属于任何单条条目，
+   * 必须随这次结算一起透传 —— 漏传就会被 `settleDay` 的缺省值静默抹成 0 / false。
    * 写入的 `money` 是**四个字段齐全**的新对象（`...money` 只换 `days`）——
    * 半截 `money` 会被网页端校验器判非法，进而静默清空用户的全部数据。
    *
    * 已结算的日子**直接拒绝**（与 `addUnplannedEntry` 同一道闸）：已冻结的快照只能由
    * `confirmNight` 那一处改动。少了这道闸，「只有深夜补记能改快照」就只剩调用方自觉，
    * 任何一次误调用都会把某天的快照整体覆盖掉。
+   *
+   * **无计划之日若会被结算成 0 花费，本动作直接拒绝**：那里的便宜路是主动申报休息日，
+   * 不是免费（判据见实现处与 `isFreeUnplannedSettlement` 的注释）。
    *
    * 结算完再补一次周结算，这是推迟机制**闭环**的一半：`ensureWeekRollover` 只有在
    * 「这一周的日账本全部已结算、且没有任何 `nightPending`」时才结算该周。因此
@@ -853,17 +877,30 @@ export const useAppStore = create<AppState>((set, get) => ({
    *   这里的重跑随即把上周补结算掉。
    * `ensureWeekRollover` 幂等，后续每次调用都原对象返回，所以只触发一次。
    */
-  commitDaySettlement: (date, entries) => {
+  commitDaySettlement: (date, entries, answers) => {
     const data = get().data
     const money = data.money
     if (money?.enabled !== true) return
     if (money.days.find((d) => d.date === date)?.settledAt != null) return
+    /*
+     * 关掉「无计划之日以 0 花费结算」这条免费路（spec R2 §4.3 / §9.2）。
+     *
+     * 病根：面板的提交按钮在「记了计划外事项」时就会出现，而计划外事项的时长可以被改成 0
+     * （输入框允许 0），于是 spentTC 归零、绕开休息日的 64。把守卫放在**这里**而不是只放在
+     * 面板，是因为面板是 UI、可以被任何新的调用点绕过；本动作是所有正向结算的唯一闸门。
+     * 判定逻辑住在纯函数里（`isFreeUnplannedSettlement`），面板与本动作读的是同一条规则。
+     */
+    if (isFreeUnplannedSettlement(entries, money.config)) return
     const settled = settleDay({
       date,
       entries,
       previousOverdraft: carriedOverdraft(money, date),
       // 前一日「昨夜 24:00 后有没有刷手机」的答案，由账本现查（没有前一日即 false ⇒ 不扣）。
       previousLatePhone: previousLatePhone(money.days, date),
+      // 本日三问的答案：两条纯消费只扣娱币；刷手机记在本日、由次日结算读取后扣款。
+      videoMin: answers.videoMin,
+      gameMin: answers.gameMin,
+      latePhone: answers.latePhone,
       settledAt: new Date().toISOString(),
       config: money.config
     })
@@ -883,8 +920,13 @@ export const useAppStore = create<AppState>((set, get) => ({
    * 与 `commitDaySettlement` 同一道闸：已结算的日子直接拒绝（快照只许 `confirmNight` 改）。
    * 结算完同样补一次周结算：休息日的 `nightPending` 为 false，所以这一天不会成为
    * `ensureWeekRollover` 的阻塞项，被它挡住的周会在这里立刻补上。
+   *
+   * `answers` 里**只有 `latePhone` 有意义**：`settleDay` 的休息日分支会把 `videoMin` /
+   * `gameMin` 归 0（休息日 = 这天不安排、也没做事），但**照记** `latePhone` ——
+   * 那一问问的是**昨晚**，与今天休不休息无关；不透传就会让「刷完手机第二天申报休息」
+   * 成为一条逃逸通道（settleDay 的休息日分支注释与用例都钉死了这条契约）。
    */
-  markRestDay: (date) => {
+  markRestDay: (date, answers) => {
     const data = get().data
     const money = data.money
     if (money?.enabled !== true) return
@@ -896,6 +938,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       previousOverdraft: carriedOverdraft(money, date),
       // 休息日**不免除**昨夜的连带扣款（spec R2 §6 / ruling 1）：同样查前一日答案。
       previousLatePhone: previousLatePhone(money.days, date),
+      // 本日的「昨晚有没有刷手机」答案照记：它扣的是次日，与今天休不休息无关。
+      latePhone: answers.latePhone,
       settledAt: new Date().toISOString(),
       config: money.config
     })
@@ -977,8 +1021,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       entries,
       // 两条娱币纯消费是**日级**输入，重算整天时必须原样带过去：
       // 漏传就等于把「那天刷视频 / 打游戏」的扣款从 deltaLT 里静默抹掉。
-      videoMin: day.videoMin,
-      gameMin: day.gameMin,
+      // `?? 0` 兜底：网页端校验器只校验、不修复，本字段加入之前的老记录载入后
+      // 在运行时可能仍是 `undefined`（类型上的非可选并不保证运行时如此）。
+      videoMin: day.videoMin ?? 0,
+      gameMin: day.gameMin ?? 0,
       // 休息日的申报状态同样是**日级**输入：它是「无计划日」分支的产物，条目为空，
       // 重算时若不透传，休息日会被当成一条 0 花费的普通日 —— 64 币被静默抹掉。
       // （休息日的 nightPending 已是 false，正常情况下 confirmNight 根本选不中它；
