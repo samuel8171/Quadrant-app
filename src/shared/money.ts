@@ -414,6 +414,19 @@ export function currentQuota(state: MoneyState): { weekTC: number; weekLT: numbe
 }
 
 /**
+ * 日结窗口长度（天）—— `ensureLedgerDays` / `abandonExpiredDays` / `pendingDays` 的**单一真源**。
+ *
+ * 它们是一个边界的互补两半，必须由同一常量派生：
+ * - `ensureLedgerDays` 物化 `[today − LEDGER_WINDOW_DAYS, today)`；
+ * - `abandonExpiredDays` 放弃 `date < today − LEDGER_WINDOW_DAYS`；
+ * - `pendingDays` 只返回 `date ≥ today − LEDGER_WINDOW_DAYS` 的待结算日。
+ *
+ * 若哪一处单独改数，就可能出现「同一次开机里刚物化、又被放弃」——对一个从未存在过的记录扣 80，
+ * 直接违反「放弃只作用于已存在的记录」的裁定。
+ */
+export const LEDGER_WINDOW_DAYS = 7
+
+/**
  * 为 `[today − 7, today)` 里的**每一天**补出一条未结算的日账本（spec R2 §4）。
  *
  * **为什么需要它**：`pendingDays` 只能扫出**已存在**的日账本，而计费是在象限页完成时才追加条目的。
@@ -438,8 +451,8 @@ export function ensureLedgerDays(money: MoneyState, today: string): MoneyState {
   const todayDate = parseDateKey(today)
   const existing = new Set(money.days.map((day) => day.date))
   const missing: string[] = []
-  // offset 从 7 递减到 1：[today−7, today−1]，天然按 date 升序
-  for (let offset = 7; offset >= 1; offset--) {
+  // offset 从 LEDGER_WINDOW_DAYS 递减到 1：[today−7, today−1]，天然按 date 升序
+  for (let offset = LEDGER_WINDOW_DAYS; offset >= 1; offset--) {
     const date = dateKey(addDays(todayDate, -offset))
     if (!existing.has(date)) missing.push(date)
   }
@@ -484,8 +497,9 @@ export function ensureLedgerDays(money: MoneyState, today: string): MoneyState {
  *
  * **三个被写死的字段**（其余全部原样保留）：
  * - `spentTC` → `config.abandonedDayTC`（满额）；
- * - `settledAt` → **到期日**，即这个日子最后一次还在窗口内的那一天（`date + 7`），而不是执行时刻 ——
- *   本函数是纯的、不读时钟，只有由 `date` 推出的到期日是可复现的；
+ * - `settledAt` → **到期日**，即这个日子最后一次还在窗口内的那一天（`date + LEDGER_WINDOW_DAYS`），
+ *   而不是执行时刻 —— 本函数是纯的、不读时钟，只有由 `date` 推出的到期日是可复现的。
+ *   注意它写的是**日期键** `YYYY-MM-DD`，不是 `commitDaySettlement` 那种 ISO 时刻，见实现处注释；
  * - `nightPending` → `false`。这一步**必需**，见下。
  *
  * 其余快照字段（`dayLimit` / `overdraft` / `entries` / `videoMin` / `gameMin`）**原样保留**，不是疏忽：
@@ -503,7 +517,7 @@ export function ensureLedgerDays(money: MoneyState, today: string): MoneyState {
  * 无逾期记录时**原对象返回**：调用方（appStore）据返回值恒等短路，避免无谓落盘。纯函数：`today` 是入参。
  */
 export function abandonExpiredDays(money: MoneyState, today: string): MoneyState {
-  const windowStart = dateKey(addDays(parseDateKey(today), -7))
+  const windowStart = dateKey(addDays(parseDateKey(today), -LEDGER_WINDOW_DAYS))
   const expired = money.days.some((day) => day.settledAt === null && day.date < windowStart)
   if (!expired) return money
 
@@ -511,8 +525,11 @@ export function abandonExpiredDays(money: MoneyState, today: string): MoneyState
     day.settledAt === null && day.date < windowStart
       ? {
           ...day,
-          // date + 7：这个日子最后一次仍在 [today−7, today) 里的那天（见函数头注释）
-          settledAt: dateKey(addDays(parseDateKey(day.date), 7)),
+          // `settledAt` 写的是**日期键**（`YYYY-MM-DD`），不是 `commitDaySettlement` 那种 ISO 时刻。
+          // 本函数是纯的、不读时钟，只有由 `date` 推出的到期日可复现；现有消费者只判 null / 非 null，
+          // 所以格式差异暂无功能影响。将来若有人按 ISO 解析它，必须先改这里 ——
+          // 而改它就意味着放弃「纯函数不读时钟」这条性质，要一并重新设计。
+          settledAt: dateKey(addDays(parseDateKey(day.date), LEDGER_WINDOW_DAYS)),
           spentTC: money.config.abandonedDayTC,
           nightPending: false
         }
@@ -834,18 +851,26 @@ export function selectMoneyStats(money: MoneyState, today: string): MoneyStats {
 /**
  * 待结算的日期列表（spec 7.1 的日结卡片数据源），按日期升序。
  *
- * 判定只有两条：`settledAt === null`（尚未结算）且 `date < today`（这一天已经过完）。
+ * 判定有三条：`settledAt === null`（尚未结算）、`date < today`（这一天已经过完）、
+ * 且 `date ≥ today − LEDGER_WINDOW_DAYS`（仍在固定 7 天窗口内）。
  * **今天不计入** —— 它还没结束，此刻结算等于拿半天的账当整天结；判定用的是日期字符串
  * 而非时间戳，正是因为「一天是否结束」在本地日历上是纯粹的日期比较。
  *
- * 日期键是定长 `YYYY-MM-DD`，字典序即时间序，所以 `<` 与 `.sort()` 都不需要解析回 `Date`。
+ * **下界是本函数的契约，不依赖 `abandonExpiredDays` 是否刚跑过**：桌面端只在 `init` 跑一次开机链，
+ * 若应用跨零点一直开着，`today` 前进了而没有人重新物化 / 放弃，昨天还是 `today − 7` 的那天
+ * 今天就变成了 `today − 8`、却仍是未结算。此时若把它报成待结算，面板就会按**真实花费**结掉它，
+ * 绕过 spec §4 的「逾期即放弃（满额 80）」。所以窗口下界由本函数自己守住 —— 窗口是契约，
+ * 开机链只是让账本与契约保持一致的优化。
+ *
+ * 日期键是定长 `YYYY-MM-DD`，字典序即时间序，所以 `<` / `>=` 与 `.sort()` 都不需要解析回 `Date`。
  * 返回前显式排序，不依赖 `days` 已按升序这一点：调用方守不守约不该改变本函数的语义。
  *
  * 与 `selectMoneyStats` 同源：两者都只读 `money`、把 `today` 当入参，不读时钟、不用随机数。
  */
 export function pendingDays(money: MoneyState, today: string): string[] {
+  const windowStart = dateKey(addDays(parseDateKey(today), -LEDGER_WINDOW_DAYS))
   return money.days
-    .filter((day) => day.settledAt === null && day.date < today)
+    .filter((day) => day.settledAt === null && day.date < today && day.date >= windowStart)
     .map((day) => day.date)
     .sort()
 }

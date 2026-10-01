@@ -1212,6 +1212,17 @@ describe('pendingDays', () => {
     expect(pendingDays(moneyWithTodayOnly, '2026-09-30')).toEqual([])
   })
 
+  it('R2-D 窗口下界：今天 − 7 计入、今天 − 8 不计入（即便仍未结算）', () => {
+    // 桌面端跨零点后 today 前进，而开机链不再跑：今天 − 8 会仍是「未结算」。
+    // 它必须被窗口挡在卡片之外，否则面板会按真实花费结掉它，绕过逾期满额。
+    const money = mkMoney([
+      unsettledDay('2026-09-22', []), // 今天 − 8：已掉出 7 天窗口
+      unsettledDay('2026-09-23', []), // 今天 − 7：窗口下界，含
+      unsettledDay('2026-09-30', []) // 今天：尚未结束
+    ])
+    expect(pendingDays(money, '2026-09-30')).toEqual(['2026-09-23'])
+  })
+
   it('全部已结算时为空', () => {
     const allSettled = mkMoney([
       settledDay('2026-09-28', [mkEntry({ actualMin: 60, plannedMin: 60, done: true })]),
