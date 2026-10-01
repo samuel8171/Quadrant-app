@@ -179,6 +179,9 @@ function normalizeLedgerDay(raw: unknown): LedgerDay | null {
     // 若照其他快照标量那样判空即 return null，桌面端会静默丢掉整个旧日账本。
     videoMin: isFiniteNumber(raw.videoMin) ? raw.videoMin : 0,
     gameMin: isFiniteNumber(raw.gameMin) ? raw.gameMin : 0,
+    // `latePhone` 与本字段之前的旧记录的关系同 `isRestDay`：缺席是合法的，一律按 false
+    // （「没刷」）补齐，而不是判空即 `return null` 丢掉整个旧日账本。非布尔同样回退 false。
+    latePhone: raw.latePhone === true,
     dayLimit: raw.dayLimit,
     spentTC: raw.spentTC,
     overdraft: raw.overdraft,

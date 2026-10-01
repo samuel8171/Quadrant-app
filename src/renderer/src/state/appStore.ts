@@ -23,6 +23,7 @@ import {
   ensureWeekRollover,
   leisureDelta,
   nightMinutesOf,
+  previousLatePhone,
   settleDay
 } from '../../../shared/money'
 import * as eventRules from '../lib/eventRules'
@@ -861,6 +862,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       date,
       entries,
       previousOverdraft: carriedOverdraft(money, date),
+      // 前一日「昨夜 24:00 后有没有刷手机」的答案，由账本现查（没有前一日即 false ⇒ 不扣）。
+      previousLatePhone: previousLatePhone(money.days, date),
       settledAt: new Date().toISOString(),
       config: money.config
     })
@@ -891,6 +894,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       entries: [],
       isRestDay: true,
       previousOverdraft: carriedOverdraft(money, date),
+      // 休息日**不免除**昨夜的连带扣款（spec R2 §6 / ruling 1）：同样查前一日答案。
+      previousLatePhone: previousLatePhone(money.days, date),
       settledAt: new Date().toISOString(),
       config: money.config
     })
@@ -921,6 +926,8 @@ export const useAppStore = create<AppState>((set, get) => ({
           entries: [entry],
           videoMin: 0,
           gameMin: 0,
+          // 未结算的记录还没有那一问的答案：它要等这一天的日结才问（spec R2 §6）。
+          latePhone: false,
           dayLimit: 0,
           spentTC: 0,
           overdraft: 0,
@@ -977,6 +984,14 @@ export const useAppStore = create<AppState>((set, get) => ({
       // （休息日的 nightPending 已是 false，正常情况下 confirmNight 根本选不中它；
       //  这里透传是**第二道防线**：任何路径整日重跑都还原成休息日，而不是退化成 0。）
       isRestDay: day.isRestDay === true,
+      // 深夜刷手机的答案同样是**日级**输入，而且跨着两天，重跑时最容易丢：
+      // - `latePhone: day.latePhone` 是**本日（previousDate）自己**的答案，它决定 `次日` 的扣款。
+      //   不透传就会把它静默重置成 false，于是次日那笔连带扣款**永久丢失**；
+      // - `previousLatePhone` 是**前一日**的答案，它决定 `本日` 的扣款。不透传就会把本日快照里
+      //   那笔扣款**静默抹掉**（与「休息日申报」同一类漏传事故）。
+      // 侧写：`day.latePhone === true` 把老记录的缺席也收敛成 false。
+      latePhone: day.latePhone === true,
+      previousLatePhone: previousLatePhone(money.days, previousDate),
       previousOverdraft: carriedOverdraft(money, previousDate),
       settledAt: day.settledAt,
       config: money.config

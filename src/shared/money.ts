@@ -224,14 +224,35 @@ export function restDayCost(config: MoneyConfig): number {
  * 两者都是**可选入参、缺省 0**：本字段加入之前的旧记录没有它们，语义上就是「那天没消费」；
  * 缺省保证了老调用方与老账本都不必改动，同时 `0` 也是唯一不凭空发明消费的取值。
  *
+ * **`latePhone` / `previousLatePhone` 是「深夜刷手机」的连带扣款**（spec R2 §6），
+ * 两者**不是**同一天的两个输入，而是跨日的两个端点：
+ * - `latePhone` —— **本日**日结时用户对「昨天 24:00 后还有没有刷手机」的答案，**原样记进**
+ *   返回快照的 `latePhone` 字段；它**不产生本日扣款**（用户明确要求扣次日）。
+ * - `previousLatePhone` —— **前一日**记录下的那个答案，由调用方查账本得出。为 `true` 时，
+ *   **本日**结算加扣 `config.latePhoneTC` 到 `spentTC`、减 `config.latePhoneLT` 到 `deltaLT`。
+ *
+ * 两个输入都**缺省 `false`**，且判定一律写成 `=== true`：缺省、`undefined`、旧调用方
+ * 一律落到「不扣」。这是刻意的 —— 「没有前一日」与「前一日的记录里根本没有这个字段」
+ * （加本字段之前的旧账本）都必须解释成「不扣」，而不是凭空扣一笔。
+ *
+ * 扣款**计入 `spentTC`**（ruling 2）而不是只减 `deltaLT`：它是那一天**真实花掉的钱**，
+ * 因此照常参与 `overdraft` 与 `settleWeek` 的 `overLimitDays`。用户可见的后果是
+ * 「昨夜刷手机可能让次日被判超日上限」，这是有意为之。
+ *
  * **`isRestDay` 为 true 时走休息日分支**（spec R2 §4.3 / §9.2）：固定扣 `restDayCost(config)`、
- * `deltaLT` 为 0、条目恒为空。三处刻意的取舍：
+ * 条目恒为空、`videoMin` / `gameMin` 归 0。三处刻意的取舍：
  * - **条目与两条消费一律不采纳**：休息日是一整天的主动申报，与「做了多久」无关；传进来的条目
  *   只可能来自一次重跑（见下），若采纳就会把 64 静默抹成条目之和；
  * - **`nightPending` 置 `false`**：休息日不走 23:20 的常规路径，也就没有「深夜补记」这一问。
  *   这与 `abandonExpiredDays` 的处置同源，且同样是**不可重结**的关键 —— 置 false 就把它从
  *   `openNightsBefore` 的候选里摘掉，`confirmNight` 因此永远不会整日重跑它；
  * - `videoMin` / `gameMin` 归 0：那两问属于常规日结流程，休息日整日跳过了它。
+ *
+ * ⚠️ **但连带扣款是唯一的例外，休息日不免除它**（ruling 1）：`previousLatePhone` 为 true 时
+ * `spentTC = restDayCost + config.latePhoneTC`、`deltaLT = −config.latePhoneLT`。理由见下方
+ * 休息日分支内的注释 —— 它惩罚的是**昨夜做了什么**，与今天休不休息无关；若让休息日抹掉它，
+ * 用户每次刷完手机第二天申报休息就有一条逃生通道。
+ * `latePhone`（本日的答案）在休息日同样**照记**，因此休息日也能扣到它次日头上。
  *
  * 返回值对条目数组做的是**浅拷贝**：数组归快照所有，但条目对象仍与调用方共享 ——
  * 调用方不得原地改这些对象（账本是追加写的，条目一旦记录即视为不可变）。
@@ -250,23 +271,43 @@ export function settleDay(input: {
    * 休息日必须**显式申报**，绝不能被当成默认计价。
    */
   isRestDay?: boolean
+  /**
+   * 本日对「昨夜 24:00 后有没有刷手机」的答案，记进快照的 `latePhone`；缺省 `false`。
+   * 它**不在本日扣款**，只由次日结算读取。
+   */
+  latePhone?: boolean
+  /**
+   * **前一日**记录下的答案；`true` 时本日加扣 `latePhoneTC` / `latePhoneLT`。
+   * 缺省 `false`：没有前一日、或前一日没有该字段（旧账本）都是这个取值。
+   */
+  previousLatePhone?: boolean
   config: MoneyConfig
 }): LedgerDay {
   const dayLimit = dayLimitOf(input.previousOverdraft, input.config)
 
+  // 昨夜的连带扣款：落在**本日**，且计入 spentTC（ruling 2，见函数头注释）。
+  // 显式 `=== true`：缺省 / undefined 都不扣。两笔都读 config，绝不写死数额。
+  const latePenaltyTC = input.previousLatePhone === true ? input.config.latePhoneTC : 0
+  const latePenaltyLT = input.previousLatePhone === true ? input.config.latePhoneLT : 0
+  // 本日的答案原样记账（缺省即 false）。
+  const latePhone = input.latePhone === true
+
   // 休息日：整天的主动申报，与条目无关。显式 `=== true`，让缺省 / undefined 都落到普通分支。
   if (input.isRestDay === true) {
-    const spentTC = restDayCost(input.config)
+    const spentTC = restDayCost(input.config) + latePenaltyTC
     return {
       date: input.date,
       settledAt: input.settledAt,
       entries: [],
       videoMin: 0,
       gameMin: 0,
+      latePhone,
       dayLimit,
       spentTC,
       overdraft: Math.max(0, spentTC - dayLimit),
-      deltaLT: 0,
+      // 休息日的娱币本为 0，但连带扣款照扣：它惩罚的是昨夜做了什么，不是今天休不休息
+      // （ruling 1）。若这里抹成 0，用户每次刷完手机第二天申报休息就能躲掉娱币那一半。
+      deltaLT: latePenaltyLT === 0 ? 0 : -latePenaltyLT,
       // 见函数头注释：休息日没有「深夜补记」这一问，置 false 同时使它不可重结。
       nightPending: false,
       isRestDay: true
@@ -290,6 +331,11 @@ export function settleDay(input: {
   const gameMin = input.gameMin ?? 0
   deltaLT += consumptionDeltaLT({ videoMin, gameMin }, input.config)
 
+  // 昨夜的连带扣款与上面两条纯消费**不同**：它同时进 spentTC 与 deltaLT（ruling 2）。
+  // 顺序无所谓（都是加法），但它必须在 `overdraft` 之前落定 —— 见下面的 spentTC。
+  spentTC += latePenaltyTC
+  deltaLT -= latePenaltyLT
+
   return {
     date: input.date,
     settledAt: input.settledAt,
@@ -299,6 +345,7 @@ export function settleDay(input: {
     entries: [...input.entries],
     videoMin,
     gameMin,
+    latePhone,
     dayLimit,
     spentTC,
     overdraft: Math.max(0, spentTC - dayLimit),
@@ -307,6 +354,23 @@ export function settleDay(input: {
     // 普通结算路径恒为 false：休息日必须显式申报（见函数头注释）。
     isRestDay: false
   }
+}
+
+/**
+ * 结算 `date` 时该带入的「前一日「昨夜刷手机」答案」（spec R2 §6）—— `settleDay` 的
+ * `previousLatePhone` 入参的**单一真源**。
+ *
+ * 只认**日历上的昨天**（与调用方的 `carriedOverdraft` 同一条规矩）：
+ * - 昨天没有账本 ⇒ `false`（没有前一日就不扣，**绝不凭空扣一笔**）；
+ * - 昨天有账本 ⇒ 它的 `latePhone`；
+ * - 昨天有账本但**没有这个字段**（加字段之前的旧记录）⇒ `?? false`。
+ *
+ * 三支都汇到同一个 `false`，正是「没有前一日」与「旧记录缺席」都解释成「不扣」的兑现处。
+ * 抽成纯函数而不是在调用点各写一遍：它是「前一日」这一契约的唯一实现，也因此可被直接测。
+ */
+export function previousLatePhone(days: LedgerDay[], date: string): boolean {
+  const prevDate = dateKey(addDays(parseDateKey(date), -1))
+  return days.find((day) => day.date === prevDate)?.latePhone ?? false
 }
 
 /**
@@ -517,6 +581,8 @@ export function ensureLedgerDays(money: MoneyState, today: string): MoneyState {
       entries: [],
       videoMin: 0,
       gameMin: 0,
+      // 刚物化出来的空记录还没有答案：那一问要等这一天的日结才问（spec R2 §6）。
+      latePhone: false,
       dayLimit: 0,
       spentTC: 0,
       overdraft: 0,
@@ -828,6 +894,14 @@ export function selectMoneyStats(money: MoneyState, today: string): MoneyStats {
           { videoMin: day.videoMin ?? 0, gameMin: day.gameMin ?? 0 },
           money.config
         )
+        // 昨夜的连带扣款同理：它由**前一日**的答案触发（settleDay 的 previousLatePhone），
+        // 是跨日输入而不是本日字段，所以走 `previousLatePhone` 这个同一真源查账本。
+        // 已结算的日走上面那条冻结快照支路（快照里已含扣款），不许在这里重复叠加 ——
+        // 否则「结算前」比「结算后」多扣一笔。
+        if (previousLatePhone(money.days, date)) {
+          daySpent += money.config.latePhoneTC
+          dayDelta -= money.config.latePhoneLT
+        }
       }
     }
 

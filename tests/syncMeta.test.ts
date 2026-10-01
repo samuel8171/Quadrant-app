@@ -42,6 +42,7 @@ const settledDay: LedgerDay = {
   entries: [],
   videoMin: 0,
   gameMin: 0,
+  latePhone: false,
   dayLimit: 50,
   spentTC: 20,
   overdraft: 0,

@@ -90,6 +90,7 @@ const sampleDataWithMoney: AppData = {
         ],
         videoMin: 0,
         gameMin: 0,
+        latePhone: false,
         dayLimit: 80,
         spentTC: 20,
         overdraft: 0,
@@ -482,6 +483,100 @@ describe('web platform API', () => {
     const loaded = await api.loadData()
     expect(loaded.money?.days[0].isRestDay).toBe(true)
     expect(loaded.money?.days[0].spentTC).toBe(64)
+  })
+
+  it('老记录缺 latePhone 时账本不被丢弃（它是后加的可选字段）', async () => {
+    // 加字段之前的载荷里没有它：判它非法会让第 2 档把用户整份账本丢掉。
+    const legacy = {
+      ...baseData,
+      goals: [validGoal],
+      money: {
+        enabled: true,
+        config: validMoneyConfig,
+        days: [
+          {
+            date: '2026-09-28',
+            settledAt: null,
+            entries: [],
+            videoMin: 0,
+            gameMin: 0,
+            dayLimit: 0,
+            spentTC: 0,
+            overdraft: 0,
+            deltaLT: 0,
+            nightPending: true
+          }
+        ],
+        weeks: []
+      }
+    }
+    const api = createWebPlatformApi(fakeStorage(JSON.stringify(legacy)))
+    const loaded = await api.loadData()
+    expect(loaded.money?.days).toHaveLength(1)
+    expect(loaded.goals).toHaveLength(1)
+  })
+
+  it('latePhone 存在但不是布尔时只丢账本（存在即须严格）', async () => {
+    for (const bad of ['yes', 1, null, {}] as unknown[]) {
+      const data = {
+        ...baseData,
+        goals: [validGoal],
+        money: {
+          enabled: true,
+          config: validMoneyConfig,
+          days: [
+            {
+              date: '2026-09-28',
+              settledAt: null,
+              entries: [],
+              videoMin: 0,
+              gameMin: 0,
+              latePhone: bad,
+              dayLimit: 0,
+              spentTC: 0,
+              overdraft: 0,
+              deltaLT: 0,
+              nightPending: true
+            }
+          ],
+          weeks: []
+        }
+      }
+      const api = createWebPlatformApi(fakeStorage(JSON.stringify(data)))
+      const loaded = await api.loadData()
+      expect(loaded.goals).toHaveLength(1)
+      expect(loaded.money).toBeUndefined()
+    }
+  })
+
+  it('latePhone 为 true 的载荷原样通过校验', async () => {
+    const data = {
+      ...baseData,
+      money: {
+        enabled: true,
+        config: validMoneyConfig,
+        days: [
+          {
+            date: '2026-09-28',
+            settledAt: '2026-09-28T23:20:00.000Z',
+            entries: [],
+            videoMin: 0,
+            gameMin: 0,
+            latePhone: true,
+            dayLimit: 80,
+            spentTC: 0,
+            overdraft: 0,
+            deltaLT: 0,
+            nightPending: false,
+            isRestDay: false
+          }
+        ],
+        weeks: []
+      }
+    }
+    const api = createWebPlatformApi(fakeStorage(JSON.stringify(data)))
+    const loaded = await api.loadData()
+    expect(loaded.money?.days[0].latePhone).toBe(true)
   })
 
   it('完全合法的载荷（含 money）原样返回，不走降级分支', async () => {

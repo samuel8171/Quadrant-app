@@ -22,6 +22,7 @@ import {
   openNightsBefore,
   penaltyTierOf,
   pendingDays,
+  previousLatePhone,
   restDayCost,
   selectMoneyStats,
   settleDay,
@@ -157,6 +158,7 @@ function mkWeek(
       entries,
       videoMin: 0,
       gameMin: 0,
+      latePhone: false,
       dayLimit,
       spentTC: daySpend,
       overdraft,
@@ -772,6 +774,346 @@ describe('settleDay · 休息日分支', () => {
 })
 
 // ============================================================================
+// Task R2-F：深夜刷手机的次日连带扣款（spec R2 §6）
+// ============================================================================
+
+/**
+ * 连带扣款用一份**独立标定**的 config 来测。
+ *
+ * `latePhoneTC` / `latePhoneLT` 是用户只说「大量」而未定数的**占位值**，随时可能被重新定标。
+ * 所以这里既不写死默认的 40 / 2，也不用默认 config —— 换一组与默认值、与其他任何字段都
+ * 不相同的数（7 / 1.25）。逻辑若偷偷写死 40 / 2，这些断言会当场失败；默认值重定标也不会
+ * 让用例「假绿」。
+ */
+const LATE_CONFIG: MoneyConfig = {
+  ...DEFAULT_MONEY_CONFIG,
+  latePhoneTC: 7,
+  latePhoneLT: 1.25
+}
+
+/** 把一份日账本按自定义 config 包成 `MoneyState`（`mkMoney` 固定用默认 config）。 */
+function moneyWithConfig(days: LedgerDay[], config: MoneyConfig): MoneyState {
+  return { enabled: true, config, days, weeks: [] }
+}
+
+describe('settleDay · 深夜刷手机的次日连带扣款', () => {
+  it('答「有」的**次日**扣款：spentTC 加 latePhoneTC、deltaLT 减 latePhoneLT', () => {
+    const next = settleDay({
+      date: '2026-09-29',
+      previousOverdraft: 0,
+      settledAt: 'x',
+      entries: [],
+      previousLatePhone: true,
+      config: LATE_CONFIG
+    })
+    expect(next.spentTC).toBe(LATE_CONFIG.latePhoneTC)
+    expect(next.deltaLT).toBe(-LATE_CONFIG.latePhoneLT)
+  })
+
+  it('扣款只落次日：D 自己记下答案，但 D 的 spentTC / deltaLT 都不变', () => {
+    const same = settleDay({
+      date: '2026-09-28',
+      previousOverdraft: 0,
+      settledAt: 'x',
+      entries: [],
+      latePhone: true,
+      config: LATE_CONFIG
+    })
+    expect(same.spentTC).toBe(0)
+    expect(same.deltaLT).toBe(0)
+    // 答案被持久化下来，等次日结算时兑现
+    expect(same.latePhone).toBe(true)
+  })
+
+  it('两端对照：前一日答「有」才扣、答「无」不扣', () => {
+    const yes = settleDay({
+      date: '2026-09-29',
+      previousOverdraft: 0,
+      settledAt: 'x',
+      entries: [],
+      previousLatePhone: true,
+      config: LATE_CONFIG
+    })
+    const no = settleDay({
+      date: '2026-09-29',
+      previousOverdraft: 0,
+      settledAt: 'x',
+      entries: [],
+      previousLatePhone: false,
+      config: LATE_CONFIG
+    })
+    expect(no.spentTC).toBe(0)
+    expect(no.deltaLT).toBe(0)
+    expect(yes.spentTC - no.spentTC).toBe(LATE_CONFIG.latePhoneTC)
+    expect(no.deltaLT - yes.deltaLT).toBe(LATE_CONFIG.latePhoneLT)
+  })
+
+  it('没有前一日（缺省 previousLatePhone）⇒ 一分不扣，绝不凭空扣一笔', () => {
+    const day = settleDay({
+      date: '2026-09-28',
+      previousOverdraft: 0,
+      settledAt: 'x',
+      entries: [],
+      config: LATE_CONFIG
+    })
+    expect(day.spentTC).toBe(0)
+    expect(day.deltaLT).toBe(0)
+    // 未记录答案的缺省也是「否」
+    expect(day.latePhone).toBe(false)
+  })
+
+  it('答案作为持久化字段落进快照：缺省即 false，显式「有」即 true', () => {
+    const no = settleDay({
+      date: '2026-09-28',
+      previousOverdraft: 0,
+      settledAt: 'x',
+      entries: [],
+      config: LATE_CONFIG
+    })
+    const yes = settleDay({
+      date: '2026-09-28',
+      previousOverdraft: 0,
+      settledAt: 'x',
+      entries: [],
+      latePhone: true,
+      config: LATE_CONFIG
+    })
+    expect(no.latePhone).toBe(false)
+    expect(yes.latePhone).toBe(true)
+  })
+
+  it('连带扣款计入 spentTC 因而推动 overdraft（ruling 2：它是「那天花掉的钱」）', () => {
+    // 条目花掉 76 币（未过日上限 80），再叠一笔前夜连带扣款 7 ⇒ 83 > 80 ⇒ 透支 3
+    const withNo = settleDay({
+      date: '2026-09-29',
+      previousOverdraft: 0,
+      settledAt: 'x',
+      entries: fillerEntries(76),
+      previousLatePhone: false,
+      config: LATE_CONFIG
+    })
+    const withYes = settleDay({
+      date: '2026-09-29',
+      previousOverdraft: 0,
+      settledAt: 'x',
+      entries: fillerEntries(76),
+      previousLatePhone: true,
+      config: LATE_CONFIG
+    })
+    expect(withNo.spentTC).toBe(76)
+    expect(withNo.overdraft).toBe(0)
+    expect(withYes.spentTC).toBe(76 + LATE_CONFIG.latePhoneTC)
+    expect(withYes.overdraft).toBe(76 + LATE_CONFIG.latePhoneTC - LATE_CONFIG.dailyCapTC)
+  })
+
+  it('连带扣款把一天推进「超日上限」：settleWeek 的 overLimitDays 因此 +1', () => {
+    const base = settleDay({
+      date: '2026-09-28',
+      previousOverdraft: 0,
+      settledAt: 'x',
+      entries: fillerEntries(76),
+      previousLatePhone: false,
+      config: LATE_CONFIG
+    })
+    const penalized = settleDay({
+      date: '2026-09-28',
+      previousOverdraft: 0,
+      settledAt: 'x',
+      entries: fillerEntries(76),
+      previousLatePhone: true,
+      config: LATE_CONFIG
+    })
+    const week = (day: LedgerDay): WeekSettlement =>
+      settleWeek({
+        weekStart: '2026-09-28',
+        weekEnd: '2026-10-04',
+        days: [day],
+        weekTC: LATE_CONFIG.weeklyTC,
+        weekLT: LATE_CONFIG.weeklyLT,
+        config: LATE_CONFIG
+      })
+    expect(base.spentTC).toBeLessThanOrEqual(LATE_CONFIG.dailyCapTC)
+    expect(week(base).overLimitDays).toBe(0)
+    expect(week(penalized).overLimitDays).toBe(1)
+  })
+
+  it('休息日也不能免除连带扣款：spentTC = restDayCost + latePhoneTC，娱币照样扣', () => {
+    const rest = settleDay({
+      date: '2026-09-29',
+      previousOverdraft: 0,
+      settledAt: 'x',
+      entries: [],
+      isRestDay: true,
+      previousLatePhone: true,
+      config: LATE_CONFIG
+    })
+    expect(rest.isRestDay).toBe(true)
+    expect(rest.spentTC).toBe(restDayCost(LATE_CONFIG) + LATE_CONFIG.latePhoneTC)
+    expect(rest.deltaLT).toBe(-LATE_CONFIG.latePhoneLT)
+  })
+
+  it('对照：休息日 + 前一日答「无」⇒ 只有 restDayCost，娱币为 0', () => {
+    const rest = settleDay({
+      date: '2026-09-29',
+      previousOverdraft: 0,
+      settledAt: 'x',
+      entries: [],
+      isRestDay: true,
+      previousLatePhone: false,
+      config: LATE_CONFIG
+    })
+    expect(rest.spentTC).toBe(restDayCost(LATE_CONFIG))
+    expect(rest.deltaLT).toBe(0)
+  })
+
+  it('休息日也会**记录**答案：休息日的 latePhone 同样扣到它次日头上', () => {
+    const rest = settleDay({
+      date: '2026-09-28',
+      previousOverdraft: 0,
+      settledAt: 'x',
+      entries: [],
+      isRestDay: true,
+      latePhone: true,
+      config: LATE_CONFIG
+    })
+    expect(rest.latePhone).toBe(true)
+    const next = settleDay({
+      date: '2026-09-29',
+      previousOverdraft: rest.overdraft,
+      settledAt: 'x',
+      entries: [],
+      previousLatePhone: rest.latePhone,
+      config: LATE_CONFIG
+    })
+    expect(next.spentTC).toBe(LATE_CONFIG.latePhoneTC)
+  })
+
+  it('整日重跑（confirmNight 路径）既不会扣两次、也不会丢：重跑结果与原快照逐字相同', () => {
+    const original = settleDay({
+      date: '2026-09-29',
+      previousOverdraft: 0,
+      settledAt: 'x',
+      entries: [mkEntry({ actualMin: 60, plannedMin: 60, done: true })],
+      previousLatePhone: true,
+      config: LATE_CONFIG
+    })
+    const rerun = settleDay({
+      date: original.date,
+      previousOverdraft: 0,
+      settledAt: original.settledAt ?? 'x',
+      entries: original.entries,
+      previousLatePhone: true,
+      config: LATE_CONFIG
+    })
+    expect(original.spentTC).toBe(10 + LATE_CONFIG.latePhoneTC)
+    expect(rerun.spentTC).toBe(original.spentTC)
+    expect(rerun.deltaLT).toBe(original.deltaLT)
+  })
+
+  it('休息日的连带扣款在整日重跑后仍然自洽（重跑必须透传 previousLatePhone）', () => {
+    const original = settleDay({
+      date: '2026-09-29',
+      previousOverdraft: 0,
+      settledAt: 'x',
+      entries: [],
+      isRestDay: true,
+      previousLatePhone: true,
+      config: LATE_CONFIG
+    })
+    const rerun = settleDay({
+      date: original.date,
+      previousOverdraft: 0,
+      settledAt: original.settledAt ?? 'x',
+      entries: original.entries,
+      isRestDay: original.isRestDay,
+      previousLatePhone: true,
+      config: LATE_CONFIG
+    })
+    expect(original.spentTC).toBe(restDayCost(LATE_CONFIG) + LATE_CONFIG.latePhoneTC)
+    expect(rerun.spentTC).toBe(original.spentTC)
+    expect(rerun.deltaLT).toBe(original.deltaLT)
+  })
+
+  it('selectMoneyStats 未结算日同样叠加连带扣款：结算前与结算后同一个价', () => {
+    const prev = settleDay({
+      date: '2026-09-29',
+      previousOverdraft: 0,
+      settledAt: 'x',
+      entries: [],
+      latePhone: true,
+      config: LATE_CONFIG
+    })
+    const settledToday = settleDay({
+      date: '2026-09-30',
+      previousOverdraft: 0,
+      settledAt: 'x',
+      entries: [],
+      previousLatePhone: true,
+      config: LATE_CONFIG
+    })
+    const unsettledToday = unsettledDay('2026-09-30', [])
+
+    const settled = selectMoneyStats(moneyWithConfig([prev, settledToday], LATE_CONFIG), TODAY)
+    const unsettled = selectMoneyStats(moneyWithConfig([prev, unsettledToday], LATE_CONFIG), TODAY)
+
+    expect(settled.daily[2].spentTC).toBe(LATE_CONFIG.latePhoneTC)
+    expect(unsettled.daily[2].spentTC).toBe(LATE_CONFIG.latePhoneTC)
+    expect(unsettled.daily[2].spentTC).toBe(settled.daily[2].spentTC)
+    expect(unsettled.spentLT).toBe(-LATE_CONFIG.latePhoneLT)
+    expect(unsettled.spentLT).toBe(settled.spentLT)
+  })
+})
+
+describe('previousLatePhone（「前一日答案」的唯一真源）', () => {
+  it('账本里根本没有前一日 ⇒ false（无前一日 = 不扣，绝不凭空扣一笔）', () => {
+    expect(previousLatePhone([], '2026-09-29')).toBe(false)
+    // 判别器：只有「更早」的日子时，它也不是 09-29 的前一日
+    const older = settleDay({
+      date: '2026-09-27',
+      previousOverdraft: 0,
+      settledAt: 'x',
+      entries: [],
+      latePhone: true,
+      config: LATE_CONFIG
+    })
+    expect(previousLatePhone([older], '2026-09-29')).toBe(false)
+  })
+
+  it('前一日存在且答「有」⇒ true；答「无」⇒ false', () => {
+    const yes = settleDay({
+      date: '2026-09-28',
+      previousOverdraft: 0,
+      settledAt: 'x',
+      entries: [],
+      latePhone: true,
+      config: LATE_CONFIG
+    })
+    const no = settleDay({
+      date: '2026-09-28',
+      previousOverdraft: 0,
+      settledAt: 'x',
+      entries: [],
+      config: LATE_CONFIG
+    })
+    expect(previousLatePhone([yes], '2026-09-29')).toBe(true)
+    expect(previousLatePhone([no], '2026-09-29')).toBe(false)
+  })
+
+  it('前一日是**老记录**、字段整个缺席 ⇒ 视为 false（不是 undefined 漏出去）', () => {
+    // 复刻加字段之前的 plan.json：那一天的对象里根本没有 latePhone 这个键
+    const legacy = { ...unsettledDay('2026-09-28', []) } as Partial<LedgerDay>
+    delete legacy.latePhone
+    expect(previousLatePhone([legacy as LedgerDay], '2026-09-29')).toBe(false)
+  })
+
+  it('只认日历上的昨天：前一日未结算（快照尚未冻结）也按已记录的值读', () => {
+    // 未结算日不可能有真实答案（缺省 false），这里钉的是「查的是字段、不是 settledAt」
+    const unsettled: LedgerDay = { ...unsettledDay('2026-09-28', []), latePhone: true }
+    expect(previousLatePhone([unsettled], '2026-09-29')).toBe(true)
+  })
+})
+
+// ============================================================================
 // Task 4：周结算、档位惩罚与跨周滚动
 // ============================================================================
 
@@ -1005,6 +1347,7 @@ function unsettledDay(date: string, entries: LedgerEntry[]): LedgerDay {
     entries,
     videoMin: 0,
     gameMin: 0,
+    latePhone: false,
     dayLimit: 0,
     spentTC: 0,
     overdraft: 0,
@@ -1410,6 +1753,7 @@ function emptyLedgerDay(date: string): LedgerDay {
     entries: [],
     videoMin: 0,
     gameMin: 0,
+    latePhone: false,
     dayLimit: 0,
     spentTC: 0,
     overdraft: 0,

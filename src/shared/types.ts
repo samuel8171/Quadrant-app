@@ -202,6 +202,23 @@ export interface LedgerDay {
   videoMin: number
   /** 当日「打游戏」分钟数——第二条纯消费来源，语义同上。 */
   gameMin: number
+  /**
+   * 日结时对「昨天 24:00 后还有没有刷手机」的答案（spec R2 §6）。
+   *
+   * **记录日与扣款日不是同一天**：答案记在结算的那一刻（记在 `D` 上），**扣款却落在 `D + 1`**
+   * ——「扣次日」是用户明确要求的。因此
+   * - `D` 自己的 `spentTC` / `deltaLT` **不含**这笔扣款（与 `videoMin` / `gameMin` 不同，
+   *   那两条是本日扣本日）；
+   * - `D + 1` 结算时由 `settleDay` 的 `previousLatePhone` 读取本字段，加扣 `latePhoneTC`
+   *   与 `latePhoneLT`（两者都读 `config`）。
+   *
+   * 与「昨夜 23:30 之后还在做事吗」是**两个不同的追问**：那一问按时长 × 深夜倍率算条目
+   * 时币，本字段是定额扣次日。两者在同一次日结里并列问出，互不替代。
+   *
+   * **本字段加入之前**的旧记录没有它，一律按 `false`（「没刷」）处理 ——
+   * 缺席只意味着「这条记录产生于本字段之前」，那时还没有这一问。
+   */
+  latePhone: boolean
   // —— 结算快照，settledAt 写入后不再变化 ——
   /** 当日实际可用额度。 */
   dayLimit: number
