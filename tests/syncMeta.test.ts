@@ -40,6 +40,8 @@ const settledDay: LedgerDay = {
   date: '2026-09-28',
   settledAt: '2026-09-28T23:20:00.000Z',
   entries: [],
+  videoMin: 0,
+  gameMin: 0,
   dayLimit: 50,
   spentTC: 20,
   overdraft: 0,

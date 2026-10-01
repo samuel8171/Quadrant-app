@@ -102,11 +102,25 @@ function validLedgerEntry(value: unknown): boolean {
   return value.quadrant === null || [1, 2, 3, 4].includes(value.quadrant as number)
 }
 
+/**
+ * `videoMin` / `gameMin`（两条娱币纯消费）是**可选**字段：一旦存在就必须是有限数字，
+ * 缺席放行。与 `validPhotos` 同一套宽严标准（「可选，但存在即严格」）。
+ *
+ * 为什么不像 `dayLimit` 等快照标量那样必填：那两个标量自始就存在，缺席只可能是数据损坏；
+ * 而这两个是本字段加入**之后**新增的，缺席只意味着「这条记录产生于本字段之前」。
+ * 判它非法会让 `loadData` 的第二档把用户**整份账本**静默丢掉 —— 代价与收益不成比例。
+ * 语义上缺席即 `0`（「那天没记录消费」），由 `settleDay` / 读取方按 `0` 兜底。
+ */
+function validOptionalMinutes(value: unknown): boolean {
+  return value === undefined || isFiniteNumber(value)
+}
+
 function validLedgerDay(value: unknown): boolean {
   if (!isRecord(value)) return false
   if (!isDateKey(value.date)) return false
   if (value.settledAt !== null && typeof value.settledAt !== 'string') return false
   if (typeof value.nightPending !== 'boolean') return false
+  if (!validOptionalMinutes(value.videoMin) || !validOptionalMinutes(value.gameMin)) return false
   if (!isFiniteNumber(value.dayLimit) || !isFiniteNumber(value.spentTC)) return false
   if (!isFiniteNumber(value.overdraft) || !isFiniteNumber(value.deltaLT)) return false
   return Array.isArray(value.entries) && value.entries.every(validLedgerEntry)

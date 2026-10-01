@@ -69,6 +69,8 @@ const sampleDataWithMoney: AppData = {
             deltaLT: 0
           }
         ],
+        videoMin: 30,
+        gameMin: 15,
         dayLimit: 80,
         spentTC: 32,
         overdraft: 0,
@@ -303,6 +305,60 @@ describe('dataCodec', () => {
     expect(out.money?.config.quadrantMultiplier).not.toBe(DEFAULT_MONEY_CONFIG.quadrantMultiplier)
     // 关键：规整过程不得改动共享常量本身
     expect(DEFAULT_MONEY_CONFIG.quadrantMultiplier).toEqual({ q1: 1.5, q2: 1, q3: 1.2, q4: 0.5 })
+  })
+
+  it('老记录缺 videoMin / gameMin 时逐字段补 0，而不是把这一天的账本丢掉', () => {
+    // 这两个字段是 R2-C 才加的：加字段之前的 plan.json 里没有它们。
+    // 若照其他快照标量那样「非有限即 return null」，桌面端会静默丢掉整个旧日账本。
+    const legacyDay = {
+      date: '2026-09-28',
+      settledAt: '2026-09-28T23:20:00.000Z',
+      entries: [],
+      dayLimit: 80,
+      spentTC: 0,
+      overdraft: 0,
+      deltaLT: 0,
+      nightPending: false
+    }
+    const out = parseData(
+      JSON.stringify({
+        ...baseData,
+        money: { enabled: true, config: DEFAULT_MONEY_CONFIG, days: [legacyDay], weeks: [] }
+      })
+    )
+    expect(out.money?.days).toHaveLength(1)
+    expect(out.money?.days[0].videoMin).toBe(0)
+    expect(out.money?.days[0].gameMin).toBe(0)
+  })
+
+  it('videoMin / gameMin 是非有限数时回退到 0（逐字段修复，不丢帧）', () => {
+    const out = parseData(
+      JSON.stringify({
+        ...baseData,
+        money: {
+          enabled: true,
+          config: DEFAULT_MONEY_CONFIG,
+          days: [
+            {
+              date: '2026-09-28',
+              settledAt: null,
+              entries: [],
+              videoMin: 'x',
+              gameMin: Number.POSITIVE_INFINITY,
+              dayLimit: 0,
+              spentTC: 0,
+              overdraft: 0,
+              deltaLT: 0,
+              nightPending: true
+            }
+          ],
+          weeks: []
+        }
+      })
+    )
+    expect(out.money?.days).toHaveLength(1)
+    expect(out.money?.days[0].videoMin).toBe(0)
+    expect(out.money?.days[0].gameMin).toBe(0)
   })
 
   it('桌面端不会因 money 坏了而丢掉用户数据（与 web 端 loadData 的三档降级对照）', () => {

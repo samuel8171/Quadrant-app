@@ -423,11 +423,16 @@ function validLedgerEntry(v) {
   return v.quadrant === null || [1, 2, 3, 4].includes(v.quadrant)
 }
 
+// videoMin / gameMin 是后加的娱币纯消费字段：缺席放行、存在则必须是有限数字，
+// 与 platformApi.validLedgerDay 的 validOptionalMinutes 同口径（免得旧账本被判非法而丢整本账）。
+const validOptionalMinutes = (v) => v === undefined || isFiniteNum(v)
+
 function validLedgerDay(v) {
   if (!isRecord(v)) return false
   if (!isDateKey(v.date)) return false
   if (v.settledAt !== null && typeof v.settledAt !== 'string') return false
   if (typeof v.nightPending !== 'boolean') return false
+  if (!validOptionalMinutes(v.videoMin) || !validOptionalMinutes(v.gameMin)) return false
   if (!isFiniteNum(v.dayLimit) || !isFiniteNum(v.spentTC)) return false
   if (!isFiniteNum(v.overdraft) || !isFiniteNum(v.deltaLT)) return false
   return Array.isArray(v.entries) && v.entries.every(validLedgerEntry)

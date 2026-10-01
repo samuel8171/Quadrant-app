@@ -101,14 +101,43 @@ export function costOfEntry(
 
   const m = config.quadrantMultiplier
   // null 与 q2 分成两条分支：数值相同是查表的巧合，语义不同（无信号 vs 重要不紧急）。
+  // 收尾两支**显式列出**：`4 → q4`，其余（运行时的意外值，如 undefined）一律中性 1.0。
+  // 若以裸 `else → q4` 收尾，意外值会被静默按 0.5 倍定价，与「没有信号取中性」自相矛盾。
   let multiplier: number
   if (input.quadrant === null) multiplier = 1
   else if (input.quadrant === 1) multiplier = m.q1
   else if (input.quadrant === 2) multiplier = m.q2
   else if (input.quadrant === 3) multiplier = m.q3
-  else multiplier = m.q4
+  else if (input.quadrant === 4) multiplier = m.q4
+  else multiplier = 1
 
   return Math.round(base * multiplier)
+}
+
+/**
+ * 当日两条**纯消费**的娱币净变化（spec R2 §6）：
+ *
+ * ```
+ * delta = −(videoMin / 60 × config.videoLTPerHour)
+ *       − (gameMin  / 60 × config.gameLTPerHour)
+ * ```
+ *
+ * 「纯消费」是这一支的全部意义：刷视频与打游戏**只扣娱币**，一刻钟的时币也不产生 ——
+ * 因此它既不进 `spentTC`、也不进 `quality` 四分类（那四类是「计划 vs 实际」的质量，
+ * 与消费无关）。这两问在**结算时**当场问、不预先计划，所以它们不是条目、不进周计划。
+ *
+ * 返回值恒 ≤ 0；两项都是 0 时返回 `0`（而不是 `−0`）。
+ */
+export function consumptionDeltaLT(
+  input: { videoMin: number; gameMin: number },
+  config: MoneyConfig
+): number {
+  const video = (input.videoMin / 60) * config.videoLTPerHour
+  const game = (input.gameMin / 60) * config.gameLTPerHour
+  const total = video + game
+  // 两项都为 0 时，`-total` 得到的是 `-0`（`Object.is(-0, 0) === false`）：显式收敛成 0，
+  // 免得一个负零泄漏进账本与快照比较。
+  return total === 0 ? 0 : -total
 }
 
 /**
@@ -174,6 +203,11 @@ export function dayLimitOf(previousOverdraft: number, config: MoneyConfig): numb
  * `nightPending` 恒为 `true`：结算发生在 23:20，而深夜窗口 23:30 才开启，
  * 「昨夜 23:30 之后是否还在做事」只能由**次日**的结算补记（Task 8 消费此字段）。
  *
+ * **娱币的第三条来源是两条纯消费**（`videoMin` / `gameMin`，spec R2 §6）：它们**只扣娱币、
+ * 不产生时币**，因此在 `deltaLT` 上叠加 `consumptionDeltaLT`，而对 `spentTC` 毫无影响。
+ * 两者都是**可选入参、缺省 0**：本字段加入之前的旧记录没有它们，语义上就是「那天没消费」；
+ * 缺省保证了老调用方与老账本都不必改动，同时 `0` 也是唯一不凭空发明消费的取值。
+ *
  * 返回值对条目数组做的是**浅拷贝**：数组归快照所有，但条目对象仍与调用方共享 ——
  * 调用方不得原地改这些对象（账本是追加写的，条目一旦记录即视为不可变）。
  */
@@ -182,6 +216,10 @@ export function settleDay(input: {
   entries: LedgerEntry[]
   previousOverdraft: number
   settledAt: string
+  /** 当日刷视频分钟数；缺省 0（旧记录 / 未记录）。 */
+  videoMin?: number
+  /** 当日打游戏分钟数；缺省 0。 */
+  gameMin?: number
   config: MoneyConfig
 }): LedgerDay {
   const dayLimit = dayLimitOf(input.previousOverdraft, input.config)
@@ -198,6 +236,10 @@ export function settleDay(input: {
       input.config
     )
   }
+  // 两条纯消费只扣娱币：叠进 deltaLT，不碰 spentTC（因此也不影响 overdraft / dayLimit）。
+  const videoMin = input.videoMin ?? 0
+  const gameMin = input.gameMin ?? 0
+  deltaLT += consumptionDeltaLT({ videoMin, gameMin }, input.config)
 
   return {
     date: input.date,
@@ -206,6 +248,8 @@ export function settleDay(input: {
     // 调用方在组装/落盘途中 push/splice 就会改到已冻结的 spentTC/overdraft/dayLimit。
     // 唯一获准修改已结算快照的地方是 Task 8 的深夜补记，且它必须**重算**各项汇总。
     entries: [...input.entries],
+    videoMin,
+    gameMin,
     dayLimit,
     spentTC,
     overdraft: Math.max(0, spentTC - dayLimit),
@@ -408,6 +452,8 @@ export function ensureLedgerDays(
       date,
       settledAt: null,
       entries: [],
+      videoMin: 0,
+      gameMin: 0,
       dayLimit: 0,
       spentTC: 0,
       overdraft: 0,
@@ -648,6 +694,14 @@ export function selectMoneyStats(money: MoneyState, today: string): MoneyStats {
             money.config
           )
         }
+        // 未结算日必须用 settleDay 的**同一套算法**（见函数头注释）：settleDay 现已把两条
+        // 纯消费折进 deltaLT，这里就得照样折一遍，否则「结算前一个价、结算后另一个价」。
+        // 已结算的日读冻结快照（快照里已含消费），绝不能在这里重复叠加。
+        // `?? 0` 兜底：网页端可能载入本字段加入之前的老记录（那时字段合法缺席）。
+        dayDelta += consumptionDeltaLT(
+          { videoMin: day.videoMin ?? 0, gameMin: day.gameMin ?? 0 },
+          money.config
+        )
       }
     }
 

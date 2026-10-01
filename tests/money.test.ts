@@ -1,8 +1,16 @@
 import { describe, expect, it } from 'vitest'
-import type { LedgerDay, LedgerEntry, MoneyConfig, MoneyState, WeekSettlement } from '../src/shared/types'
+import type {
+  LedgerDay,
+  LedgerEntry,
+  MoneyConfig,
+  MoneyState,
+  Quadrant,
+  WeekSettlement
+} from '../src/shared/types'
 import { addDays, dateKey, parseDateKey } from '../src/shared/dateKey'
 import {
   DEFAULT_MONEY_CONFIG,
+  consumptionDeltaLT,
   costOfEntry,
   currentQuota,
   dayLimitOf,
@@ -145,6 +153,8 @@ function mkWeek(
       date,
       settledAt: `${date}T23:20:00.000Z`,
       entries,
+      videoMin: 0,
+      gameMin: 0,
       dayLimit,
       spentTC: daySpend,
       overdraft,
@@ -235,11 +245,72 @@ describe('costOfEntry', () => {
     expect(costOfEntry({ actualMin: 120, nightMin: 120, quadrant: 1 }, DEFAULT_MONEY_CONFIG)).toBe(45)
   })
 
-  it('quadrant 为 null 时取中性 1.0', () => {
+  it('quadrant 为 null 时取中性 1.0（stub 令 q2 ≠ 1，避免与 Q2 撞数而无法判别）', () => {
     // 无象限的条目（计划外，或计划内但没记录象限）不带价值信号 → 中性。
-    // 它数值上等于 Q2（1.0）只是查表的巧合，实现里必须是独立分支：
-    // 将来改 Q2 的取值不能静默改动无象限条目。
-    expect(costOfEntry({ actualMin: 120, nightMin: 0, quadrant: null }, DEFAULT_MONEY_CONFIG)).toBe(20)
+    // 默认配置里 q2 恰好也是 1.0，于是「null 得 20」**区分不出**「走 null 中性分支」与
+    // 「误把 null 当成 q2」。这里把 q2 换成一个不等于 1 的值，让两条分支彻底分开：
+    // null 的结果必须仍等于 round(base × 1)，与 q2 的取值无关。
+    const stub: MoneyConfig = {
+      ...DEFAULT_MONEY_CONFIG,
+      // 必须再 spread 一层：`{ ...DEFAULT_MONEY_CONFIG }` 的嵌套对象仍是共享引用。
+      quadrantMultiplier: { ...DEFAULT_MONEY_CONFIG.quadrantMultiplier, q2: 9 }
+    }
+    const base = (120 / 60) * DEFAULT_MONEY_CONFIG.tcPerHour // 20
+    expect(costOfEntry({ actualMin: 120, nightMin: 0, quadrant: null }, stub)).toBe(Math.round(base * 1))
+    // 判别器自检：同一 stub 下 q2 明确走 9 倍 —— 证明这个 stub 确实把 null 与 q2 分开了
+    expect(costOfEntry({ actualMin: 120, nightMin: 0, quadrant: 2 }, stub)).toBe(Math.round(base * 9))
+    // stub 不得污染共享常量
+    expect(DEFAULT_MONEY_CONFIG.quadrantMultiplier.q2).toBe(1)
+  })
+
+  it('倍率链是显式的：意外象限值按中性 1.0 计价，而不是静默落到 Q4 的 0.5 倍', () => {
+    // 类型上 quadrant ∈ {1,2,3,4}，但运行时数据来自持久化 / 云端，可能是任何值。
+    // 若倍率链以 `else → q4` 收尾，`undefined` 这类意外值会被当成 Q4 定价（10 币），
+    // 与函数自述的「没有信号 → 中性 1.0」直接矛盾。这里把它钉死在中性价上。
+    const unexpected = undefined as unknown as Quadrant
+    expect(costOfEntry({ actualMin: 120, nightMin: 0, quadrant: unexpected }, DEFAULT_MONEY_CONFIG)).toBe(20)
+    // 合法的 Q4 仍然必须走 0.5 倍 —— 显式化不能把 Q4 也一起中性化
+    expect(costOfEntry({ actualMin: 120, nightMin: 0, quadrant: 4 }, DEFAULT_MONEY_CONFIG)).toBe(10)
+  })
+})
+
+// ============================================================================
+// Task R2-C：娱币的两条纯消费来源（刷视频 / 打游戏）
+// ============================================================================
+
+/**
+ * 两条消费**只扣娱币、不产生任何时币**，且在**结算时**由用户当场回答、不预先计划。
+ * 公式逐字取自 spec：`−(videoMin / 60 × videoLTPerHour) − (gameMin / 60 × gameLTPerHour)`。
+ */
+describe('consumptionDeltaLT', () => {
+  it('刷视频 60 分钟 → −1（60 / 60 × 1）', () => {
+    expect(consumptionDeltaLT({ videoMin: 60, gameMin: 0 }, DEFAULT_MONEY_CONFIG)).toBe(-1)
+  })
+
+  it('打游戏 120 分钟 → −3（120 / 60 × 1.5）', () => {
+    expect(consumptionDeltaLT({ videoMin: 0, gameMin: 120 }, DEFAULT_MONEY_CONFIG)).toBe(-3)
+  })
+
+  it('两者合计 → −4', () => {
+    expect(consumptionDeltaLT({ videoMin: 60, gameMin: 120 }, DEFAULT_MONEY_CONFIG)).toBe(-4)
+  })
+
+  it('都没发生时为 0（不产生 −0）', () => {
+    expect(consumptionDeltaLT({ videoMin: 0, gameMin: 0 }, DEFAULT_MONEY_CONFIG)).toBe(0)
+  })
+
+  it('分钟数与费率相乘：30 视频 + 30 游戏 → −(0.5 + 0.75)', () => {
+    expect(consumptionDeltaLT({ videoMin: 30, gameMin: 30 }, DEFAULT_MONEY_CONFIG)).toBe(-1.25)
+  })
+
+  it('两条费率取自 config，不是写死的常量', () => {
+    // 判别器：把两条费率换成非默认值，结果必须跟着变
+    const config: MoneyConfig = {
+      ...DEFAULT_MONEY_CONFIG,
+      videoLTPerHour: 2,
+      gameLTPerHour: 3
+    }
+    expect(consumptionDeltaLT({ videoMin: 60, gameMin: 60 }, config)).toBe(-5) // −2 − 3
   })
 })
 
@@ -404,12 +475,136 @@ describe('settleDay', () => {
       previousOverdraft: 0,
       settledAt: 'x',
       entries: [],
+      videoMin: 0,
+      gameMin: 0,
       config: DEFAULT_MONEY_CONFIG
     })
     expect(day.spentTC).toBe(0)
     expect(day.overdraft).toBe(0)
     expect(day.dayLimit).toBe(80)
     expect(day.deltaLT).toBe(0)
+  })
+
+  it('两条纯消费折进 deltaLT：刷视频 60 + 打游戏 120 ⇒ deltaLT = −4', () => {
+    const day = settleDay({
+      date: '2026-09-28',
+      previousOverdraft: 0,
+      settledAt: 'x',
+      entries: [],
+      videoMin: 60,
+      gameMin: 120,
+      config: DEFAULT_MONEY_CONFIG
+    })
+    expect(day.deltaLT).toBe(-4)
+  })
+
+  it('消费与条目娱币叠加：高效条目 +0.5 与刷视频 60 分钟 ⇒ −0.5', () => {
+    const day = settleDay({
+      date: '2026-09-28',
+      previousOverdraft: 0,
+      settledAt: 'x',
+      entries: [mkEntry({ done: true, actualMin: 60, plannedMin: 60 })],
+      videoMin: 60,
+      gameMin: 0,
+      config: DEFAULT_MONEY_CONFIG
+    })
+    expect(day.deltaLT).toBe(-0.5)
+  })
+
+  it('消费**不改变** spentTC：刷视频 / 打游戏只扣娱币', () => {
+    const withConsumption = settleDay({
+      date: '2026-09-28',
+      previousOverdraft: 0,
+      settledAt: 'x',
+      entries: [mkEntry({ actualMin: 120, plannedMin: 120, done: true })],
+      videoMin: 600,
+      gameMin: 600,
+      config: DEFAULT_MONEY_CONFIG
+    })
+    const withoutConsumption = settleDay({
+      date: '2026-09-28',
+      previousOverdraft: 0,
+      settledAt: 'x',
+      entries: [mkEntry({ actualMin: 120, plannedMin: 120, done: true })],
+      videoMin: 0,
+      gameMin: 0,
+      config: DEFAULT_MONEY_CONFIG
+    })
+    // 时币花费与消费无关：两天的 spentTC / overdraft / dayLimit 逐字相同
+    expect(withConsumption.spentTC).toBe(20)
+    expect(withConsumption.spentTC).toBe(withoutConsumption.spentTC)
+    expect(withConsumption.overdraft).toBe(withoutConsumption.overdraft)
+    expect(withConsumption.dayLimit).toBe(withoutConsumption.dayLimit)
+    // 娱币则明确不同：条目高效 +0.5，叠加消费 −(10 × 1) − (10 × 1.5) = −25 ⇒ −24.5
+    expect(withConsumption.deltaLT).toBe(-24.5)
+    expect(withoutConsumption.deltaLT).toBe(0.5)
+  })
+
+  it('结算快照原样带上 videoMin / gameMin（持久化字段）', () => {
+    const day = settleDay({
+      date: '2026-09-28',
+      previousOverdraft: 0,
+      settledAt: 'x',
+      entries: [],
+      videoMin: 45,
+      gameMin: 15,
+      config: DEFAULT_MONEY_CONFIG
+    })
+    expect(day.videoMin).toBe(45)
+    expect(day.gameMin).toBe(15)
+  })
+
+  it('消费**不进** quality 四分类（那四类只谈计划 vs 实际的工作质量）', () => {
+    const day = settleDay({
+      date: '2026-09-29',
+      previousOverdraft: 0,
+      settledAt: 'x',
+      entries: [],
+      videoMin: 60,
+      gameMin: 120,
+      config: DEFAULT_MONEY_CONFIG
+    })
+    const stats = selectMoneyStats(mkMoney([day]), TODAY)
+    expect(stats.quality).toEqual({ efficient: 0, normal: 0, inefficient: 0, missed: 0 })
+    // 但娱币余额确实被消费拉低了：settled 日读冻结快照 deltaLT
+    expect(stats.spentLT).toBe(-4)
+    expect(stats.remainingLT).toBeCloseTo(20 - 4)
+    // 消费也完全不影响时币
+    expect(stats.spentTC).toBe(0)
+  })
+
+  it('未结算的日：消费同样计入现算的 spentLT，且不碰 spentTC', () => {
+    // 面板在结算前先把两问写进日账本时，未结算的那天也必须立刻反映消费 ——
+    // selectMoneyStats 的未结算支路声明「按 settleDay 同一套算法现算」，就得含这一项。
+    const wed: LedgerDay = { ...unsettledDay('2026-09-30', []), videoMin: 60, gameMin: 120 }
+    const stats = selectMoneyStats(mkMoney([wed]), TODAY)
+    expect(stats.spentLT).toBe(-4)
+    expect(stats.spentTC).toBe(0)
+    expect(stats.daily[2].spentTC).toBe(0)
+  })
+
+  it('同一条消费，已结算与未结算给出同一个 spentLT（两个派生口径同口径）', () => {
+    const settled = selectMoneyStats(
+      mkMoney([
+        settleDay({
+          date: '2026-09-30',
+          entries: [],
+          previousOverdraft: 0,
+          settledAt: 'x',
+          videoMin: 60,
+          gameMin: 120,
+          config: DEFAULT_MONEY_CONFIG
+        })
+      ]),
+      TODAY
+    )
+    const unsettled = selectMoneyStats(
+      mkMoney([{ ...unsettledDay('2026-09-30', []), videoMin: 60, gameMin: 120 }]),
+      TODAY
+    )
+    expect(settled.spentLT).toBe(-4)
+    expect(unsettled.spentLT).toBe(-4)
+    expect(settled.spentLT).toBe(unsettled.spentLT)
   })
 
   it('结算快照独占自己的条目数组：调用方事后改动不会改写已冻结的账', () => {
@@ -671,6 +866,8 @@ function unsettledDay(date: string, entries: LedgerEntry[]): LedgerDay {
     date,
     settledAt: null,
     entries,
+    videoMin: 0,
+    gameMin: 0,
     dayLimit: 0,
     spentTC: 0,
     overdraft: 0,
@@ -1051,6 +1248,8 @@ describe('ensureLedgerDays', () => {
         date: '2026-09-29',
         settledAt: null,
         entries: [],
+        videoMin: 0,
+        gameMin: 0,
         dayLimit: 0,
         spentTC: 0,
         overdraft: 0,

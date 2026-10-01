@@ -88,6 +88,8 @@ const sampleDataWithMoney: AppData = {
             deltaLT: 0.5
           }
         ],
+        videoMin: 0,
+        gameMin: 0,
         dayLimit: 80,
         spentTC: 20,
         overdraft: 0,
@@ -325,6 +327,66 @@ describe('web platform API', () => {
     }
     const api = createWebPlatformApi(fakeStorage(JSON.stringify(data)))
     expect(await api.loadData()).toEqual(defaultData())
+  })
+
+  it('老记录缺 videoMin / gameMin 时账本不被丢弃（它们是后加的可选字段）', async () => {
+    // 加字段之前的载荷里没有这两个字段：判它非法会让第 2 档把用户整份账本丢掉。
+    const legacy = {
+      ...baseData,
+      goals: [validGoal],
+      money: {
+        enabled: true,
+        config: validMoneyConfig,
+        days: [
+          {
+            date: '2026-09-28',
+            settledAt: null,
+            entries: [],
+            dayLimit: 0,
+            spentTC: 0,
+            overdraft: 0,
+            deltaLT: 0,
+            nightPending: true
+          }
+        ],
+        weeks: []
+      }
+    }
+    const api = createWebPlatformApi(fakeStorage(JSON.stringify(legacy)))
+    const loaded = await api.loadData()
+    expect(loaded.money?.days).toHaveLength(1)
+    expect(loaded.goals).toHaveLength(1)
+  })
+
+  it('videoMin / gameMin 存在但不是有限数字时只丢账本（存在即须严格）', async () => {
+    for (const bad of ['x', null, {}] as unknown[]) {
+      const data = {
+        ...baseData,
+        goals: [validGoal],
+        money: {
+          enabled: true,
+          config: validMoneyConfig,
+          days: [
+            {
+              date: '2026-09-28',
+              settledAt: null,
+              entries: [],
+              videoMin: bad,
+              dayLimit: 0,
+              spentTC: 0,
+              overdraft: 0,
+              deltaLT: 0,
+              nightPending: true
+            }
+          ],
+          weeks: []
+        }
+      }
+      const api = createWebPlatformApi(fakeStorage(JSON.stringify(data)))
+      const loaded = await api.loadData()
+      expect(loaded.goals).toHaveLength(1)
+      expect(loaded.money).toBeUndefined()
+    }
   })
 
   it('完全合法的载荷（含 money）原样返回，不走降级分支', async () => {

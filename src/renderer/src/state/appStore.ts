@@ -867,6 +867,8 @@ export const useAppStore = create<AppState>((set, get) => ({
           date,
           settledAt: null,
           entries: [entry],
+          videoMin: 0,
+          gameMin: 0,
           dayLimit: 0,
           spentTC: 0,
           overdraft: 0,
@@ -912,6 +914,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     const recomputed = settleDay({
       date: previousDate,
       entries,
+      // 两条娱币纯消费是**日级**输入，重算整天时必须原样带过去：
+      // 漏传就等于把「那天刷视频 / 打游戏」的扣款从 deltaLT 里静默抹掉。
+      videoMin: day.videoMin,
+      gameMin: day.gameMin,
       previousOverdraft: carriedOverdraft(money, previousDate),
       settledAt: day.settledAt,
       config: money.config

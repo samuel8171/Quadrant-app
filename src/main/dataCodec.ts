@@ -174,6 +174,11 @@ function normalizeLedgerDay(raw: unknown): LedgerDay | null {
     date: raw.date,
     settledAt: raw.settledAt,
     entries,
+    // 两条纯消费是**逐字段有限回退**，缺失/非有限一律回退到 0，而**不是**整日丢帧：
+    // 它们是在本字段加入之前的老记录里合法缺席的，缺席只意味着「那天没记录消费」。
+    // 若照其他快照标量那样判空即 return null，桌面端会静默丢掉整个旧日账本。
+    videoMin: isFiniteNumber(raw.videoMin) ? raw.videoMin : 0,
+    gameMin: isFiniteNumber(raw.gameMin) ? raw.gameMin : 0,
     dayLimit: raw.dayLimit,
     spentTC: raw.spentTC,
     overdraft: raw.overdraft,

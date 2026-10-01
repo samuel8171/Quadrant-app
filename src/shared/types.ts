@@ -192,6 +192,16 @@ export interface LedgerDay {
   /** ISO 时刻；null = 未结算。 */
   settledAt: string | null
   entries: LedgerEntry[]
+  /**
+   * 当日「刷视频」分钟数——娱币的第一条**纯消费**来源。
+   *
+   * 在**结算时**当场问、**不预先计划**：它不进周计划，也**不产生任何时币消费**，
+   * 更不进 `quality` 四分类（那四类谈的是「计划 vs 实际的工作」，与消费无关）。
+   * **本字段加入之前**的旧记录没有它，一律按 `0`（「那天没刷」）处理。
+   */
+  videoMin: number
+  /** 当日「打游戏」分钟数——第二条纯消费来源，语义同上。 */
+  gameMin: number
   // —— 结算快照，settledAt 写入后不再变化 ——
   /** 当日实际可用额度。 */
   dayLimit: number
