@@ -1058,19 +1058,27 @@ Task 2–5、8、10 引用的字段名与之一致；`MoneyStats` 定义在 Task
 ### Task R2-B: 象限倍率接入计费 ［修正］
 
 **Files:**
-- Modify: `src/shared/money.ts`（`costOfEntry` 及其两个调用点）
+- Modify: `src/shared/money.ts`（`costOfEntry` 及其调用点）
+- Modify: `src/renderer/src/state/appStore.ts`、`src/renderer/src/components/money/SettlePanel.tsx`（见 Step 3）
 - Test: `tests/money.test.ts`
 
 **Interfaces:**
-- 改签名：`costOfEntry(input: { actualMin: number; nightMin: number; quadrant: Quadrant }, config: MoneyConfig): number`
+- 改签名：`costOfEntry(input: { actualMin: number; nightMin: number; quadrant: Quadrant | null }, config: MoneyConfig): number`
+  （`null` = 中性 1.0，**必须与 `q2` 分成两个分支**）
 - 公式：`round(((dayMin + nightMin × nightMultiplier) / 60 × tcPerHour) × quadrantMultiplier[`q${quadrant}`])`
 
 - [ ] Step 1: 写失败测试 —— 同样 120 分钟 0 深夜，Q1 得 30（20×1.5）、Q3 得 24（20×1.2）、
       Q2 得 20（20×1.0）、Q4 得 10（20×0.5）；
       并加一条「深夜 + Q1 相乘」的用例（120 分钟全深夜、Q1 ⇒ `round((120×1.5/60×10)×1.5)` = 45）
 - [ ] Step 2: 跑测试确认失败
-- [ ] Step 3: 实现并把 `settleDay` 与 `selectMoneyStats` 的未结算日推导两处调用点一并改掉
-      （**漏改任一处就会出现两套口径**，这正是 T4/T5 两轮返工的成因）
+- [ ] Step 3: 实现并把**全部 5 个调用点**一并改掉
+      （**漏改任一处就会出现两套口径**，这正是 T4/T5 两轮返工的成因）：
+      `money.ts` 的 `settleDay` 与 `selectMoneyStats`（两个 shared 派生口径）、
+      `appStore.ts` 的 `carriedOverdraft` 与 `buildNightEntry`、`SettlePanel.tsx` 的 `rowCost`。
+      ⚠️ **不可把 `quadrant` 设成可选参数来回避改调用点** —— 那样漏改的点会静默编译通过，
+      并在渲染层算出「同一个事件的第二个价格」，正是本任务要消灭的缺陷。
+      （R2-B 实测：设为必填后 `tsc -p tsconfig.web.json` 直接报错，强制暴露全部调用点。）
+      ⚠️ **计划原文误写为「恰好两个调用点」，实测为 5 个** —— 这是 R2-B 复审独立核实的结果。
 - [ ] Step 4: 跑测试确认通过
 - [ ] Step 5: 提交
 
