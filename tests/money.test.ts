@@ -1034,6 +1034,45 @@ describe('settleDay · 深夜刷手机的次日连带扣款', () => {
     expect(rerun.deltaLT).toBe(original.deltaLT)
   })
 
+  it('Rider A：重跑**漏传** latePhone 会把答案重置成 false，次日那笔扣款随之永久丢失', () => {
+    // 固定住 appStore.confirmNight 所依赖的那条契约：`latePhone: day.latePhone === true`
+    // 这个透传是**承重**的，不是可有可无的装饰 —— 它决定的是**次日**那笔扣款。
+    // 这里只在纯函数层复刻「透传」与「漏传」两种重跑，不去搭 appStore 的测试台。
+    const first = settleDay({
+      date: '2026-09-28',
+      previousOverdraft: 0,
+      settledAt: 'x',
+      entries: [],
+      latePhone: true,
+      config: LATE_CONFIG
+    })
+    expect(first.latePhone).toBe(true)
+    expect(previousLatePhone([first], '2026-09-29')).toBe(true)
+
+    // 漏传（= confirmNight 不透传时的样子）：答案被静默重置，次日的连累消失
+    const dropped = settleDay({
+      date: first.date,
+      previousOverdraft: 0,
+      settledAt: first.settledAt ?? 'x',
+      entries: first.entries,
+      config: LATE_CONFIG
+    })
+    expect(dropped.latePhone).toBe(false)
+    expect(previousLatePhone([dropped], '2026-09-29')).toBe(false)
+
+    // 透传（= confirmNight 的实际做法）：答案保住，次日仍会被扣
+    const kept = settleDay({
+      date: first.date,
+      previousOverdraft: 0,
+      settledAt: first.settledAt ?? 'x',
+      entries: first.entries,
+      latePhone: first.latePhone,
+      config: LATE_CONFIG
+    })
+    expect(kept.latePhone).toBe(true)
+    expect(previousLatePhone([kept], '2026-09-29')).toBe(true)
+  })
+
   it('selectMoneyStats 未结算日同样叠加连带扣款：结算前与结算后同一个价', () => {
     const prev = settleDay({
       date: '2026-09-29',
@@ -1839,6 +1878,46 @@ describe('abandonExpiredDays', () => {
     expect(next.enabled).toBe(true)
     expect(next.config).toBe(DEFAULT_MONEY_CONFIG)
     expect(next.weeks).toEqual([])
+  })
+
+  it('放弃日也要承担昨夜的连带扣款：spentTC = abandonedDayTC + latePhoneTC、deltaLT 再减 latePhoneLT', () => {
+    // 与休息日同一条裁定：一天不能靠「不结算」躲掉昨夜的账（spec R2 §6）。
+    // 用 LATE_CONFIG 标定，断言全部由它派生，不写死 40 / 2。
+    const prev = settleDay({
+      date: '2026-09-21',
+      previousOverdraft: 0,
+      settledAt: 'x',
+      entries: [],
+      latePhone: true,
+      config: LATE_CONFIG
+    })
+    const expired = unsettledDay('2026-09-22', [])
+    const next = abandonExpiredDays(moneyWithConfig([prev, expired], LATE_CONFIG), R2D_TODAY)
+    const day = next.days.find((d) => d.date === '2026-09-22')
+
+    expect(day?.spentTC).toBe(LATE_CONFIG.abandonedDayTC + LATE_CONFIG.latePhoneTC)
+    expect(day?.deltaLT).toBe(-LATE_CONFIG.latePhoneLT)
+    // 放弃日**自己**不记答案：那一问从没对这一天问过，替用户作答就是凭空发明数据。
+    // 后果是它不会连累它的次日 —— 这是这一问「没问」的固有性质，不是漏扣。
+    expect(day?.latePhone).toBe(false)
+  })
+
+  it('对照：前一日答「无」⇒ 放弃日仍只有 abandonedDayTC，deltaLT 逐字不变', () => {
+    const prev = settleDay({
+      date: '2026-09-21',
+      previousOverdraft: 0,
+      settledAt: 'x',
+      entries: [],
+      previousLatePhone: false,
+      config: LATE_CONFIG
+    })
+    // deltaLT 故意给一个非零哨兵：证明「不扣娱币」这条仍然成立，而不是被清零
+    const expired: LedgerDay = { ...unsettledDay('2026-09-22', []), deltaLT: -3 }
+    const next = abandonExpiredDays(moneyWithConfig([prev, expired], LATE_CONFIG), R2D_TODAY)
+    const day = next.days.find((d) => d.date === '2026-09-22')
+
+    expect(day?.spentTC).toBe(LATE_CONFIG.abandonedDayTC)
+    expect(day?.deltaLT).toBe(-3)
   })
 
   it('窗口边界：今天 − 7 不放弃、今天 − 8 放弃', () => {

@@ -601,7 +601,18 @@ export function ensureLedgerDays(money: MoneyState, today: string): MoneyState {
  * 按 `config.abandonedDayTC` **全额**落账（默认 80 = 日上限全额），并冻结为已结算。
  *
  * 用户的规则：日结范围为往前推 7 天，超过范围视为放弃日结，未结算的金钱按照时币当日全扣、娱币不扣。
- * 所以这里只改 `spentTC`（→ 满额），**不动** `deltaLT`（娱币不扣，且条目层面的娱币判定也不再重算）。
+ * 所以这里把 `spentTC` 覆写成满额，**不重算条目层面的娱币判定**（那部分无从谈起：这一天从没结算过）。
+ *
+ * ⚠️ **但昨夜的连带扣款要一并收走**（spec R2 §6，与休息日同一条裁定）：放弃日若紧跟在
+ * 一个 `latePhone === true` 的日子后面，它的 `spentTC` 是 `abandonedDayTC + latePhoneTC`、
+ * `deltaLT` 再减 `latePhoneLT`。理由与休息日逐字相同 —— 那笔账记的是**昨夜做了什么**，
+ * 一天不能靠「拒绝结算」把它抹掉。少了这一支，「刷完手机第二天直接拖过 7 天」就成了与
+ * 「刷完手机第二天申报休息」等价的逃生通道，而后者正是裁定 ① 点名要堵的。
+ * 扣款由实现里的 `previousLatePhone(money.days, day.date)` 读出，**不另写一套查找**。
+ *
+ * **放弃日自己的 `latePhone` 恒为 `false`**（显式写入，见实现处）：那一问从没对这一天问过，
+ * 替用户作答就是凭空发明数据。后果是放弃日**不会**连累它的次日 —— 这是「没问过」的固有
+ * 性质，不是漏扣；将来的读者不要把它当成疏忽去「修」。
  *
  * **放弃只作用于「已经存在的记录」，不补、也不罚「不在场」。** 这是刻意的裁定，不是漏洞：
  * - `ensureLedgerDays` 只物化最近 7 天，一个离开一个月的用户对那几周**没有任何记录**，
@@ -614,11 +625,13 @@ export function ensureLedgerDays(money: MoneyState, today: string): MoneyState {
  * 落成 `spentTC === 0`；后者落成 `spentTC === abandonedDayTC`。数字已经把它俩分开了，
  * 所以**不新增** `LedgerDay` 字段来标记放弃（新标量要动 5 个同步点、多一轮校验，且暂无消费者）。
  *
- * **三个被写死的字段**（其余全部原样保留）：
- * - `spentTC` → `config.abandonedDayTC`（满额）；
+ * **四个被改写的字段**（其余全部原样保留）：
+ * - `spentTC` → `config.abandonedDayTC`（满额）**加上**前夜偶然带来的 `config.latePhoneTC`（见下）；
  * - `settledAt` → **到期日**，即这个日子最后一次还在窗口内的那一天（`date + LEDGER_WINDOW_DAYS`），
  *   而不是执行时刻 —— 本函数是纯的、不读时钟，只有由 `date` 推出的到期日是可复现的。
  *   注意它写的是**日期键** `YYYY-MM-DD`，不是 `commitDaySettlement` 那种 ISO 时刻，见实现处注释；
+ * - `deltaLT` → 在原值基础上**再减**前夜偶然带来的 `config.latePhoneLT`（`deltaLT` 本身不重算，
+ *   所以「不扣娱币」这条仍然成立：没被连累的日子逐字不变）；
  * - `nightPending` → `false`。这一步**必需**，见下。
  *
  * 其余快照字段（`dayLimit` / `overdraft` / `entries` / `videoMin` / `gameMin`）**原样保留**，不是疏忽：
@@ -640,20 +653,28 @@ export function abandonExpiredDays(money: MoneyState, today: string): MoneyState
   const expired = money.days.some((day) => day.settledAt === null && day.date < windowStart)
   if (!expired) return money
 
-  const days = money.days.map((day) =>
-    day.settledAt === null && day.date < windowStart
-      ? {
-          ...day,
-          // `settledAt` 写的是**日期键**（`YYYY-MM-DD`），不是 `commitDaySettlement` 那种 ISO 时刻。
-          // 本函数是纯的、不读时钟，只有由 `date` 推出的到期日可复现；现有消费者只判 null / 非 null，
-          // 所以格式差异暂无功能影响。将来若有人按 ISO 解析它，必须先改这里 ——
-          // 而改它就意味着放弃「纯函数不读时钟」这条性质，要一并重新设计。
-          settledAt: dateKey(addDays(parseDateKey(day.date), LEDGER_WINDOW_DAYS)),
-          spentTC: money.config.abandonedDayTC,
-          nightPending: false
-        }
-      : day
-  )
+  const days = money.days.map((day) => {
+    if (day.settledAt !== null || day.date >= windowStart) return day
+    // 昨夜的连带扣款：一天不能靠「拒绝结算」把它抹掉（见函数头注释）。
+    // 用与 settleDay / selectMoneyStats 同一个 `previousLatePhone(...)` 读，不另写一套查找；
+    // 同样以 `=== true` 消费（Rider B：三个消费点判定口径一致）。
+    const carried = previousLatePhone(money.days, day.date) === true
+    return {
+      ...day,
+      // `settledAt` 写的是**日期键**（`YYYY-MM-DD`），不是 `commitDaySettlement` 那种 ISO 时刻。
+      // 本函数是纯的、不读时钟，只有由 `date` 推出的到期日可复现；现有消费者只判 null / 非 null，
+      // 所以格式差异暂无功能影响。将来若有人按 ISO 解析它，必须先改这里 ——
+      // 而改它就意味着放弃「纯函数不读时钟」这条性质，要一并重新设计。
+      settledAt: dateKey(addDays(parseDateKey(day.date), LEDGER_WINDOW_DAYS)),
+      spentTC: money.config.abandonedDayTC + (carried ? money.config.latePhoneTC : 0),
+      // 娱币仍然「不重算」：只在原值上叠加那笔连带扣款，没被连累的日子逐字不变。
+      deltaLT: carried ? day.deltaLT - money.config.latePhoneLT : day.deltaLT,
+      // 显式写 false，而不是靠 `...day` 恰好是 false：那一问从没对这一天问过，
+      // 替用户作答就是凭空发明数据。因此放弃日不会连累它的次日 —— 固有性质，不是漏扣。
+      latePhone: false,
+      nightPending: false
+    }
+  })
   return { ...money, days }
 }
 
@@ -898,7 +919,9 @@ export function selectMoneyStats(money: MoneyState, today: string): MoneyStats {
         // 是跨日输入而不是本日字段，所以走 `previousLatePhone` 这个同一真源查账本。
         // 已结算的日走上面那条冻结快照支路（快照里已含扣款），不许在这里重复叠加 ——
         // 否则「结算前」比「结算后」多扣一笔。
-        if (previousLatePhone(money.days, date)) {
+        // 判定写成 `=== true`：与本函数之外的消费点（settleDay 的入参、abandonExpiredDays）
+        // 逐字一致，免得一个真值非布尔被一条路径扣、另一条不扣。
+        if (previousLatePhone(money.days, date) === true) {
           daySpent += money.config.latePhoneTC
           dayDelta -= money.config.latePhoneLT
         }
