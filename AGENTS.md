@@ -140,9 +140,23 @@ node scripts/verify-integrity.mjs --appdata <dir>  # 覆盖数据目录（默认
 | 类型检查 | 可选，需 `--typecheck` |
 
 - **退出码**：有 FAIL → 1；`--strict` 下 WARN 也算失败，可直接接进 CI。
-- ⚠️ **维护点**：第 4 组的 `validAppData` 是 `platformApi.ts:47-68` 的忠实复刻（含
-  `isRecord` / `hasStringFields` 的精确语义），属"第 4 处"字段副本。**新增事件字段时，
-  必须与 `shared/types.ts`、`main/dataCodec.normalizeEvent`、`renderer/lib/platformApi.validAppData` 一并改。**
+- ⚠️ **维护点（2026-10-02 按实测订正）**：本项目的持久化字段有**多处副本**，漏改一处是**静默故障**。
+  - 第 4 组的 `validAppData` 是 `renderer/lib/platformApi.ts` 的 `validAppData` 的忠实复刻
+    （含 `isRecord` / `hasStringFields` 的精确语义）。
+  - ⭐ **但那份复刻不是「两份」**：脚本里 `validLedgerDay` / `validMoney` 等**各只有一份**，
+    被 `validAppData` 与 `firstViolation` **两条路径引用** —— 改一处即覆盖两条。脚本里真正成对的是
+    **外层**那两个函数。**别再去找「第二份」子校验器。**
+  - **完整同步清单是这 5 个文件**（早期文档只写了 3 个，漏了后两个）：
+    ① `shared/types.ts`；
+    ② `main/dataCodec.ts` 的 `normalizeXxx`（逐字段重建，**最容易漏**）；
+    ③ `renderer/lib/platformApi.ts` 的 `validAppData` 与各 `validXxx`；
+    ④ `shared/defaults.ts` 的 `isEmptyData` 判据；
+    ⑤ `scripts/verify-integrity.mjs` 第 4 组的两处外层复刻。
+  - `renderer/lib/cloudValidation.ts` 的 `validCloudData` **不需要改**：它只校验 `version === 2`
+    与四个数组，是**刻意宽松**的（文件头注释说明目的是形状容错、并切断与 `cloudSync2.ts` 的模块耦合）。
+- ⚠️ **`money` 子字段的额外风险**：网页端校验器拒绝畸形的 `money` 时，`loadData` 走**三档降级** ——
+  合法则原样返回；「除 `money` 外合法」则**只丢账本、保留目标与事件**；否则才回退 `defaultData()`。
+  **写 `money` 必须写完整的 `MoneyState`（四个顶层字段 + `config` 全键）**，否则用户整个账本被丢掉。
 - 自检方式：`--appdata` 指向临时目录，造一份不合规数据应报 FAIL 并指出具体实体下标
   （已验证：合规数据 25 通过 / 1 警告 / 0 失败；不合规数据 → FAIL + 退出码 1）。
 
