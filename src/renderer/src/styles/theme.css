@@ -135,7 +135,23 @@ body {
    纯网页端没有这两个按钮，此时寄语自己撑到底部（否则它会浮在导航下方）。 */
 .upload-button,
 .login-button { margin-top: auto; }
-.sync-button { margin-top: 0; }
+/*
+ * 两个手动同步按钮（上传 / 恢复）在语义上是**一组**动作，它们之间的间距不该沿用
+ * 侧栏的分区间距（--sidebar-gap，宽屏 24px / 中屏 18px）—— 那样两个按钮会被读成
+ * 两个互不相干的条目。取 8px：比上方五个导航项自身的 6px 略大一档，使这一对仍
+ * 自成一个小簇、不至于并进导航；又远小于与下方寄语之间的 30px 固定间距。于是
+ * 纵向节奏是「导航 6 / 按钮对 8 / 寄语 30」，同类相吸、异类相隔。
+ *
+ * 父容器已经按 --sidebar-gap 贡献了一个 gap，这里用负 margin 把差额补回去，
+ * 净间距恰好 = 8px，无需求改 --sidebar-gap（那会连带改掉品牌/导航/寄语的落位）。
+ *
+ * 只限定在 ≥768px 的桌面侧栏：窄屏（≤767px）下 .sync-button 是绝对定位的悬浮
+ * 入口（见文件末尾的移动端媒体查询），此时 margin-top 会直接挪动它的 top，
+ * 必须排除在外。
+ */
+@media (min-width: 768px) {
+  .sync-button { margin-top: calc(8px - var(--sidebar-gap, 24px)); }
+}
 .tagline { margin-top: auto; }
 .sidebar:has(.upload-button) .tagline,
 .sidebar:has(.login-button) .tagline {
