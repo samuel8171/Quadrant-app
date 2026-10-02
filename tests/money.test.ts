@@ -2812,11 +2812,16 @@ describe('composeReviewText / latestSettledWeek（复盘汇入的唯一调用点
     const out = composeReviewText('今天还行', overWeek)
     expect(out.startsWith('今天还行')).toBe(true)
     expect(out).toContain('420')
-    expect(out).toContain('超支')
+    // 必须是超支路径独有、且带真实超支额的串。「未超支」也含「超支」二字，断言裸
+    // 「超支」会在实现从不进入超支分支时仍然通过；只写「超支 28」也不够 —— 这份夹具的
+    // `notes` 里同样含「超支 28」。只有摘要行才有的「超支 28 币，惩罚档位 2」才真正隔离该分支。
+    expect(out).toContain('超支 28 币，惩罚档位 2')
     // 覆盖 spec §8 要求展示的全部字段，逐个数字都来自夹具本身
     expect(out).toContain('392')
     expect(out).toContain('720')
-    expect(out).toContain('2') // doneCount 8 / missCount 2，两个都在
+    // 必须是完成/未完成的完整短语：420/392/720/28 都含字符「2」，
+    // 裸「2」无法区分正确实现与数错了的实现。
+    expect(out).toContain('完成 8 件，没做 2 件')
     expect(out).toContain('90')
     expect(out).toContain('45')
     expect(out).toContain(overWeek.notes[0])
