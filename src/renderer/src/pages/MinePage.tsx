@@ -107,9 +107,11 @@ export default function MinePage(): JSX.Element {
             </button>
           </div>
           {/*
-            外观入口。它在两个版式档位都出现，**刻意不加 desktop-only**：
-            手机档的底部 dock 是五等分栅格，原先把「外观」藏在手机档是为了不撑爆那五格
-            （见 Sidebar 旧注释）。现在它进了设置组、不再占 dock 的格子，那条约束就不存在了。
+            外观入口。它在两个版式档位都出现，**刻意不加 desktop-only**。
+            原因：手机档的底部 dock 是**五等分** grid（五格正好被五个页面占满），
+            第六个入口会掉到第二行、撑破 66px 高的 dock —— 这正是原设计把「外观」
+            从手机档整条藏起来的理由。现在这个入口住在「我的」的设置组里、不占 dock
+            的格子，那条约束不再成立，所以两档位都显示。
             整行做成 button 而不是行尾放一个小控件 —— 行高 52px 是天然的触摸目标。
           */}
           <button
@@ -118,7 +120,13 @@ export default function MinePage(): JSX.Element {
             onClick={() => setAppearanceOpen(true)}
           >
             <span className="mine-row-label">外观</span>
-            <span className="mine-row-value">液态玻璃 ›</span>
+            {/*
+              末尾的箭头只是"这一行可点"的视觉提示，用 aria-hidden 挡在无障碍名之外，
+              免得读屏把它一并念出来（按钮名只保留可见文本「外观 液态玻璃」）。
+            */}
+            <span className="mine-row-value">
+              液态玻璃 <span aria-hidden="true">›</span>
+            </span>
           </button>
         </div>
       </section>
