@@ -894,14 +894,19 @@ Expected: 全部 PASS —— 后者全绿正是「导出链未被改动」的证
 # 逐文件跑，不要合并成多路径（会触发沙箱 EPERM）
 for f in tests/*.test.ts; do ./node_modules/.bin/vitest run "$f" || echo "FAILED: $f"; done
 ```
-Expected: 全绿，且总数 = 基线 204 + 本次新增
+Expected: 全绿。**基线请现场取，不要用历史数字** —— 执行本任务前逐文件合计应为
+`money 170 / dataCodec 28 / platformApi 25 / syncMeta 18 / gestures 27 / weekRules 20` 等，
+总数以你实际跑出来的为准（早期版本写的「基线 204」是第一轮开工前的数字，早已过时）。
 
 - [ ] **Step 10: 提交**
 
 ```bash
-git add src/renderer/src/components/money/WeekLedger.tsx src/renderer/src/pages/ReviewPage.tsx src/main/reviewDoc.ts src/renderer/src/lib/platformApi.ts src/shared/money.ts tests/
+git add src/renderer/src/components/money/WeekLedger.tsx src/renderer/src/pages/ReviewPage.tsx src/shared/money.ts tests/
 git commit -m "feat(money): add week ledger block and byte-identical export when disabled"
 ```
+
+> ⚠️ **注意**：上面**不含** `src/main/reviewDoc.ts` 与 `src/renderer/src/lib/platformApi.ts` ——
+> Step 6 已明确禁止改这两个文件。早期版本的计划把它们列进 `git add` 是 R4 裁定之前的残留。
 
 ---
 
