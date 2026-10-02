@@ -1,10 +1,9 @@
 import { useEffect, useState } from 'react'
-import { CalendarDays, Cloud, CloudUpload, Grid2x2, Palette, RefreshCcw, Target, User } from 'lucide-react'
+import { CalendarDays, Cloud, CloudUpload, Grid2x2, RefreshCcw, Target, User } from 'lucide-react'
 import type { Page } from '../state/appStore'
 import { useAppStore } from '../state/appStore'
 import ConfirmDialog from './ConfirmDialog'
 import CloudLoginDialog from './CloudLoginDialog'
-import GlassSettingsDialog from './GlassSettingsDialog'
 import GlassSurface from './glass/GlassSurface'
 import type { SyncAction } from '../lib/syncSummary'
 import { hasCloudSession, supabase } from '../lib/cloudSync2'
@@ -34,7 +33,6 @@ export default function Sidebar(): JSX.Element {
   const [busy, setBusy] = useState(false)
   const [confirm, setConfirm] = useState<PendingConfirm | null>(null)
   const [loginOpen, setLoginOpen] = useState(false)
-  const [appearanceOpen, setAppearanceOpen] = useState(false)
   const [pendingAction, setPendingAction] = useState<SyncAction | null>(null)
   const [hasSession, setHasSession] = useState(false)
   const isDesktop = Boolean((window as any).quadrantApi)
@@ -146,25 +144,6 @@ export default function Sidebar(): JSX.Element {
             <span>{label}</span>
           </button>
         ))}
-        {/*
-         * 外观设置入口。**手机档整条隐藏**（desktop-only）：竖屏的底部 dock 是
-         * 五等分的 grid，五格已经被五个页面占满，再挤一个入口就会掉到第二行、
-         * 溢出 66px 高的 dock。外观设置本身也需要宽屏才能预览，竖屏给不了。
-         *
-         * 判据跟着**版式档位**而不是设备：本项目唯一的断点按宽度（767px），
-         * 手机横屏超过它、拿到的是桌面版式，入口自然就回来了 —— 所以这里
-         * 既不需要 orientation 媒体查询，也不需要 matchMedia。
-         *
-         * 它不参与 --nav-index（那不是页面项），因此永远不显示激活态。
-         */}
-        <button
-          className="nav-item appearance-button desktop-only"
-          onClick={() => setAppearanceOpen(true)}
-          title="外观设置"
-        >
-          <Palette size={18} />
-          <span>外观</span>
-        </button>
       </nav>
       {isDesktop && (
         <>
@@ -212,7 +191,6 @@ export default function Sidebar(): JSX.Element {
         />
       )}
       {loginOpen && <CloudLoginDialog onCancel={() => { setLoginOpen(false); setPendingAction(null) }} onLoggedIn={handleLoggedIn} />}
-      {appearanceOpen && <GlassSettingsDialog onClose={() => setAppearanceOpen(false)} />}
     </aside>
   )
 }

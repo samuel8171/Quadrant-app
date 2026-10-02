@@ -2878,6 +2878,36 @@ body {
 }
 
 /*
+ * 可点击的整行入口（「外观」）。
+ *
+ * 复用 .mine-row 的排布，只补三件事：抹掉 button 的默认外观、给整行一个
+ * 52px 的触摸目标（min-height 来自 .mine-row）、悬停给一点反馈。
+ * 它**不玻璃化** —— 材质只属于弹窗，行本身是实色卡片的一部分。
+ *
+ * 圆角是为了让悬停底色收进卡片（--radius-lg）的圆角里：这张卡片里它正好是最后一行，
+ * 方角会在卡片两个下角戳出小方块。减 1px 是卡片自身的 1px 描边。
+ */
+.mine-row-action {
+  width: 100%;
+  margin: 0;
+  background: transparent;
+  border: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  border-radius: 0 0 calc(var(--radius-lg) - 1px) calc(var(--radius-lg) - 1px);
+}
+
+.mine-row-action:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+/* 同一卡片内的第二行起画分隔线；首行不画，免得贴着卡片顶边多出一条。 */
+.mine-card > .mine-row + .mine-row {
+  border-top: 1px solid var(--border);
+}
+
+/*
  * 开关：button[role=switch]，轨道 + 滑块。
  * 46 × 26 是轨道尺寸，滑块 18px、四周各留 3px（46 − 2×1 边框 − 2×3 − 18 = 20，
  * 正是位移量），所以开态的 translateX 必须与这几个数字同改。
@@ -4091,7 +4121,7 @@ body {
   .nav {
     height: 100%;
     display: grid;
-    /* 五列：五个页面（外观入口在手机档隐藏）。见 Sidebar.tsx 的说明 */
+    /* 五列：五个页面项。外观入口已移入「我的」的设置组，不再占这里的格子。 */
     grid-template-columns: repeat(5, minmax(0, 1fr));
     gap: 2px;
   }

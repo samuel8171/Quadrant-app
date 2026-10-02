@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { dateKey } from '../../../shared/dateKey'
 import { selectMoneyStats } from '../../../shared/money'
+import GlassSettingsDialog from '../components/GlassSettingsDialog'
 import BalanceWidget from '../components/mine/BalanceWidget'
 import LeisureTrendWidget from '../components/mine/LeisureTrendWidget'
 import NightWidget from '../components/mine/NightWidget'
@@ -21,6 +22,7 @@ export default function MinePage(): JSX.Element {
   const moneyEnabled = useAppStore((s) => s.data.money?.enabled === true)
   const setMoneyEnabled = useAppStore((s) => s.setMoneyEnabled)
   const [notice, setNotice] = useState<string | null>(null)
+  const [appearanceOpen, setAppearanceOpen] = useState(false)
 
   /*
    * `today` 每次渲染都现算（与 `SettlePanel` 取法一致），并进 `useMemo` 的依赖。
@@ -104,6 +106,20 @@ export default function MinePage(): JSX.Element {
               <span className="mine-switch-knob" />
             </button>
           </div>
+          {/*
+            外观入口。它在两个版式档位都出现，**刻意不加 desktop-only**：
+            手机档的底部 dock 是五等分栅格，原先把「外观」藏在手机档是为了不撑爆那五格
+            （见 Sidebar 旧注释）。现在它进了设置组、不再占 dock 的格子，那条约束就不存在了。
+            整行做成 button 而不是行尾放一个小控件 —— 行高 52px 是天然的触摸目标。
+          */}
+          <button
+            type="button"
+            className="mine-row mine-row-action"
+            onClick={() => setAppearanceOpen(true)}
+          >
+            <span className="mine-row-label">外观</span>
+            <span className="mine-row-value">液态玻璃 ›</span>
+          </button>
         </div>
       </section>
 
@@ -120,6 +136,15 @@ export default function MinePage(): JSX.Element {
       </section>
 
       {notice && <div className="mine-toast">{notice}</div>}
+
+      {/*
+        外观对话框就挂在本页。不把它上提到共同祖先（App）的理由：
+        · 唯一的入口在本页，状态留在唯一消费者旁边，不引入一份全局状态与 prop 传递；
+        · GlassModal 内部 createPortal 到 document.body，弹窗的 DOM 位置与布局无关，
+          因此挂在哪里都不会改变它的定位与层级 —— 上提没有任何收益。
+        关闭由 GlassSettingsDialog 自己走关闭动画后回调 onClose 清状态。
+      */}
+      {appearanceOpen && <GlassSettingsDialog onClose={() => setAppearanceOpen(false)} />}
     </div>
   )
 }
