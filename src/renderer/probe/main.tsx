@@ -6,13 +6,14 @@
  * 之后补发的兼容性 `mousedown` 会抢走刚打开输入框的焦点），靠读代码推断已多次得出错误结论。
  * 它不参与构建产物（Vite 默认只以 `index.html` 为入口），可在地址栏直接打开调试。
  *
- * 用法：/probe.html?page=quadrant|weekly|goals|review[&strict=0][&sidebar=1][&crash=1]
+ * 用法：/probe.html?page=quadrant|weekly|goals|review|mine[&strict=0][&sidebar=1][&crash=1]
  */
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import ErrorBoundary from '../src/components/ErrorBoundary'
 import Sidebar from '../src/components/Sidebar'
 import GoalsPage from '../src/pages/GoalsPage'
+import MinePage from '../src/pages/MinePage'
 import QuadrantPage from '../src/pages/QuadrantPage'
 import ReviewPage from '../src/pages/ReviewPage'
 import WeeklyPage from '../src/pages/WeeklyPage'
@@ -36,7 +37,8 @@ const PAGES: Record<Page, () => JSX.Element> = {
   goals: GoalsPage,
   quadrant: QuadrantPage,
   weekly: WeeklyPage,
-  review: ReviewPage
+  review: ReviewPage,
+  mine: MinePage
 }
 
 function Probe(): JSX.Element {
