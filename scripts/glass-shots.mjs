@@ -180,8 +180,10 @@ for (const { tag, viewport, mobile } of VIEWPORTS) {
     log.push(`${tag}: .preset-toggle 不可见，跳过抽屉展开`)
   }
 
-  // 外观设置面板
-  await page.click('.appearance-button')
+  // 外观设置面板（入口已迁到「我的」的设置组，R3-A：先切页再点行按钮）
+  await page.goto(`${base}?page=mine&sidebar=1&strict=0`, { waitUntil: 'load' })
+  await page.waitForSelector('.mine-page .mine-row-action', { timeout: 20000 })
+  await page.click('.mine-page .mine-row-action')
   await page.waitForSelector('.glass-settings', { timeout: 10000 })
   await page.waitForTimeout(600)
   await shoot(page, `${tag}-settings`)

@@ -206,7 +206,12 @@ const main = async () => {
   // 点击一律走 evaluate 而不是 `page.click()`：后者要做可操作性检查
   // （等元素稳定），而窗口被遮挡时渲染器的 rAF 会被节流，它会一直等到超时。
   // 截图同理用原生 CDP —— `page.screenshot()` 会卡在"等字体/等稳定帧"。
-  await click('.appearance-button')
+  //
+  // 外观入口已迁到「我的」的设置组（R3-A）：桌面端也从那里进 —— 先切到「我的」
+  // 页面，再点设置组里的整行按钮。旧的 `.appearance-button` 选择器已随之消失。
+  await clickByText('.nav-item', '我的')
+  await page.waitForSelector('.mine-page .mine-row-action', { timeout: 8000 })
+  await click('.mine-page .mine-row-action')
   await page.waitForSelector('.gs-layer--dialog .gs-panel, .gs-layer--dialog .gs-fallback', { timeout: 8000 })
   await page.waitForTimeout(1200)
 

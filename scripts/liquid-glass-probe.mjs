@@ -213,7 +213,7 @@ console.log(`  视口 ${m.viewport.w}×${m.viewport.h}｜玻璃实例 ${m.glassC
 
 // ② 导航项数量与触摸高度
 check(
-  '导航为 5 项（4 个页面 + 外观入口）',
+  '导航为 5 项（5 个页面；外观入口已不在导航里）',
   m.navItemCount === 5,
   `实际 ${m.navItemCount} 项，列宽模板 ${m.navColumns}`
 )
@@ -240,7 +240,11 @@ check(
 await page.screenshot({ path: `${outDir}/01-dock-mobile.png` })
 
 // ---- 打开外观设置面板
-await page.click('.appearance-button')
+// 外观入口已迁到「我的」的设置组（R3-A）：手机档现在也有入口（裁定：两档位都显示），
+// 只是不再占 dock 的格子，所以先切到该页、再点设置组里的整行按钮。
+await page.goto(`${base}?page=mine&sidebar=1&strict=0`, { waitUntil: 'load' })
+await page.waitForSelector('.mine-page .mine-row-action', { timeout: 20000 })
+await page.click('.mine-page .mine-row-action')
 await page.waitForSelector('.glass-settings', { timeout: 10000 })
 await page.waitForTimeout(500)
 
@@ -442,6 +446,15 @@ await page.evaluate(() => {
 await page.waitForSelector('.glass-settings', { state: 'detached', timeout: 5000 }).catch(() => {})
 await page.waitForTimeout(300)
 
+/*
+ * 外观入口现在住在「我的」页 —— 上面为开它切到了该页。下面「右键菜单几何」
+ * 需要**象限页**的 `.event-card`，所以这里切回象限页再继续
+ * （R3-A 迁移入口后，本场景能保证原步骤前置条件的最小改动）。
+ */
+await page.goto(`${base}?page=quadrant&sidebar=1&strict=0`, { waitUntil: 'load' })
+await page.waitForSelector('.event-card', { state: 'attached', timeout: 20000 })
+await page.waitForTimeout(400)
+
 // ---- 右键菜单几何
 let menuReport = null
 {
@@ -606,7 +619,10 @@ check('降级玻璃圆角来自设置（32px）', fb.radius === '32px', `${fb.ra
 }
 
 // 打开设置面板，确认 Chromium 专属项被置灰
-await fbPage.click('.appearance-button')
+// 外观入口已迁到「我的」的设置组（R3-A），先切页再点行按钮。
+await fbPage.goto(`${base}?page=mine&sidebar=1&strict=0`, { waitUntil: 'load' })
+await fbPage.waitForSelector('.mine-page .mine-row-action', { timeout: 20000 })
+await fbPage.click('.mine-page .mine-row-action')
 await fbPage.waitForSelector('.glass-settings', { timeout: 10000 })
 await fbPage.waitForTimeout(500)
 const fbModal = await fbPage.evaluate(() => ({
@@ -862,9 +878,9 @@ console.log('\n【场景五】视口盒必须盖满「应用盒」（iOS standal
     ([k, v]) => window.localStorage.setItem(k, v),
     [DATA_KEY, JSON.stringify(seedData())]
   )
-  await p5.goto(`${base}?page=quadrant&sidebar=1&strict=0`, { waitUntil: 'load' })
-  await p5.waitForSelector('.sidebar', { timeout: 20000 })
-  await p5.click('aside.sidebar button[title="外观设置"]')
+  await p5.goto(`${base}?page=mine&sidebar=1&strict=0`, { waitUntil: 'load' })
+  await p5.waitForSelector('.mine-page .mine-row-action', { timeout: 20000 })
+  await p5.click('.mine-page .mine-row-action')
   await p5.waitForSelector('.gs-layer--dialog .modal-mask', { timeout: 10000 })
   await p5.waitForTimeout(600)
 

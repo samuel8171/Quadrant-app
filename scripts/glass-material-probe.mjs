@@ -350,7 +350,11 @@ const browser = await chromium.launch({ executablePath, headless: true })
 /* ---------------- 五、设置面板（内含嵌套的折射预览条） ---------------- */
 {
   const { context, page } = await newPage({ width: 1280, height: 900 })
-  await page.locator('.nav-item.appearance-button').click()
+  // 外观入口已迁到「我的」的设置组（R3-A），旧的 `.appearance-button` 选择器已消失。
+  // 切到「我的」页，再点设置组里的整行按钮。
+  await page.goto(`${base}?page=mine&sidebar=1&strict=0`, { waitUntil: 'load' })
+  await page.waitForSelector('.mine-page .mine-row-action', { timeout: 20000 })
+  await page.locator('.mine-page .mine-row-action').click()
   await page.waitForSelector('.gs-layer--dialog .glass-settings', { timeout: 8000 })
   await page.waitForTimeout(520)
 
