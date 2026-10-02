@@ -7,6 +7,7 @@ import type {
   MoneyState,
   PenaltyTier,
   Quadrant,
+  QuadrantEvent,
   WeekSettlement
 } from './types'
 
@@ -164,6 +165,102 @@ export function leisureDelta(
   if (input.actualMin <= planned) return config.rewardLT
   if (input.actualMin > planned * 1.5) return -config.penaltyLT
   return 0
+}
+
+/**
+ * 象限事件「标记完成」的**实时计费预览**（spec 7.4 / 6.3「象限事件」）。
+ *
+ * 象限事件是全系统唯一能拿**当前时刻**当证据的场合：完成是实时的，没有计划开始时刻可借。
+ * 于是「深夜落在哪一段」由「完成时刻往回推 `actualMin`」得出，而不像周计划那样用
+ * 「计划开始时刻 + 实际时长」近似（spec 6.3 的两条判定分支）。
+ *
+ * `nowMin` 自 0 点起算，`startMin = nowMin − actualMin`。**这里会把 `startMin` 折回
+ * `[0, 1440)`**：完成时刻常在凌晨（例如 00:30 完成、做了 2 小时，实际开工在**昨天**
+ * 22:30），`nowMin − actualMin` 因此为负；而 `nightMinutesOf` 的契约是 `startMin ≥ 0`
+ * （它逐分钟对 1440 取模，负数取模在 JS 里仍是负数，会得出错误结果）。折回**是同一个
+ * 深夜规则的输入归一，不是第二套深夜规则** —— 深夜倍率与象限倍率的相乘仍只在
+ * `costOfEntry` 一处实现。气泡里的实时预览与账本落账都调用本函数，因此「气泡显示的数」
+ * 与「结算记下的数」必然相等（本任务要守的那条线）。
+ */
+export function quadrantCostOf(
+  input: { quadrant: Quadrant; actualMin: number; nowMin: number },
+  config: MoneyConfig
+): { nightMin: number; costTC: number } {
+  const startMin = (((input.nowMin - input.actualMin) % 1440) + 1440) % 1440
+  const nightMin = nightMinutesOf({ startMin, actualMin: input.actualMin }, config)
+  return {
+    nightMin,
+    costTC: costOfEntry(
+      { actualMin: input.actualMin, nightMin, quadrant: input.quadrant },
+      config
+    )
+  }
+}
+
+/**
+ * 象限事件「标记完成」产出的一条账本条目（spec 7.4 / 13.1 决策 2）。
+ *
+ * `kind: 'planned'`：象限卡片是用户**主动写下**的事项，不是事后补录的计划外事项。
+ * `sourceId` 指向事件 id，`title` / `quadrant` 是**快照** —— 事件被删后账本仍可读
+ * （spec 5 的设计要点）。
+ *
+ * **`plannedMin: null`**：`QuadrantEvent` 没有预估时长字段（spec 13.1 决策 2 明确不预填、
+ * 也不新增该字段 —— 加一个字段要牵动 5 个持久化同步点，为一个小交互不值）。没有预估就
+ * 没有可比基准，于是 `leisureDelta` 对这条恒返回 0：**完成一个象限事件不产生任何娱币
+ * 效果**。这是数据模型的推论，不是遗漏 —— 娱币那条线奖惩的是「实际 vs 计划」的偏差，
+ * 而象限事件不提供计划的另一半。
+ *
+ * `actualMin` 由用户在气泡里手填（换算自小时数）；`nowMin` 是完成时刻的分钟数。
+ * 深夜分钟数经 `quadrantCostOf` 得出，与气泡里的实时预览同源。
+ *
+ * `id` 由调用方生成，而不是在这里 `crypto.randomUUID()`：本函数保持纯的、可复现，
+ * 同一份输入永远得到同一份输出（也因此可直接单测）。
+ */
+export function quadrantEntryOf(
+  input: {
+    id: string
+    event: Pick<QuadrantEvent, 'id' | 'text' | 'quadrant'>
+    actualMin: number
+    nowMin: number
+  },
+  config: MoneyConfig
+): LedgerEntry {
+  const { nightMin, costTC } = quadrantCostOf(
+    { quadrant: input.event.quadrant, actualMin: input.actualMin, nowMin: input.nowMin },
+    config
+  )
+  return {
+    id: input.id,
+    kind: 'planned',
+    sourceId: input.event.id,
+    title: input.event.text,
+    quadrant: input.event.quadrant,
+    plannedMin: null,
+    actualMin: input.actualMin,
+    done: true,
+    nightMin,
+    costTC,
+    // plannedMin 为 null ⇒ leisureDelta 恒 0（见函数头注释：象限事件无娱币效果）。
+    deltaLT: leisureDelta(
+      { kind: 'planned', done: true, actualMin: input.actualMin, plannedMin: null },
+      config
+    )
+  }
+}
+
+/**
+ * `date` 这一天的账本里是否已经有 `sourceId` 的条目 —— 「同一张象限卡片一天只计一次费」
+ * 的判据（本任务的防重复计费裁定）。
+ *
+ * `QuadrantEvent` 上没有「已计费」标记，本任务也不许给它加字段（spec 7.4），于是「今天
+ * 是否已经为它记过账」只能由账本自己回答：查当天条目里有没有同一个 `sourceId`。纯查询，
+ * 调用方（store）据此拒绝重复写入，气泡据此提示用户。
+ *
+ * 判据**只看当天**：同一张卡片第二天再完成一次是合法的新一天，不该被永久锁死。
+ */
+export function isEventBilledOn(days: LedgerDay[], date: string, sourceId: string): boolean {
+  const day = days.find((d) => d.date === date)
+  return day?.entries.some((entry) => entry.sourceId === sourceId) ?? false
 }
 
 /**

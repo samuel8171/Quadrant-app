@@ -18,6 +18,7 @@ import {
   dayLimitOf,
   ensureLedgerDays,
   ensureWeekRollover,
+  isEventBilledOn,
   isFreeUnplannedSettlement,
   leisureDelta,
   nightMinutesOf,
@@ -25,6 +26,8 @@ import {
   penaltyTierOf,
   pendingDays,
   previousLatePhone,
+  quadrantCostOf,
+  quadrantEntryOf,
   restDayCost,
   selectMoneyStats,
   settleDay,
@@ -2626,5 +2629,122 @@ describe('setMoneyEnabled · enabledAt', () => {
     useAppStore.setState({ data: { ...defaultData(), money } })
     useAppStore.getState().setMoneyEnabled(true)
     expect(useAppStore.getState().data.money?.enabledAt).toBe('2026-09-28')
+  })
+})
+
+// ============================================================================
+// Task 9：象限事件「标记完成」的实时计费与账本条目
+// ============================================================================
+
+describe('quadrantCostOf（象限事件完成时的实时计费）', () => {
+  it('白天完成：深夜分钟数为 0，时币 = 时长 × 基准费率 × 象限倍率', () => {
+    // 14:00 完成、做了 2 小时 → 完全落在白天
+    expect(
+      quadrantCostOf({ quadrant: 2, actualMin: 120, nowMin: 840 }, DEFAULT_MONEY_CONFIG)
+    ).toEqual({ nightMin: 0, costTC: 20 })
+    expect(
+      quadrantCostOf({ quadrant: 1, actualMin: 120, nowMin: 840 }, DEFAULT_MONEY_CONFIG).costTC
+    ).toBe(30) // Q1 ×1.5
+    expect(
+      quadrantCostOf({ quadrant: 4, actualMin: 120, nowMin: 840 }, DEFAULT_MONEY_CONFIG).costTC
+    ).toBe(10) // Q4 ×0.5
+  })
+
+  it('整段落在深夜：全时长都乘深夜倍率，且与象限倍率相乘', () => {
+    // 02:00 完成、做了 2 小时 → 00:00–02:00 全在 [23:30, 06:00)
+    expect(
+      quadrantCostOf({ quadrant: 2, actualMin: 120, nowMin: 120 }, DEFAULT_MONEY_CONFIG)
+    ).toEqual({ nightMin: 120, costTC: 30 })
+    // Q1 再叠一层象限倍率：round(30 × 1.5) = 45（两个倍率相乘，不是二选一）
+    expect(
+      quadrantCostOf({ quadrant: 1, actualMin: 120, nowMin: 120 }, DEFAULT_MONEY_CONFIG).costTC
+    ).toBe(45)
+  })
+
+  it('完成时刻在凌晨、开工在昨天：startMin 为负也要折回同一个深夜规则', () => {
+    // 00:30 完成、做了 2 小时 → 实际开工在昨天 22:30；深夜只有 23:30–00:30 共 60 分钟。
+    // 若不做输入归一（直接把 nowMin − actualMin 交给 nightMinutesOf），负数取模会把
+    // 22:30 那段也误判成深夜，nightMin 变成 120、多收 5 币。
+    expect(
+      quadrantCostOf({ quadrant: 2, actualMin: 120, nowMin: 30 }, DEFAULT_MONEY_CONFIG)
+    ).toEqual({ nightMin: 60, costTC: 25 })
+  })
+
+  it('跨过 23:30 只对越界的那部分分钟数乘倍率', () => {
+    // 23:45 完成、做了 2 小时 → 21:45–23:45，深夜仅 23:30–23:45 = 15 分钟
+    expect(
+      quadrantCostOf({ quadrant: 2, actualMin: 120, nowMin: 1425 }, DEFAULT_MONEY_CONFIG)
+    ).toEqual({ nightMin: 15, costTC: 21 }) // (105 + 15×1.5)/60×10 = 21.25 → 21
+  })
+})
+
+describe('quadrantEntryOf（一条象限完成条目的形状）', () => {
+  const event = { id: 'ev-1', text: '写周报', quadrant: 3 as const }
+
+  it('kind=planned、sourceId 指向事件、title 是快照、plannedMin 为 null', () => {
+    const entry = quadrantEntryOf(
+      { id: 'led-1', event, actualMin: 120, nowMin: 840 },
+      DEFAULT_MONEY_CONFIG
+    )
+    expect(entry).toMatchObject({
+      id: 'led-1',
+      kind: 'planned',
+      sourceId: 'ev-1',
+      title: '写周报',
+      quadrant: 3,
+      plannedMin: null,
+      actualMin: 120,
+      done: true,
+      nightMin: 0,
+      costTC: 24 // Q3 ×1.2
+    })
+  })
+
+  it('没有计划基准 ⇒ deltaLT 为 0：完成象限事件不产生任何娱币效果', () => {
+    const entry = quadrantEntryOf(
+      { id: 'led-2', event, actualMin: 200, nowMin: 840 },
+      DEFAULT_MONEY_CONFIG
+    )
+    expect(entry.deltaLT).toBe(0)
+    expect(
+      leisureDelta(
+        {
+          kind: entry.kind,
+          done: entry.done,
+          actualMin: entry.actualMin,
+          plannedMin: entry.plannedMin
+        },
+        DEFAULT_MONEY_CONFIG
+      )
+    ).toBe(0)
+  })
+
+  it('条目上的 costTC 与该条目最终被结算出的花费一致（气泡预览 == 账本）', () => {
+    const entry = quadrantEntryOf(
+      { id: 'led-3', event, actualMin: 120, nowMin: 840 },
+      DEFAULT_MONEY_CONFIG
+    )
+    const day = settleDay({
+      date: '2026-09-30',
+      previousOverdraft: 0,
+      settledAt: 'x',
+      entries: [entry],
+      config: DEFAULT_MONEY_CONFIG
+    })
+    expect(day.spentTC).toBe(entry.costTC)
+  })
+})
+
+describe('isEventBilledOn（同一事件一天只计一次费的判据）', () => {
+  const billed = unsettledDay('2026-09-30', [mkEntry({ sourceId: 'ev-1' })])
+
+  it('当天已有同 sourceId 的条目 → true', () => {
+    expect(isEventBilledOn([billed], '2026-09-30', 'ev-1')).toBe(true)
+  })
+
+  it('换个事件 id、换一天、或没有该日记录 → false', () => {
+    expect(isEventBilledOn([billed], '2026-09-30', 'ev-2')).toBe(false)
+    expect(isEventBilledOn([billed], '2026-10-01', 'ev-1')).toBe(false)
+    expect(isEventBilledOn([], '2026-09-30', 'ev-1')).toBe(false)
   })
 })

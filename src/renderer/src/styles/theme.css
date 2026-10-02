@@ -4921,6 +4921,162 @@ body {
   }
 }
 
+/* ---------- 象限计费气泡（spec 7.4）---------- */
+
+/*
+ * 非模态内联气泡：挂在 .event-layer 内、事件卡片之上，随画布平移缩放一起走。
+ *
+ * **不做玻璃化**：它落在四象限页既有的玻璃宿主之内，按项目约束新增浮层不得再加材质；
+ * 何况本项目每新增一个材质宿主都要重走一整套「祖先链不得有合成面」的约束。
+ *
+ * translateY(calc(-100% - 8px)) 把气泡底边贴到卡片左上角之上，避免遮住卡片文字。
+ * pointer-events: auto 是硬要求：气泡必须自己接住指针，否则事件会穿透到下层画布、
+ * 被手势内核当成拖动或平移（JS 侧另有 stopPropagation，两道一起守）。
+ */
+.quadrant-cost-bubble {
+  position: absolute;
+  z-index: 6;
+  transform: translateY(calc(-100% - 8px));
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 232px;
+  padding: 12px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+  font-size: 13px;
+  color: var(--text);
+  pointer-events: auto;
+  touch-action: none;
+  cursor: default;
+}
+
+.qcb-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.qcb-label {
+  flex: none;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.qcb-toggle {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.qcb-opt {
+  padding: 4px 10px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.qcb-opt.active {
+  color: #fff;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.qcb-hours {
+  width: 84px;
+  margin-left: auto;
+  padding: 5px 8px;
+  font: inherit;
+  color: var(--text);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  text-align: right;
+}
+
+.qcb-hours:disabled {
+  opacity: 0.45;
+}
+
+.qcb-unit {
+  flex: none;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.qcb-preview {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.qcb-preview strong {
+  font-size: 14px;
+  color: var(--accent);
+}
+
+.qcb-night {
+  color: var(--money-trend-lt);
+}
+
+.qcb-warn {
+  margin: 0;
+  font-size: 12px;
+  color: var(--danger);
+}
+
+.qcb-hint {
+  color: var(--text-secondary);
+}
+
+.qcb-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.qcb-btn {
+  padding: 5px 14px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.qcb-btn--primary {
+  color: #fff;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.qcb-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+@media (max-width: 767px) {
+  /* 窄屏下可输入控件已被全局规则抬到 16px（防 iOS 聚焦缩放），气泡随之放宽以免挤爆。 */
+  .quadrant-cost-bubble {
+    width: 260px;
+    font-size: 14px;
+  }
+  .qcb-opt,
+  .qcb-btn,
+  .qcb-preview,
+  .qcb-warn {
+    font-size: 13px;
+  }
+}
+
 /*
  * PWA standalone（添加到主屏幕后全屏打开）的高度修正。
  *

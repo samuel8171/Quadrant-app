@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Quadrant, QuadrantEvent } from '../../../shared/types'
 import { MAX_EVENT_PHOTOS } from '../../../shared/types'
+import { DEFAULT_MONEY_CONFIG, isEventBilledOn } from '../../../shared/money'
+import { dateKey } from '../../../shared/dateKey'
 import ConfirmDialog from '../components/ConfirmDialog'
 import ContextMenu, { type ContextMenuState } from '../components/ContextMenu'
 import EventCard from '../components/EventCard'
 import EventDetailDialog from '../components/EventDetailDialog'
 import ImageViewer from '../components/ImageViewer'
+import QuadrantCostBubble from '../components/money/QuadrantCostBubble'
 import { previewMove } from '../lib/eventRules'
 import { compressPhoto } from '../lib/photoCompress'
 import { forgetPhotoUrl, newPhotoId, putPhoto, removePhoto } from '../lib/photoStore'
@@ -62,6 +65,10 @@ export default function QuadrantPage(): JSX.Element {
   const cutEvent = useAppStore((s) => s.cutEvent)
   const pasteEvent = useAppStore((s) => s.pasteEvent)
   const saveNow = useAppStore((s) => s.saveNow)
+  const completeQuadrantEvent = useAppStore((s) => s.completeQuadrantEvent)
+  const money = useAppStore((s) => s.data.money)
+  /** 金钱系统是否开启 —— 关闭时「标记完成」入口必须整个消失（spec §4.3）。 */
+  const moneyEnabled = money?.enabled === true
 
   const viewportRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -92,6 +99,8 @@ export default function QuadrantPage(): JSX.Element {
   const [detailId, setDetailId] = useState<string | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [deletePendingId, setDeletePendingId] = useState<string | null>(null)
+  /** 正在为哪个事件记一次用时（计费气泡的锚点）。null = 气泡不显示。 */
+  const [billingId, setBillingId] = useState<string | null>(null)
   const [dragPreview, setDragPreview] = useState<PreviewState | null>(null)
   const [tick, setTick] = useState(0)
   /** 已展开缩略图条的事件 id 集合（短按切换，可多个同时展开）。 */
@@ -864,6 +873,17 @@ export default function QuadrantPage(): JSX.Element {
 
   const detailEvent = detailId ? events.find((e) => e.id === detailId) : undefined
   const viewerEvent = viewer ? events.find((e) => e.id === viewer.eventId) : undefined
+  /*
+   * 计费气泡的时钟。象限事件完成是实时的，当前时刻是全系统唯一能实时判定深夜的场合
+   * （spec 6.3）。页面每 60s 由 `tick` 重渲染一次，这个值随之刷新；确认时把它**原样**
+   * 交给 store，于是「气泡预览」与「账本落账」读的是同一个数字。
+   */
+  const now = new Date()
+  const nowMin = now.getHours() * 60 + now.getMinutes()
+  const today = dateKey(now)
+  const billingEvent = billingId ? events.find((e) => e.id === billingId) : undefined
+  const billingAlreadyDone =
+    billingEvent && money ? isEventBilledOn(money.days, today, billingEvent.id) : false
   const overdue = (e: QuadrantEvent): boolean =>
     !!e.deadline && new Date(e.deadline).getTime() < Date.now()
 
@@ -946,6 +966,27 @@ export default function QuadrantPage(): JSX.Element {
               onBlur={() => setEditing(null)}
             />
           )}
+          {/*
+            计费气泡：非模态内联，挂在 event-layer 内、事件卡片之上（spec 7.4）。
+            只在金钱系统开启、且当前正为某事件记账时渲染。手势隔离由组件内部
+            的 stopPropagation + pointer-events: auto 负责（见组件头注释）。
+          */}
+          {moneyEnabled && billingEvent && (
+            <QuadrantCostBubble
+              event={billingEvent}
+              nowMin={nowMin}
+              config={money?.config ?? DEFAULT_MONEY_CONFIG}
+              alreadyBilled={billingAlreadyDone}
+              onConfirm={(answer) => {
+                const target = billingEvent
+                setBillingId(null)
+                // 「不计费」= 不写任何账（spec 7.4 的默认路径）。
+                if (!target || !answer.billable) return
+                completeQuadrantEvent(target, answer.actualMin, nowMin)
+              }}
+              onCancel={() => setBillingId(null)}
+            />
+          )}
         </div>
         {labelVisible && hoverQuadrant && (
           <div className={`quadrant-label q${hoverQuadrant}`}>
@@ -958,7 +999,13 @@ export default function QuadrantPage(): JSX.Element {
           menu={menu}
           canPaste={hasClipboardEvent()}
           canAddPhoto={canAddPhotoTo(menu.eventId)}
+          canComplete={moneyEnabled}
           onAction={(action) => {
+            if (action === 'complete' && menu.eventId) {
+              // 打开计费气泡（紧接着 close() 收起菜单），而不是直接落账 ——
+              // 落账要等用户在气泡里确认答案。
+              setBillingId(menu.eventId)
+            }
             if (action === 'cut') {
               cutEvent(menu.eventId!)
               if (selectedId === menu.eventId) setSelectedId(null)

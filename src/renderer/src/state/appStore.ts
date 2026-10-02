@@ -21,10 +21,12 @@ import {
   dayLimitOf,
   ensureLedgerDays,
   ensureWeekRollover,
+  isEventBilledOn,
   isFreeUnplannedSettlement,
   leisureDelta,
   nightMinutesOf,
   previousLatePhone,
+  quadrantEntryOf,
   settleDay
 } from '../../../shared/money'
 import * as eventRules from '../lib/eventRules'
@@ -167,6 +169,14 @@ interface AppState {
   markRestDay: (date: string, answers: DayAnswers) => void
   /** 把一条计划外条目追加进 `date`（未结算）的账本。 */
   addUnplannedEntry: (date: string, entry: LedgerEntry) => void
+  /**
+   * 象限事件「标记完成」→ 为今天记一条 `kind: 'planned'` 的条目（spec 7.4）。
+   *
+   * `nowMin` 是完成时刻自 0 点起的分钟数，由气泡传入 —— 与气泡预览同源，
+   * 保证「显示的时币」等于「记下的时币」。当天已为同一事件记过账时直接拒绝
+   * （见 `isEventBilledOn`：`QuadrantEvent` 上没有「已计费」标记，账本即判据）。
+   */
+  completeQuadrantEvent: (event: QuadrantEvent, actualMin: number, nowMin: number) => void
   /** 深夜补记：回写 `previousDate` 这一份**已结算**快照（全库唯一例外，见实现处注释）。 */
   confirmNight: (previousDate: string, answer: { worked: boolean; endMin?: number }) => void
 }
@@ -971,6 +981,68 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (money?.enabled !== true) return
     const existing = money.days.find((d) => d.date === date)
     if (existing?.settledAt != null) return
+    const day: LedgerDay = existing
+      ? { ...existing, entries: [...existing.entries, entry] }
+      : {
+          date,
+          settledAt: null,
+          entries: [entry],
+          videoMin: 0,
+          gameMin: 0,
+          // 未结算的记录还没有那一问的答案：它要等这一天的日结才问（spec R2 §6）。
+          latePhone: false,
+          dayLimit: 0,
+          spentTC: 0,
+          overdraft: 0,
+          deltaLT: 0,
+          nightPending: true,
+          // 未结算的记录不可能是休息日：休息日一经申报即结算（见 markRestDay）。
+          isRestDay: false
+        }
+    const next = { ...data, money: { ...money, days: upsertLedgerDay(money.days, day) } }
+    saveSoon(next)
+    set({ data: next })
+  },
+
+  /**
+   * 象限事件「标记完成」（spec 7.4）。
+   *
+   * 象限卡片是空间上的事项、没有开始时刻也没有完成状态，所以「完成」这件事在数据层
+   * **只体现为账本里多了一条 `kind: 'planned'` 的条目**（`QuadrantEvent` 上不加任何字段）。
+   * 条目的构造全部交给纯函数 `quadrantEntryOf`，这里只负责落进**今天**的账本、并在两道
+   * 闸上挡住不该写的情况：
+   *
+   * - **当天已结算** → 拒绝。已冻结的一天只能由 `confirmNight` 那一处改动（与
+   *   `addUnplannedEntry` 同一条规则）。
+   * - **当天已为同一事件记过账** → 拒绝。`QuadrantEvent` 没有「已计费」标记（本任务不许加），
+   *   于是「今天是否已经计过费」只能查账本里有没有同一个 `sourceId`。少了这道闸，同一张卡片
+   *   一天内可以被重复「完成」并重复扣钱。
+   *
+   * `nowMin` 由气泡传入而非这里现取时钟：它是「完成时刻」的唯一证据（spec 6.3），而气泡里的
+   * 实时预览用的是同一个值 —— 两者同源才能保证「气泡显示的数」等于「账本记下的数」。
+   *
+   * 不调用 `rolloverMoneyWeek`：这笔条目落在**今天**（未结算），日结与周滚动都在更晚的时点
+   * 发生；与 `addUnplannedEntry` 一致。
+   */
+  completeQuadrantEvent: (event, actualMin, nowMin) => {
+    const data = get().data
+    const money = data.money
+    if (money?.enabled !== true) return
+    const date = dateKey(new Date())
+    const existing = money.days.find((d) => d.date === date)
+    // 已结算的一天不可再追加条目（唯一豁免是 confirmNight）。
+    if (existing?.settledAt != null) return
+    // 防重复计费：同一张卡片一天只记一次（见函数头注释）。
+    if (isEventBilledOn(money.days, date, event.id)) return
+    const entry = quadrantEntryOf(
+      {
+        id: crypto.randomUUID(),
+        event: { id: event.id, text: event.text, quadrant: event.quadrant },
+        actualMin,
+        nowMin
+      },
+      money.config
+    )
     const day: LedgerDay = existing
       ? { ...existing, entries: [...existing.entries, entry] }
       : {
