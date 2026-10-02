@@ -428,6 +428,12 @@
  *   --gs-tint          折射档染色：压轻，让折射看得出来（材质板）
  *   --gs-tint-opaque   降级档染色：压重，没有折射时它是对比度的唯一来源（材质板）
  *   --gs-tint-strong   抽屉等"重材质"元素的染色（非玻璃层，theme.css 消费）
+ *   --gs-dock-floor    手机底栏的**保底底色**（theme.css 消费，画在 .sidebar 上，
+ *                      在材质板之下、材质失败时仍存在）。刻意取固定值、与引擎无关：
+ *                      两档染色（折射 0.34 / 降级 0.62）是会随引擎变薄的那一层，
+ *                      保底不能建在它上面，否则"某天引擎判成 chromium 且
+ *                      backdrop-filter 无输出"时，底栏会只剩 0.34 的底而变薄。
+ *                      详见 theme.css 手机档 .sidebar 的推导与实测。
  *   --gs-mask-blur     弹窗遮罩的背景虚化半径（theme.css 的 `.modal-mask` 消费）。
  *                      它**不是**材质：材质只在 `.gs-plate` 上。这一条虚化的是
  *                      "面板以外的整片背景"（用户的 iOS 参考图就是这个效果），
@@ -449,6 +455,7 @@
   --gs-tint: rgba(20, 23, 29, 0.34);
   --gs-tint-opaque: rgba(26, 29, 35, 0.62);
   --gs-tint-strong: rgba(31, 34, 40, 0.9);
+  --gs-dock-floor: rgba(26, 29, 35, 0.5);
   --gs-mask-blur: 20px;
   --gs-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.16),

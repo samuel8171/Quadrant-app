@@ -72,11 +72,13 @@ import './glass.css'
  * ④ **没有布局盒的宿主不挂载库**（2026-09-24「桌面端整窗空白」事故的修法）。
  *    库挂载时用 `getBoundingClientRect()` 量自己写进 `glassSize`；`display:none`
  *    下量到全零，而 `mode='shader'` 那一档会拿这个零去 `createImageData(0, ·)`
- *    抛 `IndexSizeError`。异常在 effect 里抛出、全应用没有错误边界 ⇒ React
- *    卸载整棵树 ⇒ 窗口一片空白。桌面端被 CSS 隐藏的底部 dock
- *    （`.gs-layer--dock { display: none }`，手机档才 display:block）正是那个
- *    零尺寸宿主，于是「把折射模式切成 Shader」会让桌面端从此打不开
- *    （设置还是持久化的，下次启动照旧）。闸门见 `laid`。
+ *    抛 `IndexSizeError`。异常在 effect 里抛出 —— 事故当时全应用还没有错误边界，
+ *    React 于是卸载整棵树、窗口只剩底色（这半截如今已由 `main.tsx` 顶层的
+ *    `ErrorBoundary` 接住：会被它兜成"停到恢复页"，不再是白屏）。
+ *    桌面端被 CSS 隐藏的底部 dock（`.gs-layer--dock { display: none }`，
+ *    手机档才 display:block）正是那个零尺寸宿主，于是「把折射模式切成 Shader」
+ *    会在桌面端一挂载就抛错（设置还是持久化的，下次启动照旧）。
+ *    闸门见 `laid` —— 从源头不挂，比事后靠边界兜更干净。
  *    这条同时也是常识性的：`display:none` 的宿主不该在后台跑一整套 SVG 滤镜链。
  *
  * 引擎分流：Chromium 走库（折射 + 库的镜面边），其余走纯 CSS 镜面边；
