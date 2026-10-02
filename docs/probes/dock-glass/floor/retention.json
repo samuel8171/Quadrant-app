@@ -1,0 +1,623 @@
+{
+  "meta": {
+    "browser": "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
+    "engines": [
+      "fallback",
+      "chromium"
+    ],
+    "aliveMax": 0.2,
+    "minTextContrast": 4.5,
+    "plateSel": ".gs-layer--dock .gs-plate",
+    "clipInset": {
+      "x": 12,
+      "y": 10
+    }
+  },
+  "verdicts": {
+    "fallback": {
+      "production": "alive",
+      "isolated": "alive"
+    },
+    "chromium": {
+      "production": "degraded",
+      "isolated": "tint-only"
+    }
+  },
+  "contrastFailures": [],
+  "results": {
+    "fallback": {
+      "engine": "fallback",
+      "diag": {
+        "engine": "fallback",
+        "sidebarBackground": "rgba(26, 29, 35, 0.5)",
+        "plateBackground": "rgba(26, 29, 35, 0.62)",
+        "tintAlpha": 0.62,
+        "plateBackdrop": "blur(16.8px) saturate(1.4)",
+        "navItems": 5,
+        "sidebarRect": {
+          "x": 12,
+          "y": 768,
+          "w": 366,
+          "h": 66
+        },
+        "chain": [
+          {
+            "tag": "div",
+            "cls": "gs-plate",
+            "position": "absolute",
+            "zIndex": "0",
+            "transform": "none"
+          },
+          {
+            "tag": "div",
+            "cls": "gs-anchor",
+            "position": "absolute",
+            "zIndex": "auto",
+            "transform": "none"
+          },
+          {
+            "tag": "div",
+            "cls": "gs-layer.gs-layer--dock",
+            "position": "absolute",
+            "zIndex": "auto",
+            "transform": "none"
+          },
+          {
+            "tag": "aside",
+            "cls": "sidebar",
+            "position": "fixed",
+            "zIndex": "100",
+            "transform": "none"
+          },
+          {
+            "tag": "div",
+            "cls": "app",
+            "position": "relative",
+            "zIndex": "auto",
+            "transform": "none"
+          },
+          {
+            "tag": "div",
+            "cls": "",
+            "position": "static",
+            "zIndex": "auto",
+            "transform": "none"
+          },
+          {
+            "tag": "body",
+            "cls": "",
+            "position": "static",
+            "zIndex": "auto",
+            "transform": "none"
+          },
+          {
+            "tag": "html",
+            "cls": "",
+            "position": "static",
+            "zIndex": "auto",
+            "transform": "none"
+          }
+        ]
+      },
+      "production": {
+        "tag": "fallback-A-production",
+        "extraCss": "",
+        "sample": {
+          "x": 24,
+          "y": 778,
+          "width": 342,
+          "height": 46
+        },
+        "controlStd": 94.34,
+        "onStd": 1.6,
+        "offStd": 56.62,
+        "ratio": 0.028
+      },
+      "isolated": {
+        "tag": "fallback-B-sidebar-transparent",
+        "extraCss": ".sidebar{background:transparent!important}",
+        "sample": {
+          "x": 24,
+          "y": 778,
+          "width": 342,
+          "height": 46
+        },
+        "controlStd": 94.34,
+        "onStd": 3.2,
+        "offStd": 113.22,
+        "ratio": 0.028
+      },
+      "contrastReal": {
+        "tag": "fallback-real",
+        "stripes": false,
+        "on": {
+          "per": [
+            {
+              "label": "目标",
+              "color": "rgb(184, 189, 200)",
+              "bg": 0.0108,
+              "text": 0.5076,
+              "contrast": 9.18
+            },
+            {
+              "label": "四象限",
+              "color": "rgb(255, 255, 255)",
+              "bg": 0.0317,
+              "text": 1,
+              "contrast": 12.85
+            },
+            {
+              "label": "周计划",
+              "color": "rgb(184, 189, 200)",
+              "bg": 0.0108,
+              "text": 0.5076,
+              "contrast": 9.18
+            },
+            {
+              "label": "周日复盘",
+              "color": "rgb(184, 189, 200)",
+              "bg": 0.0108,
+              "text": 0.5076,
+              "contrast": 9.18
+            },
+            {
+              "label": "我的",
+              "color": "rgb(184, 189, 200)",
+              "bg": 0.0108,
+              "text": 0.5076,
+              "contrast": 9.18
+            }
+          ],
+          "worst": {
+            "label": "目标",
+            "color": "rgb(184, 189, 200)",
+            "bg": 0.0108,
+            "text": 0.5076,
+            "contrast": 9.18
+          }
+        },
+        "off": {
+          "per": [
+            {
+              "label": "目标",
+              "color": "rgb(184, 189, 200)",
+              "bg": 0.0085,
+              "text": 0.5076,
+              "contrast": 9.54
+            },
+            {
+              "label": "四象限",
+              "color": "rgb(255, 255, 255)",
+              "bg": 0.0285,
+              "text": 1,
+              "contrast": 13.38
+            },
+            {
+              "label": "周计划",
+              "color": "rgb(184, 189, 200)",
+              "bg": 0.0085,
+              "text": 0.5076,
+              "contrast": 9.54
+            },
+            {
+              "label": "周日复盘",
+              "color": "rgb(184, 189, 200)",
+              "bg": 0.0085,
+              "text": 0.5076,
+              "contrast": 9.54
+            },
+            {
+              "label": "我的",
+              "color": "rgb(184, 189, 200)",
+              "bg": 0.0085,
+              "text": 0.5076,
+              "contrast": 9.54
+            }
+          ],
+          "worst": {
+            "label": "目标",
+            "color": "rgb(184, 189, 200)",
+            "bg": 0.0085,
+            "text": 0.5076,
+            "contrast": 9.54
+          }
+        }
+      },
+      "contrastStress": {
+        "tag": "fallback-stress",
+        "stripes": true,
+        "on": {
+          "per": [
+            {
+              "label": "目标",
+              "color": "rgb(184, 189, 200)",
+              "bg": 0.0305,
+              "text": 0.5076,
+              "contrast": 6.93
+            },
+            {
+              "label": "四象限",
+              "color": "rgb(255, 255, 255)",
+              "bg": 0.056,
+              "text": 1,
+              "contrast": 9.9
+            },
+            {
+              "label": "周计划",
+              "color": "rgb(184, 189, 200)",
+              "bg": 0.0304,
+              "text": 0.5076,
+              "contrast": 6.94
+            },
+            {
+              "label": "周日复盘",
+              "color": "rgb(184, 189, 200)",
+              "bg": 0.0294,
+              "text": 0.5076,
+              "contrast": 7.02
+            },
+            {
+              "label": "我的",
+              "color": "rgb(184, 189, 200)",
+              "bg": 0.0294,
+              "text": 0.5076,
+              "contrast": 7.02
+            }
+          ],
+          "worst": {
+            "label": "目标",
+            "color": "rgb(184, 189, 200)",
+            "bg": 0.0305,
+            "text": 0.5076,
+            "contrast": 6.93
+          }
+        },
+        "off": {
+          "per": [
+            {
+              "label": "目标",
+              "color": "rgb(184, 189, 200)",
+              "bg": 0.2404,
+              "text": 0.5076,
+              "contrast": 1.92
+            },
+            {
+              "label": "四象限",
+              "color": "rgb(255, 255, 255)",
+              "bg": 0.251,
+              "text": 1,
+              "contrast": 3.49
+            },
+            {
+              "label": "周计划",
+              "color": "rgb(184, 189, 200)",
+              "bg": 0.2404,
+              "text": 0.5076,
+              "contrast": 1.92
+            },
+            {
+              "label": "周日复盘",
+              "color": "rgb(184, 189, 200)",
+              "bg": 0.2404,
+              "text": 0.5076,
+              "contrast": 1.92
+            },
+            {
+              "label": "我的",
+              "color": "rgb(184, 189, 200)",
+              "bg": 0.2404,
+              "text": 0.5076,
+              "contrast": 1.92
+            }
+          ],
+          "worst": {
+            "label": "目标",
+            "color": "rgb(184, 189, 200)",
+            "bg": 0.2404,
+            "text": 0.5076,
+            "contrast": 1.92
+          }
+        }
+      },
+      "errors": [],
+      "tintOnly": 0.38
+    },
+    "chromium": {
+      "engine": "chromium",
+      "diag": {
+        "engine": "chromium",
+        "sidebarBackground": "rgba(26, 29, 35, 0.5)",
+        "plateBackground": "rgba(20, 23, 29, 0.34)",
+        "tintAlpha": 0.34,
+        "plateBackdrop": "blur(16.8px) saturate(1.4)",
+        "navItems": 5,
+        "sidebarRect": {
+          "x": 12,
+          "y": 768,
+          "w": 366,
+          "h": 66
+        },
+        "chain": [
+          {
+            "tag": "div",
+            "cls": "gs-plate.gs-refract",
+            "position": "absolute",
+            "zIndex": "0",
+            "transform": "none"
+          },
+          {
+            "tag": "div",
+            "cls": "gs-anchor",
+            "position": "absolute",
+            "zIndex": "auto",
+            "transform": "none"
+          },
+          {
+            "tag": "div",
+            "cls": "gs-layer.gs-layer--dock",
+            "position": "absolute",
+            "zIndex": "auto",
+            "transform": "none"
+          },
+          {
+            "tag": "aside",
+            "cls": "sidebar",
+            "position": "fixed",
+            "zIndex": "100",
+            "transform": "none"
+          },
+          {
+            "tag": "div",
+            "cls": "app",
+            "position": "relative",
+            "zIndex": "auto",
+            "transform": "none"
+          },
+          {
+            "tag": "div",
+            "cls": "",
+            "position": "static",
+            "zIndex": "auto",
+            "transform": "none"
+          },
+          {
+            "tag": "body",
+            "cls": "",
+            "position": "static",
+            "zIndex": "auto",
+            "transform": "none"
+          },
+          {
+            "tag": "html",
+            "cls": "",
+            "position": "static",
+            "zIndex": "auto",
+            "transform": "none"
+          }
+        ]
+      },
+      "production": {
+        "tag": "chromium-A-production",
+        "extraCss": "",
+        "sample": {
+          "x": 24,
+          "y": 778,
+          "width": 342,
+          "height": 46
+        },
+        "controlStd": 94.34,
+        "onStd": 18.66,
+        "offStd": 56.62,
+        "ratio": 0.33
+      },
+      "isolated": {
+        "tag": "chromium-B-sidebar-transparent",
+        "extraCss": ".sidebar{background:transparent!important}",
+        "sample": {
+          "x": 24,
+          "y": 778,
+          "width": 342,
+          "height": 46
+        },
+        "controlStd": 94.34,
+        "onStd": 74.75,
+        "offStd": 113.22,
+        "ratio": 0.66
+      },
+      "contrastReal": {
+        "tag": "chromium-real",
+        "stripes": false,
+        "on": {
+          "per": [
+            {
+              "label": "目标",
+              "color": "rgb(184, 189, 200)",
+              "bg": 0.01,
+              "text": 0.5076,
+              "contrast": 9.29
+            },
+            {
+              "label": "四象限",
+              "color": "rgb(255, 255, 255)",
+              "bg": 0.0307,
+              "text": 1,
+              "contrast": 13.01
+            },
+            {
+              "label": "周计划",
+              "color": "rgb(184, 189, 200)",
+              "bg": 0.01,
+              "text": 0.5076,
+              "contrast": 9.29
+            },
+            {
+              "label": "周日复盘",
+              "color": "rgb(184, 189, 200)",
+              "bg": 0.01,
+              "text": 0.5076,
+              "contrast": 9.29
+            },
+            {
+              "label": "我的",
+              "color": "rgb(184, 189, 200)",
+              "bg": 0.01,
+              "text": 0.5076,
+              "contrast": 9.29
+            }
+          ],
+          "worst": {
+            "label": "目标",
+            "color": "rgb(184, 189, 200)",
+            "bg": 0.01,
+            "text": 0.5076,
+            "contrast": 9.29
+          }
+        },
+        "off": {
+          "per": [
+            {
+              "label": "目标",
+              "color": "rgb(184, 189, 200)",
+              "bg": 0.0085,
+              "text": 0.5076,
+              "contrast": 9.54
+            },
+            {
+              "label": "四象限",
+              "color": "rgb(255, 255, 255)",
+              "bg": 0.0285,
+              "text": 1,
+              "contrast": 13.38
+            },
+            {
+              "label": "周计划",
+              "color": "rgb(184, 189, 200)",
+              "bg": 0.0085,
+              "text": 0.5076,
+              "contrast": 9.54
+            },
+            {
+              "label": "周日复盘",
+              "color": "rgb(184, 189, 200)",
+              "bg": 0.0085,
+              "text": 0.5076,
+              "contrast": 9.54
+            },
+            {
+              "label": "我的",
+              "color": "rgb(184, 189, 200)",
+              "bg": 0.0085,
+              "text": 0.5076,
+              "contrast": 9.54
+            }
+          ],
+          "worst": {
+            "label": "目标",
+            "color": "rgb(184, 189, 200)",
+            "bg": 0.0085,
+            "text": 0.5076,
+            "contrast": 9.54
+          }
+        }
+      },
+      "contrastStress": {
+        "tag": "chromium-stress",
+        "stripes": true,
+        "on": {
+          "per": [
+            {
+              "label": "目标",
+              "color": "rgb(184, 189, 200)",
+              "bg": 0.0488,
+              "text": 0.5076,
+              "contrast": 5.64
+            },
+            {
+              "label": "四象限",
+              "color": "rgb(255, 255, 255)",
+              "bg": 0.0773,
+              "text": 1,
+              "contrast": 8.25
+            },
+            {
+              "label": "周计划",
+              "color": "rgb(184, 189, 200)",
+              "bg": 0.0488,
+              "text": 0.5076,
+              "contrast": 5.64
+            },
+            {
+              "label": "周日复盘",
+              "color": "rgb(184, 189, 200)",
+              "bg": 0.0488,
+              "text": 0.5076,
+              "contrast": 5.64
+            },
+            {
+              "label": "我的",
+              "color": "rgb(184, 189, 200)",
+              "bg": 0.0488,
+              "text": 0.5076,
+              "contrast": 5.64
+            }
+          ],
+          "worst": {
+            "label": "目标",
+            "color": "rgb(184, 189, 200)",
+            "bg": 0.0488,
+            "text": 0.5076,
+            "contrast": 5.64
+          }
+        },
+        "off": {
+          "per": [
+            {
+              "label": "目标",
+              "color": "rgb(184, 189, 200)",
+              "bg": 0.2404,
+              "text": 0.5076,
+              "contrast": 1.92
+            },
+            {
+              "label": "四象限",
+              "color": "rgb(255, 255, 255)",
+              "bg": 0.251,
+              "text": 1,
+              "contrast": 3.49
+            },
+            {
+              "label": "周计划",
+              "color": "rgb(184, 189, 200)",
+              "bg": 0.2404,
+              "text": 0.5076,
+              "contrast": 1.92
+            },
+            {
+              "label": "周日复盘",
+              "color": "rgb(184, 189, 200)",
+              "bg": 0.2404,
+              "text": 0.5076,
+              "contrast": 1.92
+            },
+            {
+              "label": "我的",
+              "color": "rgb(184, 189, 200)",
+              "bg": 0.2404,
+              "text": 0.5076,
+              "contrast": 1.92
+            }
+          ],
+          "worst": {
+            "label": "目标",
+            "color": "rgb(184, 189, 200)",
+            "bg": 0.2404,
+            "text": 0.5076,
+            "contrast": 1.92
+          }
+        }
+      },
+      "errors": [],
+      "tintOnly": 0.66
+    }
+  }
+}
