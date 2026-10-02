@@ -33,6 +33,10 @@ interface Props {
  * 象限事件完成时的计费气泡（spec 7.4）。
  *
  * **非模态、内联**：四象限画布是高频拖拽区，模态会打断操作，所以这里既没有遮罩也不抢焦点。
+ * 正因如此，根节点用 `role="group"`（带 `aria-label` 的可访问名）而**不是** `role="dialog"`：
+ * 读屏软件对 `dialog` 的预期是「焦点会移进来、多半还有焦点陷阱」，而本气泡两样都没有 ——
+ * 挂了 `dialog` 反而会误导用户去找一个并不存在的模态焦点区。`group` 准确地描述了
+ * 「一组内联的、可选中的控件」。子层「是否计费」那个 `role="group"` 是它自己的分组，二者不冲突。
  * 两行 —— 第一行「是否计费」（**默认不计费**，一键即可跳过），第二行小时数输入
  * （**不预填**，spec 13.1 决策 2：给 `QuadrantEvent` 加预估时长字段要牵动 5 个持久化同步点，
  * 为一个小交互不值）。
@@ -81,7 +85,7 @@ export default function QuadrantCostBubble({
     <div
       className="quadrant-cost-bubble"
       style={{ left: event.x * UNIT, top: -event.y * UNIT }}
-      role="dialog"
+      role="group"
       aria-label={`为「${event.text}」记一次用时`}
       onPointerDown={(e) => e.stopPropagation()}
       onPointerUp={(e) => e.stopPropagation()}

@@ -982,7 +982,9 @@ export default function QuadrantPage(): JSX.Element {
                 setBillingId(null)
                 // 「不计费」= 不写任何账（spec 7.4 的默认路径）。
                 if (!target || !answer.billable) return
-                completeQuadrantEvent(target, answer.actualMin, nowMin)
+                // 把本页持有的日期一并交出去：气泡的 alreadyBilled 用的就是它，
+                // 整条路径跑在同一个时钟、同一个日期上（跨零点不再各算各的）。
+                completeQuadrantEvent(target, answer.actualMin, nowMin, today)
               }}
               onCancel={() => setBillingId(null)}
             />

@@ -6,7 +6,12 @@ interface Props {
 }
 
 /**
- * 复盘页的「本周账本」区块（spec §8）—— 与三档滑动条**并列**，不替代。
+ * 复盘页的「最近结算周」区块（spec §8）—— 与三档滑动条**并列**，不替代。
+ *
+ * **标题刻意不叫「本周账本」**：`latestSettledWeek` 取的是 `weeks.at(-1)`，而周滚动
+ * 只结算到**上一个已结束的周**（本周还没结束、不结算）。于是周日打开时，这里显示的是
+ * **上一周**的结算，叫「本周」会让人把上周的账当成本周的。spec §8 的原话是「来自最新的
+ * `WeekSettlement`」——代码本来就对，误导的是标题，所以改标题、保留日期区间。
  *
  * **位置在调用方（`ReviewPage`）决定**：它被渲染在滑动条**之上**，且只在
  * `money.enabled === true` 且存在周结算时才渲染（见 `latestSettledWeek`）。
@@ -30,11 +35,11 @@ export default function WeekLedger({ week }: Props): JSX.Element {
   return (
     <section
       className="money-widget week-ledger"
-      aria-label="本周账本"
+      aria-label="最近结算周"
       style={{ marginBottom: 26 }}
     >
       <div className="money-widget-head">
-        <h2 className="money-widget-title">本周账本</h2>
+        <h2 className="money-widget-title">最近结算周</h2>
         <p className="money-widget-subtitle">
           {week.weekStart} ~ {week.weekEnd}
         </p>

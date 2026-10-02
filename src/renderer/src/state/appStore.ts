@@ -175,8 +175,18 @@ interface AppState {
    * `nowMin` 是完成时刻自 0 点起的分钟数，由气泡传入 —— 与气泡预览同源，
    * 保证「显示的时币」等于「记下的时币」。当天已为同一事件记过账时直接拒绝
    * （见 `isEventBilledOn`：`QuadrantEvent` 上没有「已计费」标记，账本即判据）。
+   *
+   * `date` 同样由气泡（页面）传入，**不在这里现取时钟**：气泡的 `alreadyBilled` 用的是
+   * 页面渲染时算好的 `today`，若本动作另取一个 `dateKey(new Date())`，跨零点的那几十秒里
+   * 两者会分叉 —— 气泡按旧日期判「没记过」，本动作按新日期判「已记过」并静默拒绝，
+   * 而气泡已经关闭，用户以为记上了。整条路径必须跑在**同一个时钟、同一个日期**上。
    */
-  completeQuadrantEvent: (event: QuadrantEvent, actualMin: number, nowMin: number) => void
+  completeQuadrantEvent: (
+    event: QuadrantEvent,
+    actualMin: number,
+    nowMin: number,
+    date: string
+  ) => void
   /** 深夜补记：回写 `previousDate` 这一份**已结算**快照（全库唯一例外，见实现处注释）。 */
   confirmNight: (previousDate: string, answer: { worked: boolean; endMin?: number }) => void
 }
@@ -308,19 +318,42 @@ function carriedOverdraft(money: MoneyState, date: string): number {
 }
 
 /**
- * 深夜补记条目：从 `nightStartMin`（23:30）起算、到 `endMin` 结束的那一段。
+ * 深夜补记条目：从 `nightStartMin`（23:30）起算、到 `endMin` 结束的那一段，
+ * **扣除当天已经计过费的深夜分钟**（`alreadyNightMin`）—— 见下面的不变量。
  *
  * `endMin` 是「持续到几点」的钟点（自 0 点起算）；不大于 `nightEndMin`（06:00）即
- * 跨过零点，加 1440 归一。时长下限 1 分钟、上限一个深夜窗口（390 分钟）——
+ * 跨过零点，加 1440 归一。时长上限一个深夜窗口（390 分钟）——
  * 补记只回答「深夜还在做什么」，超过窗口的部分不属于这一问。
  *
  * 记成 `kind: 'unplanned'`：这段工作没有计划基准（`plannedMin` 只能为 null），
  * 因此按 `leisureDelta` 的口径它不参与娱币，只按时长计 TC（深夜部分带倍率）。
+ *
+ * **不变量（终审裁定的那一句）：同一段深夜分钟只许计一次费。**
+ * 实时计费（象限事件完成）与次日深夜补记是两条**各自都正确**的路径，但它们的合成
+ * 会把同一分钟收两遍：卡片 23:45 完成、报 2 小时 ⇒ 条目覆盖 21:45–23:45，其中
+ * 23:30–23:45 已按「深夜 × 象限倍率」计入当天 `spentTC`；次日补记答「直到 00:00」
+ * 时，窗口 23:30–00:00 又会把 23:30–23:45 再收一遍 —— 用户只是如实回答了一句话。
+ *
+ * 兑现方式：补记可计分钟 = 窗口内分钟 − 当天**已计**深夜分钟（各条 `nightMin` 之和）。
+ * 减完 ≤ 0 即这一段已被完全覆盖，返回 `null`（`confirmNight` 据此不追加条目，
+ * 但仍照常清 `nightPending` —— 这一问已经问过了，不能因此把周滚动永久堵死）。
+ *
+ * 为什么用「`nightMin` 之和」而不是逐条算重叠区间：`LedgerEntry` 不存开始时刻，
+ * 补记侧无从还原每条深夜分钟落在窗口的哪一段，只有总量可用。这一天里能落进本窗口的
+ * 深夜分钟本就集中在 [23:30, 24:00) 这一段连续区间，扣总量与扣实际重叠是同一个数；
+ * 而任一分钟一旦被扣，就绝不会被补记重复计费 —— 这正是本裁定要守的那条线。
  */
-function buildNightEntry(endMin: number, config: MoneyConfig): LedgerEntry {
+function buildNightEntry(
+  endMin: number,
+  alreadyNightMin: number,
+  config: MoneyConfig
+): LedgerEntry | null {
   const window = config.nightEndMin + 1440 - config.nightStartMin
   const normalizedEnd = endMin <= config.nightEndMin ? endMin + 1440 : endMin
-  const actualMin = Math.max(1, Math.min(normalizedEnd - config.nightStartMin, window))
+  const claimed = Math.max(1, Math.min(normalizedEnd - config.nightStartMin, window))
+  // 扣掉当天已计的深夜分钟；≤ 0 表示这段已被完全覆盖，不记任何账（不重复收费）。
+  const actualMin = claimed - alreadyNightMin
+  if (actualMin <= 0) return null
   const nightMin = nightMinutesOf({ startMin: config.nightStartMin, actualMin }, config)
   return {
     id: crypto.randomUUID(),
@@ -338,6 +371,16 @@ function buildNightEntry(endMin: number, config: MoneyConfig): LedgerEntry {
       config
     )
   }
+}
+
+/**
+ * 某一天账本里**已经计过费**的深夜分钟（各条 `nightMin` 之和）—— 深夜补记的扣减基数。
+ *
+ * 抽成命名函数而不是在 `confirmNight` 里内联 `reduce`：它是上面那条不变量的唯一实现，
+ * 「哪些分钟不能再收」这个问题只能由它回答。休假日条目恒为空，和自然是 0 —— 无需特判。
+ */
+function billedNightMin(day: LedgerDay): number {
+  return day.entries.reduce((sum, entry) => sum + entry.nightMin, 0)
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -1018,17 +1061,18 @@ export const useAppStore = create<AppState>((set, get) => ({
    *   于是「今天是否已经计过费」只能查账本里有没有同一个 `sourceId`。少了这道闸，同一张卡片
    *   一天内可以被重复「完成」并重复扣钱。
    *
-   * `nowMin` 由气泡传入而非这里现取时钟：它是「完成时刻」的唯一证据（spec 6.3），而气泡里的
-   * 实时预览用的是同一个值 —— 两者同源才能保证「气泡显示的数」等于「账本记下的数」。
+   * `nowMin` 与 `date` 都由气泡传入而非这里现取时钟：`nowMin` 是「完成时刻」的唯一证据
+   * （spec 6.3），气泡里的实时预览用的是同一个值 —— 两者同源才能保证「气泡显示的数」
+   * 等于「账本记下的数」；而 `date` 是气泡判定 `alreadyBilled` 时用的那一天，只有把它
+   * 一并交进来，两道闸与气泡才跑在**同一个日期**上（见接口处的跨零点说明）。
    *
    * 不调用 `rolloverMoneyWeek`：这笔条目落在**今天**（未结算），日结与周滚动都在更晚的时点
    * 发生；与 `addUnplannedEntry` 一致。
    */
-  completeQuadrantEvent: (event, actualMin, nowMin) => {
+  completeQuadrantEvent: (event, actualMin, nowMin, date) => {
     const data = get().data
     const money = data.money
     if (money?.enabled !== true) return
-    const date = dateKey(new Date())
     const existing = money.days.find((d) => d.date === date)
     // 已结算的一天不可再追加条目（唯一豁免是 confirmNight）。
     if (existing?.settledAt != null) return
@@ -1078,6 +1122,10 @@ export const useAppStore = create<AppState>((set, get) => ({
    * `settledAt` 沿用旧值：补记不改变「这一天是什么时候结算的」。
    * 无论答「是」还是「否」，都把 `nightPending` 置 false —— 这一问已经问过了。
    *
+   * **补记不与实时计费重复收费**：只补当天**尚未计入**的深夜分钟（详见 `buildNightEntry`
+   * 的不变量）。答「是」而补记窗口已被当天的实时条目覆盖时，这里不追加条目、整天快照不变，
+   * 但仍清 `nightPending`；把「没产生新账」误当成「没问过」会让周滚动被永久推迟。
+   *
    * `previousDate` **不要求是日历上的昨天**：面板会挑出「正在结算的那一天之前、**所有**
    * 还挂着 `nightPending` 的已结算日」逐个来问（见 `SettlePanel` 与 `openNightsBefore`）。
    * 一次结算可能距上次开机好几天，且窗口左界那天（今天 − 7）的前一天落在窗口之外、可能没有记录；
@@ -1093,10 +1141,17 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (money?.enabled !== true) return
     const day = money.days.find((d) => d.date === previousDate)
     if (!day || day.settledAt === null) return
-    const entries =
+    /*
+     * 补记条目只补当天**尚未计入**的深夜分钟（见 `buildNightEntry` 的不变量）：
+     * 实时计费已经按深夜倍率收过的那一段，不能在这里再收一遍。`buildNightEntry` 在
+     * 整个窗口都被覆盖时返回 `null`，此时不追加任何条目 —— 但下面照样把 `nightPending`
+     * 置 false：这一问已经问过了，不能因为「答案没产生新账」就把它留着把周滚动堵死。
+     */
+    const nightEntry =
       answer.worked && answer.endMin !== undefined
-        ? [...day.entries, buildNightEntry(answer.endMin, money.config)]
-        : day.entries
+        ? buildNightEntry(answer.endMin, billedNightMin(day), money.config)
+        : null
+    const entries = nightEntry ? [...day.entries, nightEntry] : day.entries
     const recomputed = settleDay({
       date: previousDate,
       entries,
