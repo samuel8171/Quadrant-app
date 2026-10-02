@@ -5,6 +5,7 @@ import type {
   MoneyConfig,
   MoneyState,
   Quadrant,
+  QuadrantEvent,
   WeekSettlement
 } from '../src/shared/types'
 import { defaultData } from '../src/shared/defaults'
@@ -2831,5 +2832,166 @@ describe('composeReviewText / latestSettledWeek（复盘汇入的唯一调用点
     const out = composeReviewText('', overWeek)
     expect(out.startsWith('\n')).toBe(false)
     expect(out.length).toBeGreaterThan(0)
+  })
+})
+
+// ============================================================================
+// 终审修复波 · Item 1：深夜补记不得把实时计费已收的深夜分钟再收一遍
+// ============================================================================
+
+/**
+ * 「实时计费」与「次日深夜补记」**各自都对**，缺陷只存在于两者的**合成**：
+ *
+ * 象限卡片在 23:45 完成、报 2 小时 ⇒ 条目覆盖 21:45–23:45，其中 23:30–23:45
+ * 已按「深夜 × 象限倍率」计过费；次日的日结又问「昨夜 23:30 之后还在做事吗」，
+ * 用户如实答「直到 00:00」⇒ 补记窗口 23:30–00:00 把 23:30–23:45 再收一遍。
+ * 用户只是如实回答了一句话，就被重复扣款。
+ *
+ * 裁定：补记**只能补当天尚未计入**的深夜分钟。本组用例走真实路径
+ * （`quadrantEntryOf` 造实时条目 → `settleDay` 冻结 → store 的 `confirmNight` 补记）
+ * 钉死这条不变量。
+ */
+describe('confirmNight · 深夜补记不得把已计的深夜分钟再收一次', () => {
+  const DAY = '2026-09-29'
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-09-29T23:20:00'))
+  })
+
+  afterEach(() => {
+    useAppStore.setState({ data: defaultData(), loaded: true })
+    vi.useRealTimers()
+  })
+
+  /** 把「已为某象限事件记过实时账、并已结算」的那一天装进 store（`nightPending` 仍挂着）。 */
+  function seedSettledQuadrantDay(actualMin: number, nowMin: number): LedgerDay {
+    const entry = quadrantEntryOf(
+      { id: 'led-q', event: { id: 'ev-1', text: '写周报', quadrant: 2 }, actualMin, nowMin },
+      DEFAULT_MONEY_CONFIG
+    )
+    const settled = settleDay({
+      date: DAY,
+      entries: [entry],
+      previousOverdraft: 0,
+      settledAt: '2026-09-29T23:20:00.000Z',
+      config: DEFAULT_MONEY_CONFIG
+    })
+    useAppStore.setState({
+      data: {
+        ...defaultData(),
+        money: {
+          enabled: true,
+          config: DEFAULT_MONEY_CONFIG,
+          days: [settled],
+          weeks: [],
+          enabledAt: DAY
+        }
+      },
+      loaded: true
+    })
+    return settled
+  }
+
+  it('重叠段不重复计费：补记只补未被覆盖的那部分深夜分钟', () => {
+    // 23:45 完成、2 小时 → 覆盖 21:45–23:45；深夜仅 23:30–23:45 = 15 分钟。
+    const settled = seedSettledQuadrantDay(120, 1425)
+    // 前置断言：实时条目确实已经把 15 分钟按深夜计过费（否则本用例什么也证明不了）。
+    expect(settled.nightPending).toBe(true)
+    expect(settled.entries[0].nightMin).toBe(15)
+
+    // 次日日结补记：答「直到 00:00」→ 补记窗口 23:30–00:00 共 30 分钟。
+    useAppStore.getState().confirmNight(DAY, { worked: true, endMin: 0 })
+
+    const day = useAppStore.getState().data.money?.days.find((d) => d.date === DAY)
+    const night = day?.entries.find((e) => e.kind === 'unplanned')
+    // 已计过的 23:30–23:45（15 分钟）不再计；补记只剩 23:45–00:00 的 15 分钟。
+    expect(night?.actualMin).toBe(15)
+    expect(night?.nightMin).toBe(15)
+    // 整天花费 = 实时条目 + 补记的未覆盖部分，没有第三份。
+    expect(day?.spentTC).toBe(settled.spentTC + (night?.costTC ?? 0))
+    expect(day?.nightPending).toBe(false)
+  })
+
+  it('完全被覆盖的答案不记任何账（补记窗口 ⊆ 已计深夜分钟）', () => {
+    // 00:00 完成、30 分钟 → 覆盖 23:30–00:00，深夜 30 分钟 —— 正是补记窗口本身。
+    const settled = seedSettledQuadrantDay(30, 0)
+    expect(settled.entries[0].nightMin).toBe(30)
+
+    useAppStore.getState().confirmNight(DAY, { worked: true, endMin: 0 })
+
+    const day = useAppStore.getState().data.money?.days.find((d) => d.date === DAY)
+    // 这一段已被实时条目计过，补记不该新增任何条目。
+    expect(day?.entries).toHaveLength(1)
+    expect(day?.spentTC).toBe(settled.spentTC)
+    // 但这一问已经问过了：nightPending 必须清掉，否则周滚动被永久推迟。
+    expect(day?.nightPending).toBe(false)
+  })
+
+  it('答案是「否」时整天快照与原来一致（不补记，只清标记）', () => {
+    const settled = seedSettledQuadrantDay(120, 1425)
+    useAppStore.getState().confirmNight(DAY, { worked: false })
+    const day = useAppStore.getState().data.money?.days.find((d) => d.date === DAY)
+    expect(day?.entries).toHaveLength(1)
+    expect(day?.spentTC).toBe(settled.spentTC)
+    expect(day?.nightPending).toBe(false)
+  })
+})
+
+// ============================================================================
+// 终审修复波 · Item 2：completeQuadrantEvent 用页面传入的日期（跨零点不再各算各的）
+// ============================================================================
+
+/**
+ * 页面在渲染时算好自己的 `today`，气泡的 `alreadyBilled` 用的是它；而 store 此前
+ * 用 `dateKey(new Date())` **现取**日期。跨零点的那 <60 秒里两者会分叉：气泡按旧日期
+ * 判定「没记过」，store 按新日期判定「已记过」并静默拒绝 —— 气泡照样关闭，用户以为记下了。
+ * 修法：日期由页面传入，整条路径跑在同一个时钟、同一个日期上。
+ */
+describe('completeQuadrantEvent · 日期由页面传入', () => {
+  const PAGE_TODAY = '2026-09-30'
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    // 时钟已是新的一天 00:00 —— 若动作自取日期，就会落到 2026-10-01。
+    vi.setSystemTime(new Date('2026-10-01T00:00:10'))
+  })
+
+  afterEach(() => {
+    useAppStore.setState({ data: defaultData(), loaded: true })
+    vi.useRealTimers()
+  })
+
+  it('条目落在页面传入的日期上，而不是 store 现取的时钟日期', () => {
+    useAppStore.setState({
+      data: {
+        ...defaultData(),
+        money: {
+          enabled: true,
+          config: DEFAULT_MONEY_CONFIG,
+          days: [unsettledDay(PAGE_TODAY, [])],
+          weeks: [],
+          enabledAt: PAGE_TODAY
+        }
+      },
+      loaded: true
+    })
+    const event: QuadrantEvent = {
+      id: 'ev-1',
+      text: '写周报',
+      remark: '',
+      quadrant: 2,
+      x: 0,
+      y: 0,
+      width: 1,
+      createdAt: '2026-09-30T20:00:00.000Z'
+    }
+    // 气泡在 23:59 持有的日期是 PAGE_TODAY；确认时把它一并交给 store。
+    useAppStore.getState().completeQuadrantEvent(event, 120, 1439, PAGE_TODAY)
+
+    const days = useAppStore.getState().data.money?.days ?? []
+    // 不得把条目记到时钟所在的「新一天」上。
+    expect(days.some((d) => d.date === '2026-10-01')).toBe(false)
+    expect(days.find((d) => d.date === PAGE_TODAY)?.entries).toHaveLength(1)
   })
 })
