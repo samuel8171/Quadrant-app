@@ -3,16 +3,25 @@ import { ArrowLeft, BookMarked, FileDown, FolderOpen } from 'lucide-react'
 import AlertDialog from '../components/AlertDialog'
 import ReviewRecords from '../components/review/ReviewRecords'
 import SegmentedSlider from '../components/review/SegmentedSlider'
+import WeekLedger from '../components/money/WeekLedger'
 import { REVIEW_GREEN_RED, REVIEW_RED_GREEN } from '../lib/reviewRules'
 import { getPlatformApi } from '../lib/platformApi'
+import { composeReviewText, latestSettledWeek } from '../../../shared/money'
 import { useAppStore } from '../state/appStore'
 
 type ReviewView = 'compose' | 'records'
 
 export default function ReviewPage(): JSX.Element {
+  const data = useAppStore((s) => s.data)
   const reviewEdit = useAppStore((s) => s.reviewEdit)
   const setReviewEdit = useAppStore((s) => s.setReviewEdit)
   const saveReviewDraft = useAppStore((s) => s.saveReviewDraft)
+
+  // 复盘汇入的唯一入参（spec §8）：仅当功能启用、且已有周结算时才有值。
+  // 「从未启用」（money 缺席）与「已关闭」（enabled !== true）都在这里归为 undefined，
+  // 于是 `composeReviewText` 走原样返回的分支 —— 关闭态的字节一致由构造保证，
+  // 而不是靠导出层记得别加东西。
+  const latestWeek = latestSettledWeek(data.money)
 
   const pageRef = useRef<HTMLDivElement>(null)
   const taRef = useRef<HTMLTextAreaElement>(null)
@@ -59,7 +68,13 @@ export default function ReviewPage(): JSX.Element {
 
   const saveWord = async (): Promise<void> => {
     try {
-      const record = await getPlatformApi().saveReview(reviewEdit)
+      // 唯一的汇入点：把本周账本摘要拼进正文后再交给导出链。
+      // 导出层（reviewDoc.ts / platformApi.saveReview）一行不改 —— `ReviewExport`
+      // 仍是 { completion, quality, stress, text }，没有 money 字段。
+      const record = await getPlatformApi().saveReview({
+        ...reviewEdit,
+        text: composeReviewText(reviewEdit.text, latestWeek)
+      })
       saveReviewDraft()
       showToast(`已保存：${record.fileName}`)
     } catch (err) {
@@ -116,6 +131,8 @@ export default function ReviewPage(): JSX.Element {
             </button>
           </div>
         </header>
+
+        {latestWeek && <WeekLedger week={latestWeek} />}
 
         <div className="review-sliders">
           <SegmentedSlider

@@ -650,6 +650,81 @@ export function settleWeek(input: {
 }
 
 /**
+ * 把一条周结算渲染成「本周账本」的若干文本行（spec §8 的区块内容）。
+ *
+ * 数字**全部直读 `week` 的字段**，这里不写任何常量：`weekTC` / `nextWeekTC` 等已是
+ * 结算时按 `config` 算好并冻结在快照里的值，从 `DEFAULT_MONEY_CONFIG` 再抄一遍
+ * （560 / 80 / 85·85·70·60·50·40）只会制造第二个真源，调参时会静默失真 ——
+ * 本分支的标定值已经被重定过一次，这条纪律必须守住。
+ *
+ * 覆盖 spec §8 列出的全部字段：周花费 / 额度、超支额与档位、计划 vs 实际时长、
+ * 完成 / 未完成数、计划外事项数与时长、深夜总时长、超限天数，最后接 `notes` 的自动结论。
+ *
+ * `unplannedCount === 0` 时写「无计划外事项」而不是「计划外 0 件 0 分钟」：
+ * 0 件是一种结论（这周没有计划外），不是一条待读的数据。
+ *
+ * **不含 `notes`**：`notes` 是结算自动生成的结论，由调用方决定怎么摆
+ * （`composeReviewText` 把它们接在末尾、`WeekLedger` 把它们单独放在页脚）。
+ * 这样区块与导出读的是**同一批固定行**，两处不会各写一套格式。
+ */
+export function weekSummaryLines(week: WeekSettlement): string[] {
+  const overLine =
+    week.weekOver > 0
+      ? `超支 ${week.weekOver} 币，惩罚档位 ${week.penaltyTier}`
+      : `未超支，惩罚档位 ${week.penaltyTier}`
+  return [
+    `本周花费 ${week.spentTC} / ${week.weekTC} 币，${overLine}`,
+    `计划 ${week.plannedMin} 分钟 / 实际 ${week.actualMin} 分钟`,
+    `完成 ${week.doneCount} 件，没做 ${week.missCount} 件`,
+    week.unplannedCount > 0
+      ? `计划外 ${week.unplannedCount} 件 ${week.unplannedMin} 分钟`
+      : '无计划外事项',
+    `深夜做事 ${week.nightMin} 分钟，超日额度 ${week.overLimitDays} 天`
+  ]
+}
+
+/**
+ * 把本周账本摘要追加到复盘正文之后（spec §8 的「复盘汇入」）—— 导出的**唯一调用点**。
+ *
+ * **`week === undefined` 时原样返回 `text`，一个字符都不动**。这一行是关闭态导出
+ * 逐字节一致的**全部保证**：功能从未启用、或开关已关时，`ReviewPage` 传进来的就是
+ * `undefined`，于是交给 `saveReview` 的正文与改动前逐字节相同（spec §4.3 第 4 条）。
+ * 也因此**不要**在这里对 `text` 做 trim / 换行归一 —— 任何「顺手清理」都会让关闭态
+ * 与改动前产生差异，而那正是本任务要证明不存在的东西。
+ *
+ * 有摘要时以**一个空行**（`\n\n`）分隔追加。正文为空时**不留前导空行**：
+ * 空正文 + 摘要应当是「摘要」本身，而不是「\n\n摘要」。
+ *
+ * 刻意**不给 `ReviewExport` 加字段**（该方案已否决）：那要牵动 `main/index.ts` 的 IPC
+ * 契约与两个消费点（`main/review.ts` / `platformApi.saveReview`），三处新同步点；
+ * 而把摘要拼进既有的 `text` 只需这一个纯函数，关闭态的字节一致也由上面的
+ * `undefined` 分支自动成立。
+ */
+export function composeReviewText(text: string, week: WeekSettlement | undefined): string {
+  if (week === undefined) return text
+  const summary = [...weekSummaryLines(week), ...week.notes].join('\n')
+  return text === '' ? summary : `${text}\n\n${summary}`
+}
+
+/**
+ * 复盘页该汇入的最新生效周结算；功能未启用（或从未启用）时返回 `undefined`。
+ *
+ * **两种「关闭」必须都落到 `undefined`**，这是关闭态字节一致的入口约束：
+ * - `money` 整个字段缺席（老数据 / 功能从未启用）—— 可选链给出 `undefined`；
+ * - `money` 存在但 `enabled === false`（用户关掉了开关）—— `=== true` 判定挡住。
+ *
+ * 判定写成 `enabled !== true` 而不是 `enabled === false`：与账本其余消费点
+ * （`appStore` 的每个动作都写 `money?.enabled !== true`）逐字一致，运行时的意外值
+ * （旧数据 / 半截 payload 里的 `undefined`）也一并归到「关闭」这一支。
+ *
+ * `weeks` 为空时 `.at(-1)` 自然是 `undefined`：还没有任何一周结束，就没有账本可汇入。
+ */
+export function latestSettledWeek(money: MoneyState | undefined): WeekSettlement | undefined {
+  if (money?.enabled !== true) return undefined
+  return money.weeks.at(-1)
+}
+
+/**
  * 当前周的额度（spec 5 的派生式）：`weeks` 最后一条的 `nextWeekTC` / `nextWeekLT`；
  * 一条结算都没有时回退到配置值。
  *

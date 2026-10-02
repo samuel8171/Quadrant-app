@@ -12,6 +12,7 @@ import { addDays, dateKey, parseDateKey } from '../src/shared/dateKey'
 import {
   DEFAULT_MONEY_CONFIG,
   abandonExpiredDays,
+  composeReviewText,
   consumptionDeltaLT,
   costOfEntry,
   currentQuota,
@@ -20,6 +21,7 @@ import {
   ensureWeekRollover,
   isEventBilledOn,
   isFreeUnplannedSettlement,
+  latestSettledWeek,
   leisureDelta,
   nightMinutesOf,
   openNightsBefore,
@@ -2746,5 +2748,83 @@ describe('isEventBilledOn（同一事件一天只计一次费的判据）', () =
     expect(isEventBilledOn([billed], '2026-09-30', 'ev-2')).toBe(false)
     expect(isEventBilledOn([billed], '2026-10-01', 'ev-1')).toBe(false)
     expect(isEventBilledOn([], '2026-09-30', 'ev-1')).toBe(false)
+  })
+})
+
+// ============================================================================
+// Task 10：复盘账本摘要汇入正文（`composeReviewText`）与关闭态字节一致
+// ============================================================================
+
+describe('composeReviewText / latestSettledWeek（复盘汇入的唯一调用点入参）', () => {
+  /*
+   * 一份**真实超支**的周结算夹具：`weekTC` 392 是档位 2 受罚周的额度（560 × 0.7），
+   * `spentTC` 420 因此确实超支 28。这里不让 `spentTC` 落在 560 以下 —— 那会让
+   * 「超支」只剩字符串巧合（「未超支」也含「超支」两字），断言就测不到真东西。
+   *
+   * 字段值彼此自洽（planned/actual、done/miss、unplanned、night、overLimit），
+   * 断言里的每个数字都必须真能从这份夹具里读出来。
+   */
+  const overWeek = mkSettledWeek({
+    weekTC: 392,
+    spentTC: 420,
+    weekOver: 28,
+    plannedMin: 600,
+    actualMin: 720,
+    doneCount: 8,
+    missCount: 2,
+    unplannedCount: 3,
+    unplannedMin: 90,
+    nightMin: 45,
+    overLimitDays: 2,
+    penaltyTier: 2,
+    nextWeekTC: 392,
+    nextWeekLT: 12,
+    notes: ['本周花费 420 / 392 币，超支 28 币，下周时币 ×70%、娱币 ×60%']
+  })
+
+  it('没有周结算记录时原样返回正文字符串', () => {
+    expect(composeReviewText('今天还行', undefined)).toBe('今天还行')
+  })
+
+  it('功能从未启用（money 为 undefined）时走 undefined 路径，正文与字节数都不变', () => {
+    const text = '今天还行\n第二行'
+    const out = composeReviewText(text, latestSettledWeek(undefined))
+    expect(out).toBe(text)
+    expect(Buffer.byteLength(out, 'utf8')).toBe(Buffer.byteLength(text, 'utf8'))
+  })
+
+  it('有关闭开关（账本仍在但 enabled=false）时同样走 undefined 路径，正文与字节数都不变', () => {
+    const money: MoneyState = { ...mkMoney([], [overWeek]), enabled: false }
+    const text = '今天还行\n第二行'
+    expect(latestSettledWeek(money)).toBeUndefined()
+    const out = composeReviewText(text, latestSettledWeek(money))
+    expect(out).toBe(text)
+    expect(Buffer.byteLength(out, 'utf8')).toBe(Buffer.byteLength(text, 'utf8'))
+  })
+
+  it('启用且存在周结算时，取出最后一条作为最新周', () => {
+    const earlier = mkSettledWeek({ weekStart: '2026-08-31' })
+    const money = mkMoney([], [earlier, overWeek])
+    expect(latestSettledWeek(money)).toBe(overWeek)
+  })
+
+  it('有周结算时追加一段，且包含关键数字', () => {
+    const out = composeReviewText('今天还行', overWeek)
+    expect(out.startsWith('今天还行')).toBe(true)
+    expect(out).toContain('420')
+    expect(out).toContain('超支')
+    // 覆盖 spec §8 要求展示的全部字段，逐个数字都来自夹具本身
+    expect(out).toContain('392')
+    expect(out).toContain('720')
+    expect(out).toContain('2') // doneCount 8 / missCount 2，两个都在
+    expect(out).toContain('90')
+    expect(out).toContain('45')
+    expect(out).toContain(overWeek.notes[0])
+  })
+
+  it('空正文也能正常追加，不留前导空行', () => {
+    const out = composeReviewText('', overWeek)
+    expect(out.startsWith('\n')).toBe(false)
+    expect(out.length).toBeGreaterThan(0)
   })
 })
