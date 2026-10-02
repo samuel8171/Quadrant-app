@@ -291,14 +291,16 @@ console.log(`  有效模糊读数：「${modal.effective.trim().slice(0, 60)}」
  * 排查时不要只看定位层自己：**从材质板一路走到 documentElement**。
  *
  * 例外：`.gs-layer--dock`（手机底栏）不查。它挂在 `aside.sidebar`（手机档 fixed+z100）
- * 里，而 sidebar 的背景是**不透明的** `rgb(26,29,35)` —— 材质板身后本来就没有可糊的东西，
- * 保不保留都是同一个观感，属于设计取舍而不是缺陷（2026-09-27 实测，见 tmp/dbg-dock-real.mjs）。
+ * 里 —— 按本规则本该判死，但 2026-10-02（R2-K）实测材质是**活的**（保留率 0.028，
+ * 见 scripts/dock-glass-retention.mjs），规则在这一处属于"过判"。底部 dock 因此继续
+ * 豁免，但**理由已不是"身后没东西可糊"** —— 那层不透明底已由 R2-K 移除，它身后就是
+ * 时间轴画布，材质确实在采样。
  */
 const ancestorAudit = await page.evaluate(() => {
   const bad = []
   for (const layer of document.querySelectorAll('.gs-layer')) {
-    // 例外一：手机底栏 —— 它的祖先 `aside.sidebar` 是 fixed+z100，但 sidebar 的底色是
-    // 不透明的 rgb(26,29,35)，材质板身后没有可糊的东西，属于设计取舍（见上面注释）。
+    // 例外一：手机底栏 —— 祖先 aside.sidebar 是 fixed+z100，规则会命中；
+    // 但 R2-K 实测材质仍活（保留率 0.028），规则在此过判，故豁免（见上面注释）。
     if (layer.classList.contains('gs-layer--dock')) continue
     // 例外二：嵌在别层里的子浮层（设置面板的折射预览条就是 `.gs-layer--preview`）。
     // 它的祖先必然包含库根节点（带着宿主自己的 `--gs-z`），那不是可选的修饰；

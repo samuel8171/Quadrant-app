@@ -1,0 +1,213 @@
+{
+  "diag": {
+    "viewport": {
+      "w": 390,
+      "h": 844
+    },
+    "engine": "fallback",
+    "sidebar": {
+      "rect": {
+        "x": 12,
+        "y": 768,
+        "w": 366,
+        "h": 66
+      },
+      "position": "fixed",
+      "zIndex": "100",
+      "backgroundColor": "rgb(26, 29, 35)",
+      "backdropFilter": "none"
+    },
+    "layer": {
+      "rect": {
+        "x": 12,
+        "y": 768,
+        "w": 365,
+        "h": 66
+      },
+      "display": "block",
+      "position": "absolute",
+      "zIndex": "auto",
+      "gsZ": "0"
+    },
+    "plate": {
+      "rect": {
+        "x": 11.5,
+        "y": 768,
+        "w": 366,
+        "h": 66
+      },
+      "backgroundColor": "rgba(26, 29, 35, 0.62)",
+      "backdropFilter": "blur(16.8px) saturate(1.4)",
+      "borderRadius": "32px",
+      "zIndex": "0"
+    },
+    "navRect": {
+      "x": 20,
+      "y": 773,
+      "w": 349,
+      "h": 56
+    },
+    "navItems": 5,
+    "chain": [
+      {
+        "tag": "div",
+        "cls": "gs-plate",
+        "position": "absolute",
+        "zIndex": "0",
+        "transform": "none",
+        "filter": "none",
+        "backdropFilter": "blur(16.8px) saturate(1.4)",
+        "isolation": "auto",
+        "willChange": "auto",
+        "opacity": "1",
+        "contain": "none",
+        "mixBlend": "normal"
+      },
+      {
+        "tag": "div",
+        "cls": "gs-anchor",
+        "position": "absolute",
+        "zIndex": "auto",
+        "transform": "none",
+        "filter": "none",
+        "backdropFilter": "none",
+        "isolation": "auto",
+        "willChange": "auto",
+        "opacity": "1",
+        "contain": "none",
+        "mixBlend": "normal"
+      },
+      {
+        "tag": "div",
+        "cls": "gs-layer.gs-layer--dock",
+        "position": "absolute",
+        "zIndex": "auto",
+        "transform": "none",
+        "filter": "none",
+        "backdropFilter": "none",
+        "isolation": "auto",
+        "willChange": "auto",
+        "opacity": "1",
+        "contain": "none",
+        "mixBlend": "normal"
+      },
+      {
+        "tag": "aside",
+        "cls": "sidebar",
+        "position": "fixed",
+        "zIndex": "100",
+        "transform": "none",
+        "filter": "none",
+        "backdropFilter": "none",
+        "isolation": "auto",
+        "willChange": "auto",
+        "opacity": "1",
+        "contain": "none",
+        "mixBlend": "normal"
+      },
+      {
+        "tag": "div",
+        "cls": "app",
+        "position": "relative",
+        "zIndex": "auto",
+        "transform": "none",
+        "filter": "none",
+        "backdropFilter": "none",
+        "isolation": "auto",
+        "willChange": "auto",
+        "opacity": "1",
+        "contain": "none",
+        "mixBlend": "normal"
+      },
+      {
+        "tag": "div",
+        "cls": "",
+        "position": "static",
+        "zIndex": "auto",
+        "transform": "none",
+        "filter": "none",
+        "backdropFilter": "none",
+        "isolation": "auto",
+        "willChange": "auto",
+        "opacity": "1",
+        "contain": "none",
+        "mixBlend": "normal"
+      },
+      {
+        "tag": "body",
+        "cls": "",
+        "position": "static",
+        "zIndex": "auto",
+        "transform": "none",
+        "filter": "none",
+        "backdropFilter": "none",
+        "isolation": "auto",
+        "willChange": "auto",
+        "opacity": "1",
+        "contain": "none",
+        "mixBlend": "normal"
+      },
+      {
+        "tag": "html",
+        "cls": "",
+        "position": "static",
+        "zIndex": "auto",
+        "transform": "none",
+        "filter": "none",
+        "backdropFilter": "none",
+        "isolation": "auto",
+        "willChange": "auto",
+        "opacity": "1",
+        "contain": "none",
+        "mixBlend": "normal"
+      }
+    ]
+  },
+  "production": {
+    "tag": "A-production",
+    "extraCss": "",
+    "sample": {
+      "x": 24,
+      "y": 778,
+      "width": 342,
+      "height": 46
+    },
+    "controlStd": 94.34,
+    "onStd": 0,
+    "offStd": 0,
+    "ratio": null
+  },
+  "isolated": {
+    "tag": "B-sidebar-transparent",
+    "extraCss": ".sidebar{background:transparent!important}",
+    "sample": {
+      "x": 24,
+      "y": 778,
+      "width": 342,
+      "height": 46
+    },
+    "controlStd": 94.34,
+    "onStd": 3.2,
+    "offStd": 113.22,
+    "ratio": 0.028
+  },
+  "errors": [],
+  "meta": {
+    "browser": "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
+    "viewport": {
+      "w": 390,
+      "h": 844
+    },
+    "deviceScaleFactor": 2,
+    "engine": "fallback",
+    "plateSel": ".gs-layer--dock .gs-plate",
+    "clipInset": {
+      "x": 12,
+      "y": 10
+    },
+    "thresholds": {
+      "alive": 0.2,
+      "tintOnly": 0.66
+    }
+  }
+}
