@@ -1,0 +1,26 @@
+{
+  "cases": [
+    {
+      "label": "日结面板 · fallback · 材质开 vs 关（遮罩不虚化）",
+      "name": "fallback-A-material-on.png",
+      "ref": "fallback-A-material-off.png",
+      "box": {
+        "x": 60,
+        "y": 58,
+        "w": 270,
+        "h": 728
+      }
+    },
+    {
+      "label": "日结面板 · chromium · 材质开 vs 关（遮罩不虚化）",
+      "name": "chromium-A-material-on.png",
+      "ref": "chromium-A-material-off.png",
+      "box": {
+        "x": 60,
+        "y": 58,
+        "w": 270,
+        "h": 728
+      }
+    }
+  ]
+}

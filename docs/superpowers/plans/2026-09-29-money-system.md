@@ -1476,6 +1476,11 @@ R3-B（云同步手动/自动）    ── 数据风险最高，用户指定放�
 
 ### Task R3-E: 日结面板的液态玻璃 ［新增，**依赖 R2-K 的实测结论**］
 
+> **✅ 已完成（2026-10-03）。结论见下方「✅ 已修复：日结面板的玻璃（R3-E）」一节。**
+> 一处**判据更正**：日结面板是**弹窗**，不能用保留率（≤0.2）判 —— 遮罩会重塑采样参照，
+> 该口径量的是"遮罩 + 页面 vs 材质 + 遮罩 + 页面"。改用与其余弹窗一致的
+> **Δmean + grad**（`glass-material-judge.py` 的既有门槛），保留率只作参考。
+
 > **为什么两个都标「依赖 R2-K」**：R2-K 要先量出**既有**手机 dock 宿主到底是活是死
 > （存在 ≠ 生效，唯一口径是保留率）。**若既有宿主量出来是死的，说明这套接线有问题，
 > 此时往上加新宿主就是往沙子上盖楼** —— 必须先修地基，再谈新增。R2-K 结论为「活」才直接开工。
@@ -1752,4 +1757,111 @@ R2-K 记录的 `chromium 0.66 = 1 − 染色 0.34` 是对的，但它**遗漏了
 - ⭐ **种子要种在可见世界里**。事件原种在 world x=60..140，换算到屏幕 x=1396..2996，
   远在 390px 视口之外 ⇒ `page.screenshot` 直接报 `Clipped area is outside the resulting image`。
   改种在原点附近（象限 2/3，`x:-8`、`y:-2/-6/-10`），并在运行时挑一张**完全落在视口内**的卡片。
+
+---
+
+## ✅ 已修复：日结面板的玻璃（R3-E，2026-10-03）
+
+按 6 条约束逐条做了。**一处判据被推翻**：日结面板是**弹窗**，不能用保留率判活 —— 详见下。
+
+### 一、做法：走 `GlassModal`，不是自己贴玻璃
+
+日结面板原先是**自己写的一层遮罩 + 实色面板**：
+
+```
+改前：.settle-overlay(fixed / z-index:130 / grid 居中) > .settle-panel(实色 background: var(--panel))
+```
+
+`.settle-overlay` 正好命中约束 2 的两个禁区（`fixed` + 非 auto 的 `z-index`），
+所以**照原结构直接套玻璃只会得到一层染色**。改法是让它成为**第 8 个走 `GlassModal` 的弹窗**：
+
+```
+改后：.gs-viewport(absolute/z:auto) > .modal-mask(遮罩·材质板的兄弟)
+                                   > .gs-anchor > .gs-layer--dialog(--gs-z:130/70)
+                                     > .gs-plate(材质板) / .gs-panel(可见面) > .gs-dialog-body > .settle-day
+```
+
+- `.settle-overlay` **整个删掉**（遮罩由 `GlassModal` 的 `layerPrefix` 画成材质板的兄弟）；
+- `.settle-panel` 这个类**保留**，但改挂在**玻璃根节点**上（`className="settle-panel"`），
+  只作样式钩子 —— 它的背景/描边/宽度/圆角/限高全部作废（留着会叠一层实色把材质盖死）；
+- 限高改用 `.gs-dialog-body` 的 `calc(min(100svh, var(--app-height,100dvh)) - 96px)`
+  （与其余弹窗同一口径，删掉了旧的 `max-height: min(84vh, 760px)` 与手机档 `88vh`）；
+- `.settle-day` 的 `overflow: auto` **去掉**（滚动交给外层 `.gs-dialog-body`，
+  两层滚动容器会打架）；`.settle-panel` 与 `.settle-day` 都补 `min-height: 0`
+  （flex 列里不写它，子项不会收缩、限高失效）。
+
+### 二、判据更正：弹窗不能用保留率（≤0.2）
+
+第一版探针照搬了 dock/气泡的保留率口径（`std(开)/std(关) ≤ 0.2`），读数 **0.305 / 0.45**，
+被判 dead。但**这是口径错了，不是材质死了**，证据有三条：
+
+1. 把遮罩整个 `display:none` 之后，同一块材质板的开/关两张**逐位相同**（0.305/0.45 一动不动）
+   ⇒ 那个比值量的是"（遮罩 + 页面）vs（材质 + 遮罩 + 页面）"，不是材质本身；
+2. 遮罩的默认 20px 虚化把**参照系**（面板以外的页面）先糊了一道，两边一起掉对比度、比值被抬高
+   —— 这正是 `glass-material-probe.mjs` 专门有「弹窗 · 遮罩不虚化」一组的理由；
+3. 换成与其余 **7 个弹窗完全同一支判据**（`glass-material-judge.py` 的 Δmean + grad）后，
+   结果好得很 —— 见下面第三点。
+
+⇒ **弹窗的材质可见度用 Δmean + grad 判，保留率只作参考（不进退出码）。**
+`scripts/settle-panel-glass.mjs` 只负责几何/结构/耗时并把两组 PNG + 采样盒写成 `cases.json`，
+Δmean 的判读交给**同一支** `glass-material-judge.py`（同一个数字不写第二遍）。
+
+### 三、实测
+
+| 指标 | fallback | chromium |
+| --- | --- | --- |
+| **Δmean**（材质开 vs 关，阈值 ≥0.8） | **35.27 ✅ 可见** | **32.68 ✅ 可见** |
+| 变化像素 | 80.6% | 80.7% |
+| grad（开 / 关） | 2.12 / 5.46 ⇒ **已糊化** | 2.05 / 5.48 ⇒ **已糊化** |
+| 保留率（参考） | 0.305 | 0.45 |
+| 材质板 / 可见面 | 294×748 逐边重合 | 294×748 逐边重合 |
+| 祖先链合成面 | 无 ✓ | 无 ✓ |
+| 旧结构 `.settle-overlay` | 已消失 ✓ | 已消失 ✓ |
+| **打开耗时** | **6.2 ms** | **15.7 ms** |
+
+对照：其余弹窗的 Δmean 是 7.75 / 8.05（正文）与 3.25（事件表单）。日结面板读到 35 是因为
+它的材质板面积大得多（294×748 ≈ 22 万 px²，其余弹窗 ~420×381），贡献的材质面积更多。
+
+**打开耗时**（R3-E 的要求）：standard/fallback 档下 **6~17 ms**，远在预算（1200ms）之内。
+`shader` 档的 ~1.3 秒/层代价已如实写进 `SettlePanel.tsx` 的头部注释 —— 用户已裁定不用该档，
+若将来真的启用，正确处置是**在那一档降级为不玻璃化**，而不是撤掉功能。
+
+限高实测（`--app-height` 与视口一致时）：844 视口 → 面板体 748（= 844 − 96）；
+600 视口 → 504（= 600 − 96）。两档都能滚、头部钉住。
+
+### 四、改了哪些文件
+
+- `src/renderer/src/components/money/SettlePanel.tsx`：外壳换成 `GlassModal` + `useClosing`；
+  头部注释从"面板刻意不玻璃化"改写为玻璃化说明（含 shader 档代价）。
+- `src/renderer/src/styles/theme.css`：删 `.settle-overlay`；`.settle-panel` 改为玻璃根节点的
+  样式钩子（列布局 + `min-height:0`，去掉实色/描边/宽度/圆角/限高）；`.settle-day` 去掉 `overflow`、
+  补 `min-height:0`；手机档把旧的 `padding:12px` / `max-height:88vh` 换成内边距收紧
+  （`.settle-head` / `.settle-day`）。
+- `scripts/settle-panel-glass.mjs`（**新增**）：R3-E 专属探针（结构 / 耗时 / cases.json）。
+
+### 五、验收
+
+- `settle-panel-glass.mjs`：两档结构全绿，退出码 0。
+- `glass-material-judge.py docs/probes/settle-panel`：两档 **✅ 材质可见 · 且已糊化**。
+- `liquid-glass-probe.mjs`：**39/39**。
+- `glass-material-probe.mjs` + judge（其余 7 处宿主回归）：全绿，无一退化。
+- `quadrant-bubble-glass.mjs`（R3-D 回归）：两档仍活。
+- 单元测试 **524/524**；`verify-integrity.mjs` 25 pass / 0 fail（1 条既有的临时文件警告）。
+- `tsc --noEmit -p tsconfig.web.json` 退出码 0。
+- 生产构建（`dist-web`）：CSS 里 `.settle-overlay` **已消失**、`.settle-day` / `.gs-layer--dialog` 仍在；
+  JS 里 `settle-overlay` 计数为 0。
+
+### 六、探针踩到的坑（写给下一个写探针的人）
+
+- ⭐ **播种要种对 `enabledAt`，否则面板落在别的日子上**。`ensureLedgerDays` 会把
+  `[windowStart, today)` 的**每一天**都物化出来（空日子也补），而面板永远结算**最早**的那一天。
+  窗口下界 = `max(today − 7, enabledAt)` ⇒ 把 `enabledAt` 种在 8 天前会开出整整 7 天窗口，
+  面板落在 7 天前那个空日子上（`hasPlan` 为假 ⇒ 走"没有安排计划"分支），
+  **种下的「写周报」根本不出现**。种成昨天才是对的。探针里加了一条断言钉它
+  （`seededRowVisible`：面板正文里必须有「写周报」）。
+- ⭐ **judge 读 `cases.json`（不是 `manifest.json`），且 `name`/`ref` 要带 `.png`**：
+  `load()` 直接 `Image.open(out / name)`，不替你补扩展名。踩了两轮才对齐。
+- ⭐ **覆盖 `--gs-mask-blur` 必须带 `!important`**：它定义在 glass.css 的 `:root` 上，
+  而 Vite dev 注入的样式表排在探针注入的 `<style>` **之后**，同权重按源序后者胜 ⇒
+  不带 `!important` 时覆盖静默失效（踩过：读数一动不动）。
 

@@ -3450,25 +3450,25 @@ body {
   color: var(--text-secondary);
 }
 
-.settle-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 130;
-  display: grid;
-  place-items: center;
-  padding: 24px;
-  background: rgba(0, 0, 0, 0.5);
-}
-
+/*
+ * 日结面板已玻璃化（R3-E，2026-10-03）：`.settle-overlay`（旧 `fixed + z-index:130` 的
+ * 遮罩祖先）与 `.settle-panel`（旧实色面板）两个元素都不再存在 —— 它们分别被
+ * `GlassModal` 的 `.modal-mask`（材质板的兄弟）与玻璃内容层接管。
+ *
+ * `.settle-panel` 这个类仍会挂到**玻璃根节点**上（`GlassModal` 的 `className`），
+ * 但只作为「这是日结」的钩子；它的旧壳属性（背景/描边/宽度/圆角/限高）全部作废、
+ * 由玻璃层与 `.gs-dialog-body` 提供 —— 留在这里会叠一层实色面板把材质盖死。
+ *
+ * ⚠️ 旧值是 `max-height: min(84vh, 760px)`。玻璃版的限高改用
+ * `.gs-dialog-body` 的 `calc(min(100svh, var(--app-height,100dvh)) - 96px)`
+ * （`selectDay` 的既有口径，见 glass.css §七），不再需要这里另写一个数。
+ */
 .settle-panel {
   display: flex;
   flex-direction: column;
-  width: min(600px, 100%);
-  max-height: min(84vh, 760px);
-  overflow: hidden;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  /* 玻璃内容层本身就是这个 flex 列；让它撑满可用高度以便内部分段滚动。 */
+  width: 100%;
+  min-height: 0;
 }
 
 .settle-head {
@@ -3512,12 +3512,19 @@ body {
   cursor: pointer;
 }
 
+/*
+ * `DayForm` 生成的主体。玻璃化前它自己是滚动区（`overflow: auto`），
+ * 现在**滚动交给外层的 `.gs-dialog-body`**（`GlassModal` 统一给的限高滚动区）——
+ * 两层滚动容器会打架（内层滚动时外层不动、滚轮被吃掉）。
+ * 故这里只保留排版，`overflow` 放开。头部固定、主体滚动的效果由
+ * `.settle-panel`（flex 列）+ `.gs-dialog-body`（限高 overflow）共同给出：
+ * `.settle-head` 是 flex 的非滚动项，`.settle-day` 撑满剩余并随外层一起滚。
+ */
 .settle-day {
   display: flex;
   flex-direction: column;
   gap: 18px;
   padding: 18px 20px 20px;
-  overflow: auto;
 }
 
 .settle-section {
@@ -3895,12 +3902,17 @@ body {
     margin: calc(14px + var(--safe-top)) 20px 0;
   }
 
-  .settle-overlay {
-    padding: 12px;
+  /*
+   * 旧的 `.settle-overlay{padding:12px}` 与 `.settle-panel{max-height:88vh}` 随玻璃化作废：
+   * 遮罩由 `GlassModal` 铺满、限高由 `.gs-dialog-body` 统一给（两处的口径见 glass.css §七）。
+   * 这里只保留手机档特有的**内边距收紧**（窄屏上 20px 太奢侈）。
+   */
+  .settle-head {
+    padding: 14px 16px 12px;
   }
 
-  .settle-panel {
-    max-height: 88vh;
+  .settle-day {
+    padding: 14px 16px 16px;
   }
 
   .settle-row {

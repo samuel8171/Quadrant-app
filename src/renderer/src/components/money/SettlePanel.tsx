@@ -1,4 +1,6 @@
 import { useMemo, useState } from 'react'
+import { useClosing } from '../../hooks/useClosing'
+import GlassModal from '../glass/GlassModal'
 import type {
   LedgerDay,
   LedgerEntry,
@@ -39,9 +41,17 @@ import MoneyIcon from './MoneyIcon'
  * 只挑最新会让更旧的那个永远选不中、把它所在的那一周永久堵死。判定住在
  * `openNightsBefore`（shared 纯函数），面板只负责逐条渲染与逐条清理。
  *
- * 面板**不玻璃化**（不加 `.gs-*`、不加 `backdrop-filter`）：普通面板色 + `var(--border)`
- * 已经够用，而每新增一个玻璃材质宿主都要重新满足「祖先链上不能有 fixed / sticky /
- * 非 auto 的 z-index」这条约束，本项目为此返工过多次（见 spec 12.4）。
+ * **玻璃化（R3-E，2026-10-03）**：它现在走 `GlassModal`，与其余 7 个弹窗同一条路径 ——
+ * `.settle-overlay` 从「包住面板的祖先」降级成材质板的**兄弟**（`layerPrefix` 的遮罩），
+ * `.settle-panel` 成为玻璃的内容层。这在结构上是**必须**的，不是审美选择：
+ * 材质板往上到 body 的祖先链上不能有合成面（`fixed` / 非 auto 的 `z-index`），
+ * 而旧的 `.settle-overlay` 正好是 `fixed + z-index:130` —— 直接套玻璃只会得到一层染色。
+ * 详见 `GlassModal.tsx` 文件头与 glass.css §四。
+ *
+ * ⚠️ **代价已如实记在此处**：`shader` 档每开一层材质约卡主线程 1.3 秒（standard 档为 0）。
+ * 本面板是**每天开一次**的高频宿主，用户已裁定不用 `shader` 档（spec §10.2 已更正）。
+ * 若将来真有人在 `shader` 档下使用，正确处置是**在这一档降级为不玻璃化**，而不是撤掉功能 ——
+ * 功能永远优先于材质。
  *
  * **无计划之日另给两条路**（spec R2 §4.3）：这类日子不显示「那天我什么都没做」，
  * 而是给「休息日（固定扣 64）」与「去这一天的时间轴补计划」两个按钮（见 `DayForm` 的
@@ -745,6 +755,7 @@ export default function SettlePanel({ onClose, onOpenDay }: Props): JSX.Element 
   const money = useAppStore((s) => s.data.money)
   const weekEvents = useAppStore((s) => s.data.weekEvents)
   const today = dateKey(new Date())
+  const { closing, close } = useClosing(onClose)
 
   const pending = useMemo(
     () => (money?.enabled === true ? pendingDays(money, today) : []),
@@ -764,36 +775,51 @@ export default function SettlePanel({ onClose, onOpenDay }: Props): JSX.Element 
 
   const handleCommitted = (): void => {
     const fresh = useAppStore.getState().data.money
-    if (!fresh || fresh.enabled !== true || pendingDays(fresh, today).length === 0) onClose()
+    if (!fresh || fresh.enabled !== true || pendingDays(fresh, today).length === 0) close()
   }
 
+  /*
+   * 走 `GlassModal`：遮罩（原 `.settle-overlay`）由组件画成材质板的**兄弟**，
+   * 面板内容（原 `.settle-panel`）成为玻璃的内容层。内容层的**限高滚动**由
+   * `.gs-dialog-body` 统一负责（`calc(min(100svh, var(--app-height,100dvh)) - 96px)`），
+   * 所以旧的 `.settle-panel{max-height:…}` 已交给它 —— 但 .settle-panel 的
+   * **列布局与内部分段滚动**仍要靠它自己（见 theme.css）。
+   *
+   * 内容宽 600px 与原 `.settle-panel` 的 `min(600px, 100%)` 对齐；玻璃版内边距 24px，
+   * 故内容宽按 600 直接给（玻璃的 padding 在内容层**外面**那一层，不影响内容宽）。
+   * `calc(100vw - 96px)` 兜住窄屏（与其余弹窗一致）。
+   */
   return (
-    <div className="settle-overlay" role="dialog" aria-modal="true" aria-label="日结">
-      <div className="settle-panel">
-        <header className="settle-head">
-          <div className="settle-head-text">
-            <h2 className="settle-title">日结</h2>
-            <p className="settle-sub">
-              待结算 {pending.length} 天 · 正在结算 {date}
-            </p>
-          </div>
-          <button type="button" className="settle-close" onClick={onClose} aria-label="关闭日结">
-            ×
-          </button>
-        </header>
-        <DayForm
-          key={date}
-          date={date}
-          day={day}
-          events={events}
-          config={money.config}
-          openNights={openNights}
-          carriedLatePhone={carriedLatePhone}
-          total={pending.length}
-          onCommitted={handleCommitted}
-          onOpenDay={onOpenDay}
-        />
-      </div>
-    </div>
+    <GlassModal
+      closing={closing}
+      onMaskClick={close}
+      className="settle-panel"
+      contentWidth="min(600px, calc(100vw - 96px))"
+      padding="0px"
+    >
+      <header className="settle-head">
+        <div className="settle-head-text">
+          <h2 className="settle-title">日结</h2>
+          <p className="settle-sub">
+            待结算 {pending.length} 天 · 正在结算 {date}
+          </p>
+        </div>
+        <button type="button" className="settle-close" onClick={close} aria-label="关闭日结">
+          ×
+        </button>
+      </header>
+      <DayForm
+        key={date}
+        date={date}
+        day={day}
+        events={events}
+        config={money.config}
+        openNights={openNights}
+        carriedLatePhone={carriedLatePhone}
+        total={pending.length}
+        onCommitted={handleCommitted}
+        onOpenDay={onOpenDay}
+      />
+    </GlassModal>
   )
 }
