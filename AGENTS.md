@@ -211,11 +211,18 @@ node scripts/verify-integrity.mjs --appdata <dir>  # 覆盖数据目录（默认
   恰恰一直在替应用挡着上面这个 `url()` 缺陷 —— 本轮把它"修活"，当天桌面端就白了。
   同理 **"文档里写了断言"≠"脚本里有断言"**：那条 `url(` 断言只写在 `docs/probes/liquid-glass.md`
   的表里，脚本里从来没有，所以坏了很久没人发现。
-- ⭐ **`fixed` / 非 auto 的 `z-index` 出现在材质板到 body 之间的任一祖先上，材质就只剩染色**
-  （2026-09-27 第十七轮，桌面端 + 网页端同时复现）。第十五轮为修手机端"面板与洞错位"加的
-  `.gs-viewport{position:fixed;z-index:70}` 正踩这条 ⇒ **弹窗整块透明、身后文字原样可读**，
-  持续两天没人发现 —— 因为菜单（无 fixed 祖先）正常、降级档（不渲染库那棵含 `mix-blend-mode`
-  的子树，缺一半前提）也正常，**只有 chromium 档发病**。修法：`absolute` + 去掉 z-index。
+- ⭐ **`fixed` / `sticky` / 非 auto 的 `z-index` / `transform`（含恒等矩阵！）出现在材质板到
+  `body` 之间的任一祖先上，材质就只剩染色**（2026-09-27 第十七轮 + 2026-10-03 R3-D 补 `transform`）。
+  第十七轮：第十五轮为修手机端"面板与洞错位"加的 `.gs-viewport{position:fixed;z-index:70}`
+  正踩这条 ⇒ **弹窗整块透明、身后文字原样可读**，持续两天没人发现 —— 因为菜单（无 fixed 祖先）正常、
+  降级档（不渲染库那棵含 `mix-blend-mode` 的子树，缺一半前提）也正常，**只有 chromium 档发病**。
+  修法：`absolute` + 去掉 z-index。
+  R3-D 补入 `transform`：此前清单里只有前三项，`transform` 被当成无害。实测（同一组条纹、
+  同一块材质板、只动 `.event-layer` 的 transform）：真实 `translate+scale` → 保留率 0.659；
+  **恒等 `matrix(1,0,0,1,0,0)` → 同样 0.659**；属性整个移除 → 0.111 活。
+  ⭐ **关键在第二行：与数值无关，只要该属性被声明就致病。**
+  ⇒ 带 `transform` 的容器（本项目里是 `.event-layer`）和 `.sidebar`（`fixed`）一样是玻璃宿主的
+  **禁区**，宿主必须挂到它的**兄弟**位置。层级统一走 `--gs-z`，不要写成定位层自己的 `z-index`。
   第七轮记的"更外层祖先不影响"**已作废**（那是另一套结构下的读数）。
   排查时**从材质板一路走到 `documentElement`**，别只看定位层自己。
   回归守门已进 `scripts/liquid-glass-probe.mjs`（祖先链断言 + 弹窗材质保留率 < 0.35，共 36 项）。
@@ -223,9 +230,25 @@ node scripts/verify-integrity.mjs --appdata <dir>  # 覆盖数据目录（默认
   两张、算 `std(开)/std(关)`。**≈0.66 = 1 − 染色 0.34 ⇒ 只剩染色（死）**；≤0.2 才算活。
   两个反向教训：① 染色本身就会产生大量像素差，所以"材质开/关像素差 > 0"抓不出这个缺陷；
   ② 条纹插在**同一层里**只证明"材质板能糊自己这一面"，证明不了它能糊身后的页面（手机 dock 就栽在这条）。
+- ⭐ **但保留率对"带遮罩的弹窗"无效**（2026-10-03 R3-E）：遮罩重塑了采样参照 ——
+  它量的是"遮罩 + 页面 vs 材质 + 遮罩 + 页面"。实测把遮罩设成 `display:none` 后
+  开/关两张图**逐位相同**，说明这个口径在弹窗上根本没有分辨力。
+  弹窗一律改用 **Δmean + grad**（`glass-material-judge.py` 的既有门槛：
+  `Δmean < 0.35 ⇒ 空心`、`< 0.8 ⇒ 极弱`、否则可见；`grad(开) < grad(关)·0.98 ⇒ 已糊化`），
+  并把 `--gs-mask-blur` 覆写成 0 再量（要让覆写生效必须加 `!important`：
+  它定义在 `glass.css` 的 `:root` 上，而 Vite dev 注入的样式表排在探针注入的 `<style>` **之后**，
+  同权重下源序会静默吃掉覆写）。保留率此时只作参考值贴出来。
+- ⭐ **`.gs-layer` 基类带 `inset: 0`**：给某个层写 `left/right/bottom/height` 定位时
+  **必须补 `top: auto`**，否则 `top: 0` 赢过 `bottom`，整层被钉在包含块顶部。
+  症状**极具误导性**：几何错位只让保留率从 0.029 变成 **0.617**，看着像"染色浓度不对"。
+  ⇒ **先确认采样盒落在正确位置，再谈浓度**（量之前先打一份 `getBoundingClientRect`）。
 - ⭐ **手机 dock 的材质是"无害的死"**：它挂在 `aside.sidebar`（手机档 fixed + z100）里，
   而 sidebar 的底色是**不透明**的 `rgb(26,29,35)` —— 身后本来没有可糊的东西，保不保留观感相同。
   祖先链断言里给它留了例外，别再顺手去"修"。
+  ⭐ **2026-10-03 R2-K2 已修**：玻璃层从 `aside.sidebar` 里**搬到 `.app` 的直接子节点**
+  （与 `<aside class="sidebar">` 平级、排在它之前），祖先链变成 `.app → body → html`，
+  **两档都活**（fallback 0.029 / chromium 0.05）。真源在 `components/glass/DockGlass.tsx`。
+  ⇒ **"往 `.sidebar` 里塞浮层"从那天起是禁区。**
 - ⭐ **iOS standalone 下"布局视口 ≠ 屏幕"，浮层盒子别用 `inset: 0`**（2026-09-27 第十八轮）：
   布局视口（＝`position: absolute` 的初始包含块）比**屏幕**矮一个状态栏安全区
   （本项目实测 iPhone 14 Pro：793 vs 852，差 59px）。于是 `inset: 0` 的弹窗遮罩
