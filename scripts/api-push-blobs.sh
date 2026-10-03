@@ -18,15 +18,30 @@ GH_TOKEN=$(printf 'protocol=https\nhost=github.com\n\n' \
 [ -n "$GH_TOKEN" ] || { echo "❌ 取不到 token"; exit 1; }
 export GH_TOKEN
 
-git diff-tree -r --no-commit-id --name-only "$BASE" HEAD > "$OUT/changed.txt"
+# ⚠️ 收集范围不能用 `git diff-tree BASE HEAD`：那只覆盖"首尾差异"。
+#    中间提交如果**新增过又删掉了**某个文件（本项目典型：mine/BalanceWidget.tsx
+#    在 78dcb19 新增、后来又改过），它的旧版本 blob 不在首尾差异里，但构建那条
+#    中间提交的树时需要它 ⇒ 报 `tree.sha ... is not a valid blob`（422）。
+#    所以改成：**待推范围内所有提交引用到的 (blob, path) 对**。
+#    另外同一路径会有多个版本（同一个路径的新旧 blob），必须**全部**推送，
+#    不能只挑一个 —— 那正是本次卡住的第二个原因。
+: > "$OUT/pairs.txt"
+git rev-list "$BASE"..HEAD \
+  | while read -r c; do git ls-tree -r "$c" --format='%(objectname) %(path)'; done \
+  | sort -u > "$OUT/pairs.txt"
+
 : > "$OUT/blobs.tsv"
-while read -r path; do
-  [ -n "$path" ] || continue
-  [ "$(git cat-file -t "HEAD:$path" 2>/dev/null || echo none)" = "blob" ] || continue
-  sha=$(git rev-parse "HEAD:$path")
+seen_sha="$OUT/.seen_sha"
+: > "$seen_sha"
+while read -r sha path; do
+  [ -n "$sha" ] && [ -n "$path" ] || continue
+  [ "$(git cat-file -t "$sha" 2>/dev/null || echo none)" = "blob" ] || continue
+  # 同一个 blob 可能在多个路径出现 ⇒ 去重，避免重复 POST。
+  grep -qxF "$sha" "$seen_sha" && continue
+  echo "$sha" >> "$seen_sha"
   printf '%s\t%s\n' "$sha" "$path" >> "$OUT/blobs.tsv"
   git cat-file blob "$sha" | base64 -w0 > "$OUT/blobs/$sha.b64"
-done < "$OUT/changed.txt"
+done < "$OUT/pairs.txt"
 
 echo "差异集：$(wc -l < "$OUT/blobs.tsv") 个 blob（基准 $BASE → HEAD）"
 "$PY" scripts/api-push-blobs.py "$OUT"

@@ -23,9 +23,15 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-OWNER, REPO, BRANCH = "samuel8171", "Quadrant-app", "main"
+OWNER, REPO = "samuel8171", "Quadrant-app"
 API = "https://api.github.com"
 D = Path(sys.argv[1] if len(sys.argv) > 1 else "tmp/pushdiag")
+# 目标分支：默认 main，可用环境变量覆盖（首次推一个新分支时用）。
+BRANCH = os.environ.get("PUSH_BRANCH", "main")
+# 已存在的远端分支顶点（可为空 —— 首次推新分支时 branch 还不存在）。
+# 它同时充当「孤儿保活提交」的 parent 与提交链的初始 parent。
+# 首次推新分支时这里应当是**本地基准提交**（与远端 main 树等价的那个）。
+remote = ""
 
 
 def tok():
@@ -93,36 +99,124 @@ def parse_ls_tree(p):
     return out
 
 
+def plan_from_lstree(binp, root_tree):
+    """由**单个提交**的 `ls-tree -r -t -z` 输出，重建它引用的每一棵树。
+
+    返回 [(treePath, treeSha, kids)]，其中 treePath 为 "" 表示该提交的根树。
+    kids 是该树的**直接**子项（路径不含 `/`），已按 git 的树条目序排好。
+    """
+    objs = parse_ls_tree(binp)
+    subs = [(p, v) for p, v in objs.items() if v[1] == "tree"]
+    subs.append(("", ("040000", "tree", root_tree)))
+    # 计算每个路径的"直接父路径"，用来把每个子项归到它所属的那棵树。
+    #   一条记录 `p` 属于树 `T` ⟺ T 是 p 去掉最后一段后的前缀，且 / 分界。
+    def parent_of(path):
+        i = path.rfind("/")
+        return path[:i] if i >= 0 else ""
+
+    out = []
+    for tpath, (mode, typ, sha) in subs:
+        kids = []
+        prefix = tpath + "/" if tpath else ""
+        for p, (m, ty, s) in objs.items():
+            if not p.startswith(prefix):
+                continue
+            rest = p[len(prefix):]
+            # rest 里不含 `/` ⇒ 它是这棵树的直接子项。
+            # 但前缀匹配有歧义风险（`a/bc` 以 `a/b` 开头却不同级），
+            # 所以再用 parent_of 精确校验一次。
+            if "/" in rest or parent_of(p) != tpath:
+                continue
+            kids.append({"path": rest, "mode": m, "type": ty, "sha": s})
+        out.append((tpath, sha, git_tree_sort(kids)))
+    return out
+
+
 def git_tree_sort(entries):
     """git 的 tree 条目序：按名字原始字节升序，子树视作 `名字/`。"""
     return sorted(entries, key=lambda e: (e["path"] + ("/" if e["type"] == "tree" else "")).encode("utf-8"))
 
 
+def ensure_ref(sha):
+    """把目标分支 ref 指向 sha（已存在则 PATCH，不存在则 POST 新建）。
+
+    ⭐ 这是"树可读"的必要条件：只有从某个 ref 可达的树，GET /git/trees/<sha> 才返回 200。
+    """
+    code, text = api(
+        f"/repos/{OWNER}/{REPO}/git/refs/heads/{BRANCH}",
+        method="PATCH",
+        body={"sha": sha, "force": True},
+    )
+    if code == 200:
+        return
+    code2, text2 = api(
+        f"/repos/{OWNER}/{REPO}/git/refs",
+        method="POST",
+        body={"ref": f"refs/heads/{BRANCH}", "sha": sha},
+    )
+    if code2 != 201:
+        print(f"❌ 建/推 ref {BRANCH} → PATCH {code} / POST {code2}\n   {text[:200]}\n   {text2[:200]}")
+        sys.exit(1)
+
+
 def main():
-    objs = parse_ls_tree(D / "ls-tree.bin")
+    global remote
     head = (D / "head.txt").read_text().strip()
     remote = (D / "remote.txt").read_text().strip()
+    if not remote:
+        # 首次推这个分支：远端还没有顶点。用**远端已存在的父提交**作为挂载点，
+        # 保证新分支是接在既有历史上、而不是一棵无根的历史。
+        base = os.environ.get("PUSH_BASE", "")
+        if not base:
+            sys.exit("remote.txt 为空且未设 PUSH_BASE —— 无法确定新分支的挂载点")
+        remote = base
+        print(f"（远端分支不存在，用 PUSH_BASE={base[:8]} 作为挂载点）")
 
-    # 每棵树的路径（-r -t 会列出所有子树及其完整路径）
-    trees = [(p, v) for p, v in objs.items() if v[1] == "tree"]
-    trees.append(("", ("040000", "tree", (D / "head-tree.txt").read_text().strip())))
-    # 直接子项：全局清单里以 `<treePath>/` 开头、且其后不再有 `/` 的项
-    by_path = objs
+    # ⭐ 逐提交重建每棵树（含各自的根树）。
+    #   为什么要逐提交、而不是把 ls-tree 合并成一个大字典：
+    #   **根树没有路径**，它的直接子项就是该提交的顶层路径。一旦把多个提交的
+    #   ls-tree 混进一个字典，"某棵根树有哪些子项"就无法还原（字典里是并集）。
+    #   而且中间提交引用的树可能根本不在 HEAD 的树里（旧目录、内容不同的同名子树），
+    #   只按 HEAD 建树 ⇒ 第一个中间提交就报 "Tree SHA does not exist"。
     plan = []
-    for tpath, (mode, typ, sha) in trees:
-        prefix = tpath + "/" if tpath else ""
-        kids = []
-        for p, (m, ty, s) in by_path.items():
-            if not p.startswith(prefix):
+    seen = set()
+    order = [l.strip() for l in (D / "order.txt").read_text().splitlines() if l.strip()]
+    for csha in order:
+        binp = D / "trees" / f"{csha}.bin"
+        if not binp.exists():
+            continue
+        # 该提交的根树（从提交原文的 `tree ` 行取）
+        ctree = None
+        for l in (D / f"commits/{csha}.raw").read_bytes().split(b"\n\n")[0].decode().splitlines():
+            if l.startswith("tree "):
+                ctree = l[5:].strip()
+        for tpath, sha, kids in plan_from_lstree(binp, ctree):
+            key = (tpath, sha)
+            if key in seen:
                 continue
-            rest = p[len(prefix):]
-            if "/" in rest:
-                continue
-            kids.append({"path": rest, "mode": m, "type": ty, "sha": s})
-        plan.append({"path": tpath, "sha": sha, "kids": git_tree_sort(kids)})
+            seen.add(key)
+            plan.append({"path": tpath, "sha": sha, "kids": kids})
+    # 排序：深的先建（子树必须先于父树存在）
     plan.sort(key=lambda t: (0 if t["path"] == "" else t["path"].count("/") + 1), reverse=True)
 
-    print(f"本地 trees：{len(plan)} 棵；HEAD {head[:8]}；远端顶点 {remote[:8]}")
+    print(f"本地 trees：{len(plan)} 棵（跨 {len(order)} 个提交）；HEAD {head[:8]}；远端顶点 {remote[:8]}")
+
+    # 先把目标分支 ref 建/推到挂载点 remote，之后每建一棵树就用一次「保活提交 + 推进 ref」。
+    # ⭐ 2026-10-03 实测更正（本次首次推一个**全新分支**时挖出来的）：
+    #   旧注释说"未被任何提交引用的树读 404" —— 只说对了一半。真正的判据是
+    #   **"树必须从某个 ref 可达"**：仅被一个**孤儿提交**（自身不进任何 ref）引用的树，
+    #   读回来**同样是 404**。证据链（同一棵 4a039029）：
+    #     · POST /git/trees → 201，且响应体里 5 个 blob 条目齐全；
+    #     · GET  /git/trees/4a039029 → 404（多次重试、等 5s 都一样）；
+    #     · POST /git/commits 引用它 → 201；
+    #     · GET  /git/trees/4a039029 → **仍 404**；
+    #     · POST /git/refs 让一个分支指向那个提交 → **立刻 200**。
+    #   ⇒ 所以每次建完树，要建的"保活提交"必须**立刻被 ref 指到**。
+    #   旧脚本之所以一直没暴露这条，是因为它推的都是**已存在的分支**：
+    #   建完树后提交链一路建下去、最后 PATCH ref，等 ref 一到位那些树就都活了 ——
+    #   而中途"提交引用树"那一步依赖的正是**父树**，父树又依赖子树，于是只有
+    #   **全新的、远端一棵都没有的子树**才会在建父树时炸出来（本次是 components/glass）。
+    ensure_ref(remote)
     created = skipped = 0
     for t in plan:
         if not t["kids"]:
@@ -141,15 +235,10 @@ def main():
             sys.exit(1)
         created += 1
         print(f"  ✓ 建树 {t['path'] or '<root>'} {got[:8]}（{len(t['kids'])} 条）")
-        # ⭐ 关键一步：立刻用一个**孤儿提交**把这个树变成 reachable。
-        #   为什么必须这么做（2026-09-25 实测）：
-        #     · API 建的树**能被提交引用**（POST /git/commits 返回 201），
-        #     · 但 GitHub 校验「父树的子项」时走的是"按 sha 读树"这条读路径，
-        #       对**未被任何提交引用**的树返回 404 ⇒ 父树报
-        #       `tree.sha X is not a valid tree`（422），于是整条链建不起来。
-        #     · 而 blob 的读路径是可靠的（未引用的 blob 也 GET 200），
-        #       所以只有"树套树"会踩到。
-        #   孤儿提交不进任何分支，GitHub 之后会回收，安全。
+        # ⭐ 保活：建一个引用这棵树的提交，并**立刻把分支 ref 推过去**，
+        #   让这棵树进入"从 ref 可达"的对象图（这才是可读的充要条件）。
+        #   这些提交是临时的：整条正式提交链建完之后，ref 会被推到真正的顶点，
+        #   它们就自然变成不可达对象，GitHub 之后回收。
         rc, rt = api_retry(
             f"/repos/{OWNER}/{REPO}/git/commits",
             method="POST",
@@ -162,6 +251,7 @@ def main():
         if rc != 201:
             print(f"❌ 让树 reachable 失败（{t['path'] or '<root>'}）→ {rc}\n   {rt[:300]}")
             sys.exit(1)
+        ensure_ref(json.loads(rt)["sha"])
     print(f"建树完成：新建 {created}，远端已有 {skipped}")
 
     # 提交：按 order.txt 顺序，parent 依次串起来，元数据逐字节复刻
@@ -208,15 +298,13 @@ def main():
         print(f"  {ok} 提交 {got[:8]}（本地 {sha[:8]}）parent={parent[:8]}")
         parent = got
 
-    code, text = api(
-        f"/repos/{OWNER}/{REPO}/git/refs/heads/{BRANCH}",
-        method="PATCH",
-        body={"sha": parent, "force": False},
-    )
-    if code != 200:
-        print(f"❌ 更新 ref → {code}\n   {text[:400]}")
-        sys.exit(1)
-    print(f"\n✅ {BRANCH} 已更新到 {parent[:8]}（本地 HEAD {head[:8]}）")
+    # 最后把 ref 推到真正的顶点。此前 ref 一直被保活提交推着走，
+    # 这一步之后那些临时提交就不可达了（GitHub 回收），历史只剩正式提交链。
+    ensure_ref(parent)
+    ok = "✅" if parent == head else "⚠️"
+    print(f"\n{ok} {BRANCH} → {parent[:8]}（本地 HEAD {head[:8]}）")
+    if parent != head:
+        print("   ⚠️ 远端顶点与本地 HEAD 的 sha 不一致：远端历史与本地不同（元数据差异所致）")
 
 
 if __name__ == "__main__":
