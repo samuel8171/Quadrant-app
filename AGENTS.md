@@ -29,7 +29,12 @@
 
 ## git 操作（沙箱限制）
 
-- **推送必须走 `bash scripts/api-push.sh`，不要用 `git push`。** 本机 git-over-HTTPS 通道已废：直连 `github.com:443` 不通，配置代理 `127.0.0.1:7897` 是死端口，环境变量代理 `127.0.0.1:14829` 只扛得住 `ls-remote`（小请求 200 / 0.6s），push 几 MB 会 `schannel: server closed abruptly` 或 `CONNECT tunnel failed, response 502`。`api.github.com` 直连稳定，故改用 Git Data API。
+- ⭐ **先探一次代理，通了就用 `git push`；不通才走 REST 备胎。** 这条 2026-10-03 被实测推翻过一次，**别再照抄"本机一定不通"**：
+  - `git -c http.proxy=http://127.0.0.1:7897 push` **可以成功**，且 **远端 sha 与本地逐字节一致**（REST 路线很难做到，它建的提交身份/时间/父提交都不同）。
+  - 环境变量里注入的 `127.0.0.1:12039`（旧文档写的 `14829`）是**死端口**；`7897` 活不活取决于**当时有没有开着 VPN / 系统代理**。
+  - 探法：`git -c http.proxy=http://127.0.0.1:7897 ls-remote --heads origin`，0.5 秒内有输出就是通。
+  - 首推一个远端已存在分歧历史的分支会 `(fetch first)` 被拒；确认远端那个 tip 只是"保活"垃圾提交后 `--force` / `--force-with-lease=refs/heads/<b>:<expected-sha>` 覆盖。
+- **REST 备胎（代理不通时）**：`bash scripts/api-push-blobs.sh` + `bash scripts/api-push-trees.sh`（各约 1~2 分钟，后台跑）。见下方"第十四轮订正"整段。
 
   > ⚠️ **2026-09-26 第十四轮订正：`scripts/api-push.sh` 不可靠，实战走下面这套两步。**
   >
@@ -71,6 +76,26 @@
     而项目在 React 18.3.1 ⇒ 干净环境里 `npm ci` 直接 ERESOLVE 失败（**网页端部署从
     2026-09-24 起一直失败的真因**）。本地 `node_modules` 已存在所以看不出来。
     已在仓库根用 `.npmrc` 的 `legacy-peer-deps=true` 固化。**改依赖后先想这条。**
+    自检：`npm ci --dry-run`（本地有 `node_modules` 时唯一能提前发现的办法）。
+  - ⭐ **2026-10-03 第十七轮订正 · 上面"坑 7 + reset --soft 合成一个提交"的做法已被脚本内部消化**：
+    `scripts/api-push-trees.py` 现在**逐提交重建整棵树**（不再是只走 HEAD 那棵），并在
+    **每建一棵树后立刻 `PATCH` 分支 ref 指向一个自带该树的临时提交**让它 reachable
+    （`ensure_ref()`：PATCH 失败则 POST 新建 ref）。三处新缺陷：
+    1. **树的可达性需要 ref，不只是 commit**：被孤立 commit 引用过的树，`GET /git/trees/<sha>`
+       **仍然 404**（实测：POST 201 → GET 404 → POST commit 引用它 → GET **仍 404** →
+       `POST /git/refs` 建分支指向那个 commit → **立刻 200**）。所以"每建一棵树就发一个孤儿提交"
+       这条旧解法**不够**，必须有 ref。
+    2. **blob 收集必须覆盖整个区间**：`git diff-tree BASE HEAD` 只看两端，**中间提交里存在过后被
+       改掉/删掉的 blob 版本会漏**（实例：`mine/BalanceWidget.tsx` 在 `78dcb19` 里是这个 blob，
+       后来变了）⇒ `422 tree.sha ... is not a valid blob`。改成
+       `git rev-list BASE..HEAD | while read c; do git ls-tree -r "$c" --format='%(objectname) %(path)'; done | sort -u`。
+       **同一路径可对应多个 blob，全都要推。**
+    3. **`PUSH_BRANCH` / `PUSH_BASE` 必须显式给**：`PUSH_BASE` 必须是**远端真实存在**的 40 位 sha
+       （本地那个"树等价"的提交是**另一个对象**，拿它当 parent 报
+       `Parent SHA does not exist or is not a commit object`）。
+    另外：`while read x | head -1` 会**静默丢掉赋值**（head 提前关管道），别用。
+  - **REST 路线的"blob 可读、tree 不可读"**：`GET /git/blobs/<sha>` 的 200/404 是**可靠**的；
+    `GET /git/trees/<sha>` 在"无 ref 引用"时不可靠 —— 拿它做存在性探测会误判。
   - **坑 7 · API 建的"树"在按 sha 读的路径上不可靠**（`GET /git/trees/<sha>` 对**未被任何
     提交引用**的树返回 404；blob 不受影响），而 GitHub 校验"父树的子项"就走这条读路径
     ⇒ 父树 POST 报 `tree.sha X is not a valid tree`(422)，整条链建不起来。
@@ -230,6 +255,18 @@ node scripts/verify-integrity.mjs --appdata <dir>  # 覆盖数据目录（默认
   两张、算 `std(开)/std(关)`。**≈0.66 = 1 − 染色 0.34 ⇒ 只剩染色（死）**；≤0.2 才算活。
   两个反向教训：① 染色本身就会产生大量像素差，所以"材质开/关像素差 > 0"抓不出这个缺陷；
   ② 条纹插在**同一层里**只证明"材质板能糊自己这一面"，证明不了它能糊身后的页面（手机 dock 就栽在这条）。
+- ⭐ **保留率不够用时看"锐度比"（2026-10-03 R3-F 缺陷三）**：
+  当缺陷是"板画在某个不透明层之下"时，保留率会给出**假读数** ——
+  它量到的像素变化来自那层的颜色，不是材质的输出。R3-F 现场就是：保留率 0.218
+  （看着"贴近活的门槛"），**但那条荧光条其实一点没糊**（FWHM = 2.0 CSS px = `stroke-width: 2`）。
+  ⇒ 对**细亮线**这类目标，加一条 `sharpRatio = 峰值(材质开)/峰值(材质关)`：
+  未糊时两张**逐字相同 ⇒ 1.00**；糊过则能量被摊开 ⇒ 0.2~0.35。门槛取 **0.6**。
+  实现要点（踩过两次）：**用峰值，不要用 FWHM** —— 条纹跳变本身就带一大片
+  「蓝 − 红」信号且幅度（~178）远高于线本身（~94），"最强列"必然被条纹抢走，
+  量出 59px 的假 FWHM；峰值则是两道山峰（94 vs 17），分得很开。
+  且**必须拿同一次运行里"材质关"那张做分母**，绝对峰值随条纹相位漂移。
+  守门：`scripts/trend-chart-glass.mjs`（视口 375×667 —— 只有短屏趋势卡才压在 dock 后面，
+  390×844 下 overlap 恒 0，量不出东西）。反向验证过：注释掉修复即回到 1.00 判 ❌。
 - ⭐ **但保留率对"带遮罩的弹窗"无效**（2026-10-03 R3-E）：遮罩重塑了采样参照 ——
   它量的是"遮罩 + 页面 vs 材质 + 遮罩 + 页面"。实测把遮罩设成 `display:none` 后
   开/关两张图**逐位相同**，说明这个口径在弹窗上根本没有分辨力。
@@ -249,6 +286,23 @@ node scripts/verify-integrity.mjs --appdata <dir>  # 覆盖数据目录（默认
   （与 `<aside class="sidebar">` 平级、排在它之前），祖先链变成 `.app → body → html`，
   **两档都活**（fallback 0.029 / chromium 0.05）。真源在 `components/glass/DockGlass.tsx`。
   ⇒ **"往 `.sidebar` 里塞浮层"从那天起是禁区。**
+  ⭐ **2026-10-03 R3-F 补：光"搬出来"还不够，还得把材质板抬到 `.sidebar` 之上。**
+  搬出来后材质板与 `.sidebar` 是 `.app` 的两个兄弟，都 `z:auto` ⇒ **板按树序画在
+  `.sidebar` 之下**。`.sidebar` 那层 `--gs-dock-floor`（50% 不透明）随即盖住板糊出来的
+  那份，**眼睛看到的是底之下透上来的未糊内容**。症状：`我的` 页「时币趋势」荧光条
+  压在 dock 上时**完全没糊**（线 FWHM = 2.0 CSS px = `stroke-width: 2`，一点没动），
+  而 dock 的文字与按钮看着都正常 —— 所以很容易被误判成"只是染色浓度不对"。
+  单变量消融（`scripts/paint-order-ablation.mjs`，只动绘制顺序）：板抬到 `.sidebar` 之上
+  → FWHM 4→130；`.sidebar` 降 `z:auto` → 11；**把 `.sidebar` 底调透明但板仍在下面 → 依旧 4**。
+  ⇒ 不是"被底盖住的错觉"，是**板画的整块都在 `.sidebar` 之下**。
+  修法（`glass.css`）：`.gs-layer--dock .gs-plate { z-index: 103 }` —— 高于 `.sidebar` 的
+  100（它自成堆叠上下文，这是必须显式压过的）、低于菜单的 110；`.nav` 实测 `z:auto`，
+  板是「定位 + 非 auto 的 z」⇒ 一定画在 `.nav` 之前（下层），导航项照旧可点
+  （`elementFromPoint` 五项全中自身）。
+  ⚠️ **不能靠调 `.sidebar` 的 z-index 或那层保底底来修**：100 是手机档全局层级的一环
+  （菜单 110、遮罩 120 都要压它）；底调淡是反效果（底越淡，未糊内容越显眼）。
+  ⚠️ 这条**只对 chromium 档有意义**，降级档不渲染库那棵子树，板与可见面同取 0 一直是对的。
+  守门：`scripts/trend-chart-glass.mjs` 的 `sharpRatio` 判据（见下条）。
 - ⭐ **iOS standalone 下"布局视口 ≠ 屏幕"，浮层盒子别用 `inset: 0`**（2026-09-27 第十八轮）：
   布局视口（＝`position: absolute` 的初始包含块）比**屏幕**矮一个状态栏安全区
   （本项目实测 iPhone 14 Pro：793 vs 852，差 59px）。于是 `inset: 0` 的弹窗遮罩
@@ -386,6 +440,33 @@ node scripts/safearea-slider-probe.mjs --out docs/probes/safearea-slider.md --sh
 - 同时打印 `.review-slider-thumb` 的 `box-shadow` / `border` / `border-radius` 计算值，
   用来判定滑块投影是否真的去掉（灰影来源就是这个 `box-shadow`，不是背景色）。
 
+### ⭐ 顶部安全区有两个口径，别混（2026-10-03 R3-F）
+
+`scripts/statusbar-clearance-probe.mjs` 现在同时打印两列，判据也不同：
+
+| 列 | 定义 | 门槛 | 用在谁身上 |
+| --- | --- | --- | --- |
+| `余量` (clearance) | 墨迹上沿 − `--safe-top` | ≥ **12**（`CLEARANCE_TARGET`） | 标题类（`.page-header h1` 等） |
+| `盒顶距 safe-top` | 盒顶 − `--safe-top` | 与同页其它内容**逐字相等** | 容器类（`.settle-card`） |
+
+- 12 的来历：`env(safe-area-inset-top)` 只是硬边界，iOS 状态栏那层毛玻璃在它之下还有
+  **8~14px 的渐变羽化带**，墨迹落进去就是"被虚化了一部分"。
+- ⭐ **容器类必须用差值口径，不能用 12**。日结栏（`.settle-card`）的问题从来不是
+  "被裁掉"，而是**和页面其它内容的顶部留白看起来不一致**：`.page` 系列统一写
+  `calc(24px + safe-top)`，卡片当时只写了 `14px + safe-top` ⇒ 用户说"被状态栏模糊遮挡"。
+  差值口径与 `--safe-top` 的数值无关 ⇒ 三档机型（20/47/59）给出同一个数，正是它该有的样子。
+  反向验证：改回 14 后三档齐刷刷 `14 / 24 ❌ 节律不符`，探针退出码 1。
+- ⚠️ **`.settle-card` 是唯一一个自己写顶部安全区的页面元素**：宿主 `.weekly-shell` 是
+  `flex: 1` 纵向 flex、本身没有内边距，所以卡片的 `margin-top` 就是它到屏顶的全部距离。
+  `.page-header h1` 达标**不代表**它也达标 —— 它此前压根没人量。
+- ⚠️ 容器类元素的"盒顶 → 墨迹"偏移要用**它自己的上内边距**，不能套标题那套
+  `(lh − fontSize)/2 + fontSize×0.2`（对卡片会算出 ~3px，严重低估风险）。
+- ⚠️ 顺带：日结栏的**底部**外边距与 `.weekly-page` 的 `padding-top` 是**两个不同的量**
+  （前者 = "卡片 → 面板"，后者 = "面板 → 面板内标题"），都取 24 是因为它们在同一条
+  纵向节律里扮演同一个角色，不是为了相互抵消。
+- 探针现在**以退出码判成败**（任一目标未达门槛即非 0）。此前只打印表格恒退 0，
+  那些 ❌ 行在长输出里没人会看见。
+
 ## 轴系几何探针（时间轴"对不对齐"用像素说话）
 
 ```
@@ -429,6 +510,20 @@ CI 里 `node-version` **刻意锁 20**——与 Electron 31 内置的 Node 同�
 - **读 CI 日志**：Actions 步骤日志匿名拉取会 403，但 **check-run 注解匿名可读**。入口在 `/actions/runs/<run_id>/jobs` 返回的 `check_run_url` 上追加 `/annotations`。`.github/ci-annotate.mjs` 会在测试失败时把日志揉成注解（优先 stderr/stdout 区块——vitest 把测试里的 console 输出攒到最后统一打印，未捕获的异步异常就在那里），不看网页也能定位。
 
 ## PWA / iOS 全屏（网页端）
+
+### 网页端只在 push 到 `main` 时部署（2026-10-03 踩到）
+
+`.github/workflows/deploy-pages.yml` 的触发器是 **`on: push: branches: [main]`**（另有 `workflow_dispatch`）。
+**推特性分支不会触发部署** —— 表现为「本地推成功了，GitHub 网页端还是旧版」。
+
+- 同一 `.github/workflows/ci.yml` 也只跑 `main` 的 push（+ `pull_request` + `workflow_dispatch`）。
+- 想上线：把 `main` 指到目标提交。**本地 `main` 可能严重滞后**（当时 `5d77414` vs 远端 `fe9c6814`）⇒
+  正确姿势是 `git branch -f main HEAD` 再 `git push --force-with-lease=refs/heads/main:<远端当前 sha> origin main`。
+  推前**必须**先跑：两套 `tsc --noEmit`、全量单测（基线 424/424）、`npm ci --dry-run`。
+- 力推前确认远端 tip 不会丢历史：比"远端 tip 的树"与"本地某个祖先的树"是否逐字节相同
+  （`git rev-parse <sha>^{tree}`），并确认那个祖先是新 HEAD 的祖先。
+- 验上线：拿线上 `assets/index-<hash>.js/.css` 与本地 `dist-web/index.html` 里的哈希比对（必须一致）。
+- 查 CI 结果（无需 `gh`）：`curl -s --noproxy '*' "https://api.github.com/repos/samuel8171/Quadrant-app/actions/runs?per_page=3"`。
 
 网页端支持「添加到主屏幕」后以 standalone 全屏打开。三处关键配置：
 

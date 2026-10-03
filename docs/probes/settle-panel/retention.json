@@ -18,7 +18,7 @@
     "fallback": {
       "engine": "fallback",
       "opened": true,
-      "openMs": 6.6,
+      "openMs": 6.3,
       "struct": {
         "engine": "fallback",
         "plate": {
@@ -95,17 +95,17 @@
         },
         "on": "fallback-A-material-on.png",
         "ref": "fallback-A-material-off.png",
-        "controlStd": 22.65,
-        "onStd": 18.9,
-        "offStd": 62.16,
-        "ratio": 0.304
+        "controlStd": 22.7,
+        "onStd": 19.5,
+        "offStd": 67.57,
+        "ratio": 0.289
       },
       "errors": []
     },
     "chromium": {
       "engine": "chromium",
       "opened": true,
-      "openMs": 16.8,
+      "openMs": 15.5,
       "struct": {
         "engine": "chromium",
         "plate": {
@@ -182,10 +182,10 @@
         },
         "on": "chromium-A-material-on.png",
         "ref": "chromium-A-material-off.png",
-        "controlStd": 23.19,
-        "onStd": 27.86,
-        "offStd": 61.94,
-        "ratio": 0.45
+        "controlStd": 22.98,
+        "onStd": 29.16,
+        "offStd": 67.37,
+        "ratio": 0.433
       },
       "errors": []
     }
