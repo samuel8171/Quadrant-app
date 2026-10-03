@@ -966,30 +966,42 @@ export default function QuadrantPage(): JSX.Element {
               onBlur={() => setEditing(null)}
             />
           )}
-          {/*
-            计费气泡：非模态内联，挂在 event-layer 内、事件卡片之上（spec 7.4）。
-            只在金钱系统开启、且当前正为某事件记账时渲染。手势隔离由组件内部
-            的 stopPropagation + pointer-events: auto 负责（见组件头注释）。
-          */}
-          {moneyEnabled && billingEvent && (
-            <QuadrantCostBubble
-              event={billingEvent}
-              nowMin={nowMin}
-              config={money?.config ?? DEFAULT_MONEY_CONFIG}
-              alreadyBilled={billingAlreadyDone}
-              onConfirm={(answer) => {
-                const target = billingEvent
-                setBillingId(null)
-                // 「不计费」= 不写任何账（spec 7.4 的默认路径）。
-                if (!target || !answer.billable) return
-                // 把本页持有的日期一并交出去：气泡的 alreadyBilled 用的就是它，
-                // 整条路径跑在同一个时钟、同一个日期上（跨零点不再各算各的）。
-                completeQuadrantEvent(target, answer.actualMin, nowMin, today)
-              }}
-              onCancel={() => setBillingId(null)}
-            />
-          )}
         </div>
+        {/*
+          计费气泡：非模态内联（spec 7.4）。
+
+          ⚠️ **挂在 `.event-layer` 之外**（R3-D，2026-10-03）。它与 `.event-layer` 是
+          **兄弟**，放在 `.quadrant-viewport` 的直接子节点上 —— 因为 `.event-layer`
+          恒带 `transform`，而 Chromium 里祖先的 `transform` 就是合成面，
+          会把玻璃材质的背景采样截断（实测保留率 0.659 ⇒ 只剩染色）。
+          它仍随画布平移缩放：位置由 `view` 经 `worldToScreenX/Y` 现算
+          （见 QuadrantCostBubble 的头注释与 docs/probes/quadrant-bubble/）。
+
+          ⇒ **`.event-layer` 从今天起是玻璃宿主的禁区**（与 `.sidebar` 同理）。
+          往里面塞任何带 `backdrop-filter` 的浮层之前，先问：它有没有 transform。
+
+          只在金钱系统开启、且当前正为某事件记账时渲染。手势隔离由组件内部的
+          stopPropagation + pointer-events: auto 负责。
+        */}
+        {moneyEnabled && billingEvent && (
+          <QuadrantCostBubble
+            event={billingEvent}
+            view={view}
+            nowMin={nowMin}
+            config={money?.config ?? DEFAULT_MONEY_CONFIG}
+            alreadyBilled={billingAlreadyDone}
+            onConfirm={(answer) => {
+              const target = billingEvent
+              setBillingId(null)
+              // 「不计费」= 不写任何账（spec 7.4 的默认路径）。
+              if (!target || !answer.billable) return
+              // 把本页持有的日期一并交出去：气泡的 alreadyBilled 用的就是它，
+              // 整条路径跑在同一个时钟、同一个日期上（跨零点不再各算各的）。
+              completeQuadrantEvent(target, answer.actualMin, nowMin, today)
+            }}
+            onCancel={() => setBillingId(null)}
+          />
+        )}
         {labelVisible && hoverQuadrant && (
           <div className={`quadrant-label q${hoverQuadrant}`}>
             {QUADRANT_META[hoverQuadrant].label}

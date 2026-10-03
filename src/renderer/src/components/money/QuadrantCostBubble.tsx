@@ -2,7 +2,8 @@ import { useMemo, useState } from 'react'
 import type { MoneyConfig, QuadrantEvent } from '../../../../shared/types'
 import { quadrantCostOf } from '../../../../shared/money'
 import { MAX_DURATION_MIN } from '../../lib/weekRules'
-import { UNIT } from '../../lib/quadrantMath'
+import { worldToScreenX, worldToScreenY, type ViewState } from '../../lib/quadrantMath'
+import GlassSurface from '../glass/GlassSurface'
 
 /** 小时输入的允许上界，由域模型的时长上限换算（10 小时）。 */
 const MAX_HOURS = MAX_DURATION_MIN / 60
@@ -13,6 +14,17 @@ type BubbleEvent = Pick<QuadrantEvent, 'id' | 'text' | 'quadrant' | 'x' | 'y'>
 interface Props {
   /** 触发这次完成的事件卡片。 */
   event: BubbleEvent
+  /**
+   * 画布视图（pan/zoom）。
+   *
+   * **R3-D 起必须传入**：气泡的玻璃层已从 `.event-layer` 内部**搬到它的兄弟位置**
+   * （挂在 `.quadrant-viewport` 下），因为 `.event-layer` 恒带 `transform`
+   * —— 而 Chromium 里祖先的 `transform` 就是合成面，会把材质采到的背景截断
+   * （实测保留率 0.659 = 只剩染色）。搬出来之后，定位不能再靠 `.event-layer`
+   * 的包含块，得由这里用 `worldToScreenX/Y` 把画布坐标换算成**视口局部**坐标。
+   * 详见组件头注释。
+   */
+  view: ViewState
   /**
    * 完成时刻自 0 点起的分钟数。
    *
@@ -53,6 +65,7 @@ interface Props {
  */
 export default function QuadrantCostBubble({
   event,
+  view,
   nowMin,
   config,
   alreadyBilled,
@@ -81,24 +94,115 @@ export default function QuadrantCostBubble({
   // 已计过费直接锁死确认（store 还会再拦一次）；勾了「计费」却没填有效时长同样不可确认。
   const confirmDisabled = alreadyBilled || (billable && !validHours)
 
+  /*
+   * 气泡的**视口局部**几何（R3-D）。
+   *
+   * 事件在世界坐标里的锚点是卡片左上角 `(x, -y*UNIT 方向)`；
+   * `worldToScreenX/Y` 已含 pan 与 zoom，返回的是**相对 `.quadrant-viewport` 内边**
+   * 的像素（`.event-layer` 就在该内边原点、无额外偏移）。
+   *
+   * 气泡底边贴在卡片顶边之上 8px、左边缘与卡片左对齐：
+   *   left   = cardLeft
+   *   bottom = cardTop - 8
+   * 锚点取气泡中心，纵向再用 `--gs-panel-h` 把"底边对齐"换算成"中心对齐"：
+   *   centerX = cardLeft + W/2
+   *   centerY = cardTop - 8 - H/2
+   * `W/H` 由 GlassSurface 实测（`--gs-panel-w/h`）—— 气泡高度随预览/提示变化，
+   * 写死必错一格。`calc()` 读同一个数，两者恒等。
+   */
+  const cardLeft = worldToScreenX(event.x, view)
+  const cardTop = worldToScreenY(event.y, view)
+
   return (
-    <div
-      className="quadrant-cost-bubble"
-      style={{ left: event.x * UNIT, top: -event.y * UNIT }}
-      role="group"
-      aria-label={`为「${event.text}」记一次用时`}
-      onPointerDown={(e) => e.stopPropagation()}
-      onPointerUp={(e) => e.stopPropagation()}
-      onClick={(e) => e.stopPropagation()}
-      onDoubleClick={(e) => e.stopPropagation()}
-      onContextMenu={(e) => e.stopPropagation()}
-      onKeyDown={(e) => {
-        if (e.key === 'Escape') {
-          e.stopPropagation()
-          onCancel()
-        }
+    /*
+     * 液态玻璃外壳（R3-D）。
+     *
+     * ── ⭐ 为什么玻璃层必须挂在 `.event-layer` **之外**（R3-D 实测结论）
+     *
+     * 直觉上"气泡随画布平移缩放"⇒ 玻璃层该跟气泡一起待在 `.event-layer` 里。
+     * 这条直觉**是错的**，而且错得很贵：Chromium 里**祖先的 `transform` 就是合成面**，
+     * 会把 `backdrop-filter` 的背景采样截在那一层内部 ⇒ 材质只剩染色。
+     *
+     * 实测（同一组条纹、同一块材质板、同一个气泡，只动 `.event-layer` 的 transform）：
+     *
+     *   transform: translate(pan) scale(zoom)（真实值）  保留率 0.659  ← 死（只剩染色）
+     *   transform: matrix(1,0,0,1,0,0)（**恒等**，仍存在） 保留率 0.659  ← 死
+     *   transform: none（属性整个移除）                   保留率 0.111  ← 活
+     *
+     * 关键在第二行：连**恒等矩阵**都致病 ⇒ 与变换的数值无关，只要那一层上有
+     * 一个 `transform` 声明就成立。而 `quadrantMath` 的视图恒写成
+     * `translate(...) scale(...)`，不存在"pan=0/zoom=1 时就没事"的侥幸。
+     *
+     * ⇒ 结论：**`.event-layer` 是禁入区**（与 `.sidebar` 同理）。
+     *   玻璃层改挂在 `.quadrant-viewport` 的直接子节点上（`.event-layer` 的**兄弟**），
+     *   祖先链变成 `.gs-layer--bubble → .quadrant-viewport(relative/z:auto) → … → body`，
+     *   全程无 `fixed` / `sticky` / `transform` / 非 auto 的 `z-index`。
+     *
+     * 代价是定位不再免费：不能再靠 `.event-layer` 的包含块，得把画布坐标
+     * **显式换算**成视口局部坐标（上面 `worldToScreenX/Y`）。这反而是好事 ——
+     * 换算出来的就是屏幕像素，与材质板采到的背景处在同一个坐标系里。
+     *
+     * ⚠️ **既有的画布拖拽/缩放要重渲染**：`view` 变化时本组件跟着重渲染，
+     * 位置随 `worldToScreenX/Y` 刷新，所以气泡仍与卡片同步平移缩放。
+     * `view` 因此是必需 prop（不是可选优化）。
+     *
+     * ── 另一处被探针逼出来的改法：玻璃体**就是**气泡
+     *
+     * 更早的实现把已成形的 `.quadrant-cost-bubble`（`position:absolute` +
+     * `transform: translateY(-100% - 8px)`）整块塞进 GlassSurface 内容层，两个后果：
+     *   ① 内容层只有一个绝对定位子节点 ⇒ 不贡献高度 ⇒ 玻璃面高 24px（只剩内边距），
+     *      材质板量成 256×24，而气泡实际 260×136；
+     *   ② 气泡靠自身 transform 上移 `100%+8px`，材质板却按**布局**位置居中
+     *      （`ResizeObserver` 报 borderBox、不含 transform）⇒ 纵向错开一整块。
+     * 实测该形态 fallback 0.461 / chromium 0.656。
+     *
+     * 现在让浮层内容进入正常流（撑开玻璃面），外观类 `.quadrant-cost-bubble`
+     * 挂到**内容层**（`contentClassName`）负责排版与指针行为；
+     * 定位与"贴到卡片上方"的位移由上面的锚点表达式承担。
+     *
+     * ── 6 条约束的落点（逐条）
+     *   ① 材质板 `.gs-plate` 是面板的**兄弟**、挂在不带 transform 的 `.gs-anchor` 上 —— 符合。
+     *   ② 祖先链：`.gs-plate → .gs-anchor → .gs-layer--bubble → .quadrant-viewport(relative)
+     *      → .quadrant-page(relative) → … → body`。**无 transform**（关键，见上）、
+     *      无 `fixed` / `sticky` / 非 auto 的 `z-index` —— 符合。层级走 `--gs-z`。
+     *   ③ 位移滤镜由库写在材质板的 `backdrop-filter` 的 `url()` 里（GlassSurface 负责）—— 符合。
+     *   ④ 玻璃层的 `backdrop-filter` 里不含 `url(` —— 由 GlassSurface 守。
+     *   ⑤ 本层的含块是 `.quadrant-viewport`（有尺寸），故 `inset: 0` 也可用；
+     *      但层自身不需要尺寸（几何全在锚点上），仍按 §五之二 写 `inset: auto`。
+     *   ⑥ 手机端 forceEngine=fallback 由探针两档各量一次覆盖。
+     *
+     * ── 手势隔离
+     *
+     * 玻璃层自己 `pointer-events: none`；接指针的仍是内容层上的 `.quadrant-cost-bubble`，
+     * 它的 `stopPropagation` 与 `pointer-events: auto` 原样保留 —— 玻璃化不改变
+     * 任何指针行为（R3-D 的硬要求，探针里单列一条）。
+     */
+    <GlassSurface
+      center={{
+        top: `calc(${cardTop}px - 8px - var(--gs-panel-h, 0px) / 2)`,
+        left: `calc(${cardLeft}px + var(--gs-panel-w, 0px) / 2)`
       }}
+      contentWidth="232px"
+      padding="12px"
+      layerClassName="gs-layer--bubble"
+      panelClassName="quadrant-cost-bubble-panel"
+      contentClassName="quadrant-cost-bubble"
     >
+      <div
+        role="group"
+        aria-label={`为「${event.text}」记一次用时`}
+        onPointerDown={(e) => e.stopPropagation()}
+        onPointerUp={(e) => e.stopPropagation()}
+        onClick={(e) => e.stopPropagation()}
+        onDoubleClick={(e) => e.stopPropagation()}
+        onContextMenu={(e) => e.stopPropagation()}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') {
+            e.stopPropagation()
+            onCancel()
+          }
+        }}
+      >
       <div className="qcb-line qcb-line--toggle">
         <span className="qcb-label">是否计费</span>
         <div className="qcb-toggle" role="group" aria-label="是否计费">
@@ -172,6 +276,7 @@ export default function QuadrantCostBubble({
           确认
         </button>
       </div>
-    </div>
+      </div>
+    </GlassSurface>
   )
 }

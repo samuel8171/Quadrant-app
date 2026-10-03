@@ -1,0 +1,570 @@
+{
+  "meta": {
+    "browser": "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
+    "engines": [
+      "fallback",
+      "chromium"
+    ],
+    "aliveMax": 0.2,
+    "plateSel": ".gs-layer--bubble .gs-plate"
+  },
+  "results": {
+    "fallback": {
+      "engine": "fallback",
+      "opened": true,
+      "geoBefore": {
+        "engine": "fallback",
+        "plate": {
+          "cx": 178,
+          "cy": 368,
+          "w": 284,
+          "h": 116
+        },
+        "bubble": {
+          "cx": 178,
+          "cy": 368,
+          "w": 260,
+          "h": 92
+        },
+        "face": {
+          "cx": 178,
+          "cy": 368,
+          "w": 284,
+          "h": 116
+        },
+        "chain": [
+          {
+            "tag": "div",
+            "cls": "gs-plate",
+            "position": "absolute",
+            "zIndex": "7",
+            "transform": "none"
+          },
+          {
+            "tag": "div",
+            "cls": "gs-anchor",
+            "position": "absolute",
+            "zIndex": "auto",
+            "transform": "none"
+          },
+          {
+            "tag": "div",
+            "cls": "gs-layer.gs-layer--bubble",
+            "position": "absolute",
+            "zIndex": "auto",
+            "transform": "none"
+          },
+          {
+            "tag": "div",
+            "cls": "quadrant-viewport",
+            "position": "relative",
+            "zIndex": "auto",
+            "transform": "none"
+          },
+          {
+            "tag": "div",
+            "cls": "quadrant-page",
+            "position": "relative",
+            "zIndex": "auto",
+            "transform": "none"
+          },
+          {
+            "tag": "div",
+            "cls": "page-switch.page-switch-quadrant",
+            "position": "static",
+            "zIndex": "auto",
+            "transform": "none"
+          },
+          {
+            "tag": "main",
+            "cls": "content",
+            "position": "static",
+            "zIndex": "auto",
+            "transform": "none"
+          },
+          {
+            "tag": "div",
+            "cls": "app",
+            "position": "relative",
+            "zIndex": "auto",
+            "transform": "none"
+          },
+          {
+            "tag": "div",
+            "cls": "",
+            "position": "static",
+            "zIndex": "auto",
+            "transform": "none"
+          },
+          {
+            "tag": "body",
+            "cls": "",
+            "position": "static",
+            "zIndex": "auto",
+            "transform": "none"
+          },
+          {
+            "tag": "html",
+            "cls": "",
+            "position": "static",
+            "zIndex": "auto",
+            "transform": "none"
+          }
+        ],
+        "plateBackdrop": "blur(16.8px) saturate(1.4)",
+        "contentBackdrop": "none",
+        "plateHasUrl": false
+      },
+      "geoAfter": {
+        "engine": "fallback",
+        "plate": {
+          "cx": 178,
+          "cy": 368,
+          "w": 284,
+          "h": 116
+        },
+        "bubble": {
+          "cx": 178,
+          "cy": 368,
+          "w": 260,
+          "h": 92
+        },
+        "face": {
+          "cx": 178,
+          "cy": 368,
+          "w": 284,
+          "h": 116
+        },
+        "chain": [
+          {
+            "tag": "div",
+            "cls": "gs-plate",
+            "position": "absolute",
+            "zIndex": "7",
+            "transform": "none"
+          },
+          {
+            "tag": "div",
+            "cls": "gs-anchor",
+            "position": "absolute",
+            "zIndex": "auto",
+            "transform": "none"
+          },
+          {
+            "tag": "div",
+            "cls": "gs-layer.gs-layer--bubble",
+            "position": "absolute",
+            "zIndex": "auto",
+            "transform": "none"
+          },
+          {
+            "tag": "div",
+            "cls": "quadrant-viewport",
+            "position": "relative",
+            "zIndex": "auto",
+            "transform": "none"
+          },
+          {
+            "tag": "div",
+            "cls": "quadrant-page",
+            "position": "relative",
+            "zIndex": "auto",
+            "transform": "none"
+          },
+          {
+            "tag": "div",
+            "cls": "page-switch.page-switch-quadrant",
+            "position": "static",
+            "zIndex": "auto",
+            "transform": "none"
+          },
+          {
+            "tag": "main",
+            "cls": "content",
+            "position": "static",
+            "zIndex": "auto",
+            "transform": "none"
+          },
+          {
+            "tag": "div",
+            "cls": "app",
+            "position": "relative",
+            "zIndex": "auto",
+            "transform": "none"
+          },
+          {
+            "tag": "div",
+            "cls": "",
+            "position": "static",
+            "zIndex": "auto",
+            "transform": "none"
+          },
+          {
+            "tag": "body",
+            "cls": "",
+            "position": "static",
+            "zIndex": "auto",
+            "transform": "none"
+          },
+          {
+            "tag": "html",
+            "cls": "",
+            "position": "static",
+            "zIndex": "auto",
+            "transform": "none"
+          }
+        ],
+        "plateBackdrop": "blur(16.8px) saturate(1.4)",
+        "contentBackdrop": "none",
+        "plateHasUrl": false
+      },
+      "aligned": true,
+      "retention": {
+        "tag": "fallback-A",
+        "sample": {
+          "x": 46,
+          "y": 318,
+          "width": 264,
+          "height": 100
+        },
+        "controlStd": 94.21,
+        "onStd": 4.66,
+        "offStd": 96.58,
+        "ratio": 0.048
+      },
+      "pointer": {
+        "before": {
+          "cards": 3,
+          "menus": 0,
+          "bubble": true
+        },
+        "after": {
+          "cards": 3,
+          "menus": 0,
+          "bubble": true,
+          "editing": false
+        },
+        "clickPoint": {
+          "x": 178,
+          "y": 334
+        }
+      },
+      "follow": {
+        "before": {
+          "layerTransform": "matrix(1, 0, 0, 1, 183, 369)",
+          "card": {
+            "x": 36,
+            "y": 434
+          },
+          "bubble": {
+            "x": 48,
+            "y": 322
+          },
+          "plate": {
+            "x": 36,
+            "y": 310
+          }
+        },
+        "after": {
+          "layerTransform": "matrix(1, 0, 0, 1, 223, 399)",
+          "card": {
+            "x": 76,
+            "y": 464
+          },
+          "bubble": {
+            "x": 48,
+            "y": 322
+          },
+          "plate": {
+            "x": 36,
+            "y": 310
+          }
+        },
+        "cardMoved": true,
+        "bubbleSteady": true,
+        "plateSteady": true
+      },
+      "offenders": [],
+      "errors": []
+    },
+    "chromium": {
+      "engine": "chromium",
+      "opened": true,
+      "geoBefore": {
+        "engine": "chromium",
+        "plate": {
+          "cx": 178,
+          "cy": 368,
+          "w": 284,
+          "h": 116
+        },
+        "bubble": {
+          "cx": 178,
+          "cy": 368,
+          "w": 260,
+          "h": 92
+        },
+        "face": {
+          "cx": 178,
+          "cy": 368,
+          "w": 284,
+          "h": 116
+        },
+        "chain": [
+          {
+            "tag": "div",
+            "cls": "gs-plate.gs-refract",
+            "position": "absolute",
+            "zIndex": "7",
+            "transform": "none"
+          },
+          {
+            "tag": "div",
+            "cls": "gs-anchor",
+            "position": "absolute",
+            "zIndex": "auto",
+            "transform": "none"
+          },
+          {
+            "tag": "div",
+            "cls": "gs-layer.gs-layer--bubble",
+            "position": "absolute",
+            "zIndex": "auto",
+            "transform": "none"
+          },
+          {
+            "tag": "div",
+            "cls": "quadrant-viewport",
+            "position": "relative",
+            "zIndex": "auto",
+            "transform": "none"
+          },
+          {
+            "tag": "div",
+            "cls": "quadrant-page",
+            "position": "relative",
+            "zIndex": "auto",
+            "transform": "none"
+          },
+          {
+            "tag": "div",
+            "cls": "page-switch.page-switch-quadrant",
+            "position": "static",
+            "zIndex": "auto",
+            "transform": "none"
+          },
+          {
+            "tag": "main",
+            "cls": "content",
+            "position": "static",
+            "zIndex": "auto",
+            "transform": "none"
+          },
+          {
+            "tag": "div",
+            "cls": "app",
+            "position": "relative",
+            "zIndex": "auto",
+            "transform": "none"
+          },
+          {
+            "tag": "div",
+            "cls": "",
+            "position": "static",
+            "zIndex": "auto",
+            "transform": "none"
+          },
+          {
+            "tag": "body",
+            "cls": "",
+            "position": "static",
+            "zIndex": "auto",
+            "transform": "none"
+          },
+          {
+            "tag": "html",
+            "cls": "",
+            "position": "static",
+            "zIndex": "auto",
+            "transform": "none"
+          }
+        ],
+        "plateBackdrop": "blur(16.8px) saturate(1.4)",
+        "contentBackdrop": null,
+        "plateHasUrl": false
+      },
+      "geoAfter": {
+        "engine": "chromium",
+        "plate": {
+          "cx": 178,
+          "cy": 368,
+          "w": 284,
+          "h": 116
+        },
+        "bubble": {
+          "cx": 178,
+          "cy": 368,
+          "w": 260,
+          "h": 92
+        },
+        "face": {
+          "cx": 178,
+          "cy": 368,
+          "w": 284,
+          "h": 116
+        },
+        "chain": [
+          {
+            "tag": "div",
+            "cls": "gs-plate.gs-refract",
+            "position": "absolute",
+            "zIndex": "7",
+            "transform": "none"
+          },
+          {
+            "tag": "div",
+            "cls": "gs-anchor",
+            "position": "absolute",
+            "zIndex": "auto",
+            "transform": "none"
+          },
+          {
+            "tag": "div",
+            "cls": "gs-layer.gs-layer--bubble",
+            "position": "absolute",
+            "zIndex": "auto",
+            "transform": "none"
+          },
+          {
+            "tag": "div",
+            "cls": "quadrant-viewport",
+            "position": "relative",
+            "zIndex": "auto",
+            "transform": "none"
+          },
+          {
+            "tag": "div",
+            "cls": "quadrant-page",
+            "position": "relative",
+            "zIndex": "auto",
+            "transform": "none"
+          },
+          {
+            "tag": "div",
+            "cls": "page-switch.page-switch-quadrant",
+            "position": "static",
+            "zIndex": "auto",
+            "transform": "none"
+          },
+          {
+            "tag": "main",
+            "cls": "content",
+            "position": "static",
+            "zIndex": "auto",
+            "transform": "none"
+          },
+          {
+            "tag": "div",
+            "cls": "app",
+            "position": "relative",
+            "zIndex": "auto",
+            "transform": "none"
+          },
+          {
+            "tag": "div",
+            "cls": "",
+            "position": "static",
+            "zIndex": "auto",
+            "transform": "none"
+          },
+          {
+            "tag": "body",
+            "cls": "",
+            "position": "static",
+            "zIndex": "auto",
+            "transform": "none"
+          },
+          {
+            "tag": "html",
+            "cls": "",
+            "position": "static",
+            "zIndex": "auto",
+            "transform": "none"
+          }
+        ],
+        "plateBackdrop": "blur(16.8px) saturate(1.4)",
+        "contentBackdrop": null,
+        "plateHasUrl": false
+      },
+      "aligned": true,
+      "retention": {
+        "tag": "chromium-A",
+        "sample": {
+          "x": 46,
+          "y": 318,
+          "width": 264,
+          "height": 100
+        },
+        "controlStd": 94.22,
+        "onStd": 10.71,
+        "offStd": 96.59,
+        "ratio": 0.111
+      },
+      "pointer": {
+        "before": {
+          "cards": 3,
+          "menus": 0,
+          "bubble": true
+        },
+        "after": {
+          "cards": 3,
+          "menus": 0,
+          "bubble": true,
+          "editing": false
+        },
+        "clickPoint": {
+          "x": 178,
+          "y": 334
+        }
+      },
+      "follow": {
+        "before": {
+          "layerTransform": "matrix(1, 0, 0, 1, 183, 369)",
+          "card": {
+            "x": 36,
+            "y": 434
+          },
+          "bubble": {
+            "x": 48,
+            "y": 322
+          },
+          "plate": {
+            "x": 36,
+            "y": 310
+          }
+        },
+        "after": {
+          "layerTransform": "matrix(1, 0, 0, 1, 223, 399)",
+          "card": {
+            "x": 76,
+            "y": 464
+          },
+          "bubble": {
+            "x": 48,
+            "y": 322
+          },
+          "plate": {
+            "x": 36,
+            "y": 310
+          }
+        },
+        "cardMoved": true,
+        "bubbleSteady": true,
+        "plateSteady": true
+      },
+      "offenders": [],
+      "errors": []
+    }
+  },
+  "failures": []
+}

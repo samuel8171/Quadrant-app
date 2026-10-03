@@ -1469,6 +1469,11 @@ R3-B（云同步手动/自动）    ── 数据风险最高，用户指定放�
 
 ### Task R3-D: 象限计费气泡的液态玻璃 ［新增，**依赖 R2-K 的实测结论**］
 
+> **✅ 已完成（2026-10-03）。结论见下方「✅ 已修复：象限计费气泡的玻璃（R3-D）」一节。**
+> 一处**重大更正**：6 条约束里的第 2 条**漏了 `transform`** ——
+> Chromium 里祖先的 `transform` 同样是合成面（连恒等矩阵都致病）。正是这条让本任务
+> 起初两档都没做活。**该更正已回写进「6 条约束」清单（见下）。**
+
 ### Task R3-E: 日结面板的液态玻璃 ［新增，**依赖 R2-K 的实测结论**］
 
 > **为什么两个都标「依赖 R2-K」**：R2-K 要先量出**既有**手机 dock 宿主到底是活是死
@@ -1490,7 +1495,14 @@ R3-B（云同步手动/自动）    ── 数据风险最高，用户指定放�
 
 1. **材质板是面板的兄弟**，挂在锚点层；不能进库子树，锚点也不能带 `transform`。
 2. 从材质板往上到 `body` 的整条祖先链上**不能有合成面**：`fixed` / `sticky` /
-   **非 auto 的 `z-index`** 任一出现，材质就只剩染色。层级统一走 `--gs-z`。
+   **非 auto 的 `z-index`** / ⭐ **`transform`（含恒等矩阵）** 任一出现，材质就只剩染色。
+   层级统一走 `--gs-z`。
+   > ⭐ **2026-10-03（R3-D）补入 `transform`**：此前清单只有前三项，`transform` 被当作无害。
+   > 实测（同一组条纹、同一块材质板、只动 `.event-layer` 的 transform）：
+   > 真实 `translate+scale` → 0.659；**恒等 `matrix(1,0,0,1,0,0)` → 0.659**；
+   > 属性整个移除 → **0.111 活**。第二行是关键：与数值无关，**只要声明存在就致病**。
+   > ⇒ 带 `transform` 的容器（本项目里就是 `.event-layer`）是玻璃宿主的**禁区**，
+   > 与 `.sidebar`（`fixed`）同理。宿主须挂到它的**兄弟**位置。
 3. 位移滤镜**只能写在 `backdrop-filter` 的 `url()` 里**；挂成材质板自己的 `filter:` 会让材质整个消失。
 4. `url(#滤镜)` **绝不能进玻璃层的 `backdrop-filter`** —— 它会替换前一步 `blur()` 的输出，表现为整块变透明。
 5. 浮层盒子**不能用 `inset: 0` 定高**，要 `height: max(100%, var(--app-height, 0px))`。
@@ -1507,6 +1519,16 @@ R3-B（云同步手动/自动）    ── 数据风险最高，用户指定放�
 - **R3-D（象限计费气泡）**：它挂在四象限画布内、`useCanvasGestures` 的地盘上。加玻璃层
   **不得改变任何指针行为**（气泡上的拖拽/长按仍必须被隔离）。另外它的定位在事件卡上方，
   要确认材质板的锚点与气泡一起移动、不错位。
+  ⭐ **2026-10-03 实测补两条**：
+  · 玻璃层**不能**待在 `.event-layer` 里（它的 `transform` 是合成面，见约束 2 的更正）。
+    宿主挂到 `.quadrant-viewport` 下、`.event-layer` 的**兄弟**位置，
+    位置改由 `worldToScreenX/Y` 用 `view` **现算** ⇒ 仍随画布平移缩放。
+    ⚠️ 这条把"位置由谁驱动"从"继承 DOM"变成了"读 React state"，
+    所以 `view` 成了必需 prop；探针里有一条断言专门钉它（只改 DOM transform
+    而不动 `view` 时，卡片应动、气泡应**不动**）。
+  · **玻璃体就是气泡**，不要把已成形的绝对定位气泡塞进内容层 ——
+    绝对定位子节点不撑高，玻璃面会量成 24px 高（只剩内边距），
+    而气泡自身的 `translateY(-100%)` 又会让板与它错开一整块。
 - **R3-E（日结面板）**：它是**每天开一次**的浮层，且是本项目里少见的**高频**宿主。
   除保留率外，还要**实测打开一次的耗时**并在报告里给出数字（不是为了 shader 档，
   是为了知道 standard/fallback 档下的真实代价）。
@@ -1620,3 +1642,114 @@ R2-K 记录的 `chromium 0.66 = 1 − 染色 0.34` 是对的，但它**遗漏了
 - `scripts/desktop-glass-cdp.mjs` 仍需真实 Electron 窗口实跑（本轮环境不可用）；
   它对 dock 的三条断言只依赖类名与"有无布局盒"，不受本次搬动影响。
 - 真机（iPhone）验收仍不可替代 —— 探针是 headless + 桌面 Edge，DPR/视口与真机有差。
+
+---
+
+## ✅ 已修复：象限计费气泡的玻璃（R3-D，2026-10-03）
+
+按 6 条约束逐条做了。**两处判断被实测推翻**，其中第一处是全局性的（回写进了「6 条约束」清单）。
+
+### 一、根因：`transform` 也是合成面，且"声明存在"就致病
+
+第一版按"约束 2 只有 `fixed`/`sticky`/`z-index`"来做，把玻璃层挂在气泡原来的位置 ——
+结果 **chromium 档 0.659（= 1 − 染色 0.34，只剩染色）**，fallback 档 0.461（也是死的）。
+祖先链计算样式逐项打出来是干净的：没有 `fixed`、没有 `sticky`、`z-index` 全是 `auto`、
+没有 `isolation`、没有 `mix-blend-mode`。**唯一可疑项是祖先的 `transform`。**
+
+决定性实验（`tmp/r3d-tf3.mjs`，同一组条纹、同一块材质板，只动 `.event-layer` 的 transform）：
+
+| `.event-layer` 的 transform | 保留率 | 判定 |
+| --- | --- | --- |
+| `translate(183px,369px) scale(1)`（真实） | 0.659 | 只剩染色 |
+| `matrix(1, 0, 0, 1, 0, 0)`（**恒等矩阵，属性存在**） | **0.659** | 只剩染色 |
+| `none`（**属性整个移除**） | **0.111** | **活** |
+
+第二行是关键：**与 transform 的数值无关，只要属性被声明就致病。**
+所以这不是"平移量太大导致采样偏移"，而是 Chromium 把带 transform 的元素当成backdrop root。
+
+⇒ `.event-layer` 与 `.sidebar`（`fixed`）同理，是玻璃宿主的**禁区**。
+**这条已作为更正回写进「6 条约束」第 2 条。**
+
+### 二、旧结论里的第二处错误：玻璃体必须"就是"气泡本身
+
+第二版把玻璃层搬出 `.event-layer` 后，材质活了，但**几何错得离谱**：
+材质板量出 `256×24`、气泡 `260×136`，两个圆心差 **158px**。
+
+两条原因叠加：
+
+1. `.quadrant-cost-bubble` 当时是 `position: absolute` + `transform: translateY(-100% - 8px)`，
+   塞进玻璃的内容层后**不参与撑高** ⇒ 库的可见面量出来只有内边距那么高（24px）。
+2. 气泡自己的 `translateY(-100%)` 把它视觉上挪上去了，而材质板按**未变换的布局盒**居中
+   （`ResizeObserver` 报的是 `borderBoxSize`，**不含 transform**）⇒ 板与气泡错开一整块。
+
+⇒ **修法：让玻璃的 content 层本身就是气泡内容块**（`contentClassName="quadrant-cost-bubble"`），
+气泡类从"绝对定位浮块"改成**普通流内容**，定位整个交给锚点的 `calc()` 表达式
+（`top: calc(<cardTop>px - 8px - var(--gs-panel-h, 0px) / 2)`）。
+结果是板与气泡圆心精确重合在 `(178, 368)`。
+
+### 三、实测（`scripts/quadrant-bubble-glass.mjs` + `retention.json`）
+
+| 阶段 | fallback | chromium |
+| --- | --- | --- |
+| 第一版（挂 `.event-layer` 内） | 0.461 tint-only | 0.659 tint-only |
+| 第二版（搬出，但几何错位） | 材质活、几何 FAIL（圆心差 158px） | 同左 |
+| **第三版（搬出 + 玻璃体即气泡，最终）** | **0.048 活** | **0.111 活** |
+
+最终几何：
+
+| | plate | bubble |
+| --- | --- | --- |
+| 尺寸 | 284×116 | 260×92 |
+| 圆心 | (178, 368) | (178, 368) |
+
+气泡底 426 vs 卡片顶 434 = 恰好 8px 间距，左边齐平。
+
+四条断言两档全绿：**祖先链无 transform** ✓ ／ **随画布**（只改 DOM transform，卡片动、气泡与板**不动**）✓ ／
+**指针零变化**（`pointer.before == pointer.after`）✓ ／ **`url(` 不在 backdrop-filter 里** ✓。
+
+### 四、负控（证明断言不是同义反复）
+
+临时给 `.gs-layer--bubble` 加 `transform: translateZ(0)`，探针**同时**报出两个独立信号：
+
+```
+✗ fallback: 材质板的祖先链上有 transform（div.gs-layer.gs-layer--bubble）—— 会让材质只剩染色
+✗ chromium: 保留率 0.659 判为 dead（阈值 ≤0.2）/ 祖先链上有 transform
+```
+
+负控已撤销、`tmp/negctl` 已删。**两条断言各自独立成立**（一条查计算样式、一条查像素），不是同一个判据的两种写法。
+
+### 五、改了哪些文件
+
+- `src/renderer/src/components/money/QuadrantCostBubble.tsx`：新增必需 prop `view: ViewState`；
+  位置改为 `worldToScreenX/Y(event.x, view)` **现算**；`GlassSurface` 的 `center` 换成引用
+  `--gs-panel-w/h` 的 `calc()`；`contentClassName="quadrant-cost-bubble"`；`UNIT` 变成未用导入已删。
+- `src/renderer/src/pages/QuadrantPage.tsx`：气泡渲染块**移出 `.event-layer`**，成为
+  `.quadrant-viewport` 的直接子节点（`.event-layer` 的兄弟）；传 `view={view}`。
+- `src/renderer/src/components/glass/glass.css`：§五之二重写（新宿主、`transform` 结论）；
+  `.gs-layer--bubble { inset: auto; --gs-z: 7; }`。
+- `src/renderer/src/styles/theme.css`：`.quadrant-cost-bubble` 改为**普通流内容块**
+  （去掉 `position`/`z-index`/`transform`/`width`/`padding`）。
+- `scripts/quadrant-bubble-glass.mjs`（**新增**）：R3-D 专属探针，含四条断言。
+- `src/renderer/probe/main.tsx`：暴露 `window.__DEFAULT_MONEY_CONFIG__` 供探针取种子。
+
+### 六、验收
+
+- `quadrant-bubble-glass.mjs`：两档 `alive`、几何重合、指针零变化，退出码 0。
+- `liquid-glass-probe.mjs`：**39/39**。
+- `glass-material-probe.mjs` + `glass-material-judge.py`：全绿，dock 几何
+  `{x:12, y:768, w:366, h:66}` 不变。
+- 单元测试 **424/424**；`verify-integrity.mjs` 24 pass / 0 fail（2 条既有的临时文件警告）。
+- 生产构建产物确认含 `.gs-layer--bubble{inset:auto;--gs-z: 7}` 与新 `calc()` 表达式。
+- `tsc --noEmit -p tsconfig.web.json` 退出码 0。
+
+### 七、探针踩到的坑（写给下一个写探针的人）
+
+- ⭐ **`page.addInitScript` 在每次导航（含 `reload()`）都会重跑**。本探针中途 `reload()` 去
+  重读配置，结果把已 patch 的 `money` 配置**用占位串 `'__DEFAULT_MONEY_CONFIG__'` 覆盖** ⇒
+  `validMoney` 失败 ⇒ 整个 `money` 被静默丢弃 ⇒ `moneyEnabled` false ⇒ **气泡入口根本不渲染**。
+  排查绕了一大圈（表现是"气泡打不开"，看着像选择器问题）。
+  修法：`sessionStorage` 一次性守卫（`__probeSeeded`）。
+- ⭐ **种子要种在可见世界里**。事件原种在 world x=60..140，换算到屏幕 x=1396..2996，
+  远在 390px 视口之外 ⇒ `page.screenshot` 直接报 `Clipped area is outside the resulting image`。
+  改种在原点附近（象限 2/3，`x:-8`、`y:-2/-6/-10`），并在运行时挑一张**完全落在视口内**的卡片。
+

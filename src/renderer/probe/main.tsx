@@ -19,12 +19,24 @@ import QuadrantPage from '../src/pages/QuadrantPage'
 import ReviewPage from '../src/pages/ReviewPage'
 import WeeklyPage from '../src/pages/WeeklyPage'
 import { useAppStore, type Page } from '../src/state/appStore'
+import { DEFAULT_MONEY_CONFIG } from '../../shared/money'
 import '../src/styles/theme.css'
 
 const params = new URLSearchParams(location.search)
 const pageName = (params.get('page') ?? 'quadrant') as Page
 const withSidebar = params.get('sidebar') === '1'
 const strict = params.get('strict') !== '0'
+
+/*
+ * 把 `DEFAULT_MONEY_CONFIG` 暴露到 window 上，供探针**播种合法载荷**用。
+ *
+ * 为什么需要：`validMoney` 要求 config 里每个数值键都齐（缺一个整份 money 会被
+ * 静默丢弃，表现为"菜单里没有「标记完成」、气泡永远打不开"）。探针若手抄一份常量，
+ * 就是同一个真源的第二处定义，改了真源探针会静默失配。所以让它直接读这里。
+ *
+ * 只存在于探测页（不参与构建产物），与 `__probeStore` 同性质。
+ */
+;(window as unknown as Record<string, unknown>).__DEFAULT_MONEY_CONFIG__ = DEFAULT_MONEY_CONFIG
 /**
  * `crash=1`：故意在树里抛一次错。
  *
@@ -66,8 +78,7 @@ function Probe(): JSX.Element {
     if (!loaded) return
     const store = useAppStore.getState()
     const view = { zoom: 1, panX: 0, panY: 0 }
-    ;(window as unknown as Record<string, unknown>).__probeStore = {
-      addEventWithPhotos(text: string, photos: string[]) {
+    ;(window as unknown as Record<string, unknown>).__probeStore = {      addEventWithPhotos(text: string, photos: string[]) {
         // addEvent 返回 void，新事件是列表里的最后一个（createEvent 只做追加）。
         store.addEvent(text, 1, 2, 3, view)
         const created = useAppStore.getState().data.events.at(-1)

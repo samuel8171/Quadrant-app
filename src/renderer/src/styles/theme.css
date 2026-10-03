@@ -4996,31 +4996,36 @@ body {
   }
 }
 
-/* ---------- 象限计费气泡（spec 7.4）---------- */
+/* ---------- 象限计费气泡（spec 7.4 / R3-D 玻璃化）---------- */
 
 /*
- * 非模态内联气泡：挂在 .event-layer 内、事件卡片之上，随画布平移缩放一起走。
+ * 非模态内联气泡：挂在 `.event-layer` 内、事件卡片之上，随画布平移缩放一起走。
  *
- * **不做玻璃化**：它落在四象限页既有的玻璃宿主之内，按项目约束新增浮层不得再加材质；
- * 何况本项目每新增一个材质宿主都要重走一整套「祖先链不得有合成面」的约束。
+ * ── **现已玻璃化**（R3-D，2026-10-03）
  *
- * translateY(calc(-100% - 8px)) 把气泡底边贴到卡片左上角之上，避免遮住卡片文字。
- * pointer-events: auto 是硬要求：气泡必须自己接住指针，否则事件会穿透到下层画布、
+ * 材质与外形由 `.gs-layer--bubble` 那一层承载（材质板 `.gs-plate` + 库的镜面边
+ * 或降级档的 `.gs-fallback`）。因此这里**去掉**背景、边框、圆角与投影 ——
+ * 它们会压在材质之上，把玻璃挡得看不出来（与 dock 改造同理）。
+ *
+ * ⚠️ **本类现在挂在「内容层」上**（`GlassSurface` 的 `contentClassName`），
+ * 不再是自成一块的绝对定位浮层。这是 R3-D 探针逼出来的改法：
+ * 旧写法把 `position:absolute` + `transform: translateY(-100% - 8px)` 的整块气泡
+ * 塞进玻璃内容层，于是在玻璃看来内容高为 0（绝对定位子节点不撑高），
+ * 材质板量成 256×24；而气泡自己的 transform 又让它相对材质板上移一整块。
+ * 实测两档保留率 0.461 / 0.656（后者 ≈ 1−染色，是"只剩染色"的指纹）。
+ *
+ * 现在：**玻璃体就是气泡**。本类只负责排版、字号与指针行为；
+ * 定位（贴到卡片上方 8px）由 `QuadrantCostBubble.tsx` 的锚点表达式承担，
+ * 用 `--gs-panel-h` 算中心点 ⇒ 高度变化时也不会错位。
+ *
+ * `pointer-events: auto` 是硬要求：气泡必须自己接住指针，否则事件会穿透到下层画布、
  * 被手势内核当成拖动或平移（JS 侧另有 stopPropagation，两道一起守）。
+ * 玻璃层自己 pointer-events: none，不参与命中测试 ⇒ 玻璃化不改变任何指针行为。
  */
 .quadrant-cost-bubble {
-  position: absolute;
-  z-index: 6;
-  transform: translateY(calc(-100% - 8px));
   display: flex;
   flex-direction: column;
   gap: 10px;
-  width: 232px;
-  padding: 12px;
-  border: 1px solid var(--accent);
-  border-radius: var(--radius-sm);
-  background: var(--panel);
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
   font-size: 13px;
   color: var(--text);
   pointer-events: auto;
