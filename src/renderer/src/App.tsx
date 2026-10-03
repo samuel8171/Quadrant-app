@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import Sidebar from './components/Sidebar'
+import DockGlass from './components/glass/DockGlass'
 import LeaveConfirmDialog from './components/LeaveConfirmDialog'
 import GoalsPage from './pages/GoalsPage'
 import QuadrantPage from './pages/QuadrantPage'
@@ -91,6 +92,16 @@ export default function App(): JSX.Element {
 
   return (
     <div className="app">
+      {/*
+       * 手机底栏 dock 的玻璃层 —— **必须挂在 `.app` 上，不能挂进 `<Sidebar>`**，
+       * 且**排在 `<Sidebar>` 之前**（两者都是 z:auto 的已定位兄弟，同层按树序绘制，
+       * 材质才会落到底下）。为什么不放进 Sidebar：手机档 `.sidebar` 是
+       * `fixed + z-index: 100`，那是一张合成面，会把材质板的背景采样截断在它内部
+       * ⇒ chromium 档只剩染色。完整推导与实测数字见 `components/glass/DockGlass.tsx`。
+       *
+       * 桌面端由 CSS 隐藏（`.gs-layer--dock { display: none }`）。
+       */}
+      <DockGlass />
       <Sidebar />
       <main className="content">
         <div

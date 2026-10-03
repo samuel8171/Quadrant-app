@@ -12,6 +12,7 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import ErrorBoundary from '../src/components/ErrorBoundary'
 import Sidebar from '../src/components/Sidebar'
+import DockGlass from '../src/components/glass/DockGlass'
 import GoalsPage from '../src/pages/GoalsPage'
 import MinePage from '../src/pages/MinePage'
 import QuadrantPage from '../src/pages/QuadrantPage'
@@ -111,6 +112,12 @@ function Probe(): JSX.Element {
   const Page = PAGES[pageName] ?? QuadrantPage
   return (
     <div className="app">
+      {/*
+       * dock 玻璃层与 `<Sidebar>` 都是 `.app` 的直接子节点，顺序与 App.tsx 一致
+       * （玻璃层在前 ⇒ 材质落在导航项之下）。探测页是独立入口，这一处不能
+       * 用"反正生产那边也挂了"来省 —— 玻璃探针正是打在探测页上的。
+       */}
+      <DockGlass />
       {withSidebar && <Sidebar />}
       <main className="content">
         <div className={`page-switch page-switch-${pageName}`} key={pageName}>

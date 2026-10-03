@@ -679,19 +679,46 @@
 }
 
 @media (max-width: 767px) {
-  /* 相对 .sidebar（它本身已是 position: fixed）定位，而不是相对视口 */
+  /*
+   * dock 玻璃层的定位。
+   *
+   * ⭐ 它现在挂在 `.app` 上（`App.tsx` 的直接子节点），**不是** `.sidebar` 的子节点
+   *   —— 这是 R2-K2 的核心修法，别改回去。理由：手机档 `.sidebar` 是
+   *   `fixed + z-index: 100`，两个前提同时成立就是一张**合成面**，会把材质板的
+   *   背景采样截断在它内部 ⇒ chromium 档只剩染色（保留率 0.33 ≈ 1 − 0.34 的读数
+   *   被保底底稀释后仍远不达标）。搬出来后祖先链是
+   *   `.gs-plate → .gs-anchor → .gs-layer--dock → .app(relative/auto) → body → html`，
+   *   全链无合成面，材质才活。
+   *
+   * 定位常量**必须与 theme.css 手机档的 `.sidebar` 严格一致**（12 / 10 / 66）：
+   * 一条是 `left: 12px; right: 12px; bottom: max(10px, env(safe-area-inset-bottom)); height: 66px`，
+   * 镜像到这里就是同样的 12 / 10 / 66。两处对不上，玻璃就会与导航项错位
+   * ——深色底上很难一眼看出，只会觉得"哪里不太对"。改一处必须改另一处。
+   *
+   * 也可以用 `inset: 0` + 在 `.gs-anchor` 上另写几何，但那样会把同一组数字
+   * 拆到两个元素上；这里直接给层本身定尺寸，只有一个真源。
+   *
+   * ⚠️ **`top: auto` 不能省**：基类 `.gs-layer` 带 `inset: 0`，其中的 `top: 0`
+   * 与这里的 `bottom` 是过约束对，**`top` 优先** ⇒ 层会被钉在 `.app` 顶部
+   * （实测 y=0，而不是期望的 768），玻璃整块跑到屏幕上方。三边（left/right/bottom）
+   * 加一个显式 `top: auto` 才构成"贴底、左右留 12px、定高"的完整约束。
+   */
   .gs-layer--dock {
     position: absolute;
     display: block;
-    inset: 0;
+    top: auto;
+    left: 12px;
+    right: 12px;
+    bottom: max(10px, env(safe-area-inset-bottom));
+    height: var(--mobile-nav-height);
     /*
      * 同样是 `--gs-z` 而不是这一层的 z-index（0 与 50 同病，都会让 dock 的
      * 磨砂采不到背景 —— 因为 dock 身后就是时间轴画布）。
      *
-     * 数值保持 0：`.sidebar` 自己是 fixed + z 100，是一个 stacking context，
-     * 材质板与导航项都在它内部按树序比较；0 与 auto 在绘制顺序里同一步，
-     * 所以 dock 依旧排在导航项**下面**（材质是背景，按钮在它上面），
-     * 改成 --gs-z 后相对顺序逐像素不变。
+     * 数值保持 0：搬出 `.sidebar` 之后，本层不再与 `.nav` 共享 `.sidebar` 这个
+     * stacking context，而与 `.sidebar` 一起在 `.app` 的树序里比较 ——
+     * 本层排在 `<Sidebar>` **之前**，两者都是 z:auto，所以材质照旧在导航项**下面**
+     * （材质是背景，按钮在它上面）。0 与 auto 在绘制顺序里同一步，逐像素不变。
      */
     --gs-z: 0;
   }

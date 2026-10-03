@@ -290,21 +290,22 @@ console.log(`  有效模糊读数：「${modal.effective.trim().slice(0, 60)}」
  * 没有那个前提），而当时本探针 34 项**全绿** —— 因为没有一项看过祖先链。
  * 排查时不要只看定位层自己：**从材质板一路走到 documentElement**。
  *
- * 例外：`.gs-layer--dock`（手机底栏）不查。它挂在 `aside.sidebar`（手机档 fixed+z100）
- * 里 —— 按本规则本该判死，但 2026-10-02（R2-K）实测材质是**活的**（保留率 0.028，
- * 见 scripts/dock-glass-retention.mjs），规则在这一处属于"过判"。底部 dock 因此继续
- * 豁免，但**理由已不是"身后没东西可糊"** —— 那层不透明底已由 R2-K 移除，它身后就是
- * 时间轴画布，材质确实在采样。
+ * 例外：嵌在别层里的**子浮层**（设置面板的折射预览条就是 `.gs-layer--preview`）。
+ * 它的祖先必然包含库根节点（带着宿主自己的 `--gs-z`），那不是可选的修饰；
+ * 预览条贴在面板正文上，身后本来是平的，同样没有可糊的对象。
+ *
+ * ⚠️ 2026-10-03（R2-K2）**撤销了手机 dock 的豁免**：dock 的玻璃层已从
+ * `aside.sidebar`（手机档 fixed+z100）里搬出来，改为 `.app` 的直接子节点，
+ * 祖先链是 `.app(relative/auto) → body → html`，**本就干净**。
+ * 此前那条"规则在 dock 上过判"的豁免是**结构缺陷的伪装** —— 实测
+ * （`scripts/dock-glass-retention.mjs`）当时 chromium 档保留率 0.33（只剩染色），
+ * 搬出来后 0.05（活）。所以现在 dock 与其他浮层**一视同仁**，不再跳过；
+ * 若哪天它又被塞回某个合成面里，这里必须失败。
  */
 const ancestorAudit = await page.evaluate(() => {
   const bad = []
   for (const layer of document.querySelectorAll('.gs-layer')) {
-    // 例外一：手机底栏 —— 祖先 aside.sidebar 是 fixed+z100，规则会命中；
-    // 但 R2-K 实测材质仍活（保留率 0.028），规则在此过判，故豁免（见上面注释）。
-    if (layer.classList.contains('gs-layer--dock')) continue
-    // 例外二：嵌在别层里的子浮层（设置面板的折射预览条就是 `.gs-layer--preview`）。
-    // 它的祖先必然包含库根节点（带着宿主自己的 `--gs-z`），那不是可选的修饰；
-    // 而预览条贴在面板正文上，身后本来是平的，同样没有可糊的对象。
+    // 例外：嵌在别层里的子浮层（见上面注释）。
     if (layer.parentElement?.closest('.gs-layer')) continue
     const r = layer.getBoundingClientRect()
     if (!r.width || !r.height) continue

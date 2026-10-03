@@ -1522,6 +1522,9 @@ R3-B（云同步手动/自动）    ── 数据风险最高，用户指定放�
 
 ## ⚠️ 已知缺陷：chromium 档的手机 dock 玻璃是死的（2026-10-02 实测）
 
+> **本节已于 2026-10-03（R2-K2）修复，且其中的"修法代价"判断有一处错误。
+> 修法与实测见下一节。保留本节原文是为了留下当时的推理链 —— 但不要照着它动手。**
+
 R2-K 的实测结论，**直接影响 R3-D / R3-E**：
 
 | 引擎档 | dock 材质 | 保留率 | 说明 |
@@ -1545,3 +1548,75 @@ R2-K 的实测结论，**直接影响 R3-D / R3-E**：
 **需要用户决定**：要不要做那个贵的修法。**在决定之前，R3-D / R3-E 仍可推进**，但必须在报告里
 **分档给出保留率** —— 让「iOS/fallback 上有效、Android/chromium 上无效」这件事是**明说的**，
 而不是让用户以为两端都好了。
+
+---
+
+## ✅ 已修复：chromium 档的手机 dock 玻璃（R2-K2，2026-10-03）
+
+用户裁定「是 iPhone，做那个贵的修法」。**动手前的实测把这段判断推翻了两处**，记录如下。
+
+### 一、根因只有一条，且比预想的好修
+
+上面把「贵」定义为"把材质板移到不与 `.sidebar` 共享 stacking context 的位置"。实际改法是
+**把玻璃层从 `<Sidebar>` 内部挪到 `.app` 的直接子节点**（与 `<aside class="sidebar">` 平级）：
+
+```
+改前：.gs-plate → .gs-anchor → .gs-layer--dock → aside.sidebar(fixed/z:100) → .app → body
+改后：.gs-plate → .gs-anchor → .gs-layer--dock → .app(relative/z:auto)        → body
+```
+
+`.app` 是 `relative + z-index:auto`，不是合成面 ⇒ 采样直通页面。**不需要 portal、不需要新机制**，
+动的是 1 个组件的归属 + 1 个 CSS 块的定位基准。
+
+### 二、旧结论里的第二处错误：那层"保底底"才是压死材质的直接凶手
+
+R2-K 记录的 `chromium 0.66 = 1 − 染色 0.34` 是对的，但它**遗漏了保底底这一层**：
+`.sidebar` 的 `--gs-dock-floor` 是 **0.5 不透明**的实色。材质板在 `.sidebar` 内部时，
+它采样采到的正是"保底底 + 一点点页面"，而 0.34 的染色压上去之后整体只剩 0.66 的对比度保留。
+
+所以**两个变量同时在动**：合成面截断 + 保底底遮盖。只修前者会让读数从 0.33 变成 0.617
+（仍是 tint-only）—— 因为保底底还在采样路径里。**两个都修才是活的**。
+
+### 三、实测（`scripts/dock-glass-retention.mjs`）
+
+| 阶段 | fallback | chromium |
+| --- | --- | --- |
+| R2-K 改前 | 0.028 活 | 0.33 只剩染色 |
+| 只搬层、未处理保底底 | 0.617 **tint-only** | 0.60 **tint-only** |
+| **搬层 + 保底底不变（最终）** | **0.029 活** | **0.05 活** |
+
+> 注：最终版没有单独下调 `--gs-dock-floor`（仍是 0.5）。中间那行之所以差，是因为当时
+> **几何还没对齐**（`.gs-layer` 基类的 `inset: 0` 让 `top: 0` 压过 `bottom`，
+> 整层被钉在 `.app` 顶部 y=0 而不是 y=768）—— 采样盒取的是错位后的 46px 高的一条，
+> 只有部分落在玻璃上。加 `top: auto` 后几何对齐，同一份保底底读数即回到 0.029/0.05。
+> **这条提醒写在这里**：0.617 与 0.029 的差别不在染色浓度，而在"有没有量到正确的地方"。
+
+### 四、改了哪些文件
+
+- `src/renderer/src/components/glass/DockGlass.tsx`（**新增**）：玻璃层的唯一真源。
+  抽成组件是因为**两个入口都要挂它**（`App.tsx` 与 `probe/main.tsx`，后者是独立维护的
+  探测页入口、绕开登录门禁）；两处各写一遍 props 迟早漂移，而漂移的后果不是报错，
+  是"探针量的是另一套结构"。
+- `src/renderer/src/App.tsx` / `probe/main.tsx`：挂 `<DockGlass />`，且**排在 `<Sidebar>` 之前**
+  （两者都是 `z:auto` 的已定位兄弟，同层按树序绘制，材质才会落到底下）。
+- `src/renderer/src/components/Sidebar.tsx`：移除玻璃层与 `GlassSurface` 引入。
+- `glass.css` §五：`.gs-layer--dock` 的定位从"相对 `.sidebar`"改为"相对 `.app`"，
+  常量镜像 `.sidebar` 的 `12 / 10 / 66`，并**补 `top: auto`**（见上面第三点的注）。
+- `scripts/dock-glass-retention.mjs`：**chromium 档纳入退出码**（豁免撤销）。
+- `scripts/liquid-glass-probe.mjs`：**撤销 dock 的祖先链豁免**（它的前提已不成立；
+  撤销后该断言自动通过，是修好的独立证据）。
+
+### 五、验收
+
+- `dock-glass-retention.mjs`：两档 `alive`，退出码 0。
+- `liquid-glass-probe.mjs`：**39/39**（含撤销豁免后的 dock 祖先链断言）。
+- `glass-material-probe.mjs` + `glass-material-judge.py`：全绿，dock 几何
+  `{x:12, y:768, w:366, h:66}` 与 `.sidebar` 逐边重合。
+- 单元测试 **424/424**；`verify-integrity.mjs` 无 FAIL。
+- 生产构建产物（`tmp/dist-probe`）确认含 `top:auto` 与新规则。
+
+### 六、遗留
+
+- `scripts/desktop-glass-cdp.mjs` 仍需真实 Electron 窗口实跑（本轮环境不可用）；
+  它对 dock 的三条断言只依赖类名与"有无布局盒"，不受本次搬动影响。
+- 真机（iPhone）验收仍不可替代 —— 探针是 headless + 桌面 Edge，DPR/视口与真机有差。

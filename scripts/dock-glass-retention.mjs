@@ -12,14 +12,13 @@
  *      后者就是"引擎判成 chromium 但 backdrop-filter 悄悄无输出"的兜底场景。
  *   ② **非零退出**：判据不达标就 `process.exit(1)`（对齐 liquid-glass-probe 的 969 行），
  *      否则"回归只会被印成数字、什么都不会失败"。
- *      纳入退出码的判据有两类：
- *        · **主档 fallback 的生产态保留率**（iOS 实际走的那一档；阈值 ≤ 0.2 为活）；
+ *      纳入退出码的判据：
+ *        · **两档的生产态保留率**（fallback = iOS 实际走的档；chromium = 桌面/网页
+ *          全效果档。R2-K2 之后两档都必须活，阈值 ≤ 0.2）；
  *        · **两档的标签可读性**（真实背景下，材质开/关都 ≥ 4.5:1）。
- *      chromium 档的保留率**照量照打印，但不纳入退出码**：本架构下它是"只剩染色"
- *      （≈1 − 0.34），修法是"把材质板改成不与 `.sidebar` 共享 stacking context 的挂载
- *      方式" —— 简报里代价最高、必须单独评估的那一档，超出本任务授权。让它把探针
- *      永久判红，会盖掉"主档有没有坏"这个真正要守的信号。数字在屏幕上与 JSON 里都留着，
- *      由人裁决（见报告）。
+ *      ⚠️ 历史（已作废）：chromium 档曾"照量照打印但不判红"，因为当时材质板是
+ *      `.sidebar(fixed+z100)` 的后代 ⇒ 结构性必死（0.33）。R2-K2 把玻璃层搬到
+ *      `.app` 上之后它实测 0.05（活），那条豁免随之撤销 —— 现在两档都判红。
  *
  * 保留率口径（沿用项目）：
  *   保留率 = std(材质开) / std(材质关)。条纹插在**页面侧**（被测浮层之前）。
@@ -417,8 +416,7 @@ for (const engine of ['fallback', 'chromium']) {
   r.tintOnly = tintOnly
 }
 
-/* 判定：主档取 fallback（iOS 实际走的那一档） */
-const primary = results.fallback
+/* 判定：两档都算（见下方"两档都纳入退出码"的说明） */
 const classify = (ratio, tintOnly) => {
   if (ratio === null) return 'undefined'
   if (ratio <= ALIVE_MAX) return 'alive'
@@ -442,23 +440,25 @@ for (const [k, r] of Object.entries(results)) {
   }
 }
 
-console.log('\n【判定】')
-console.log(
-  `  主档 fallback 保留率 ${primary.production.ratio} ⇒ ${verdicts.fallback.production}（阈值 ≤${ALIVE_MAX} 为活；"只剩染色"≈${primary.tintOnly}）`
-)
 /*
- * chromium 档单独看：它在本架构下是"只剩染色"（≈1 − 0.34）。
- * 这**不**纳入退出码 —— 它的修法是"把材质板改成不与 .sidebar 共享 stacking context 的
- * 挂载方式"，属简报里代价最高、必须单独评估的那一档，超出本探针/本任务的授权。
- * 让它把探针永久判红会掩盖"主档坏了没有"这一个真正要守的信号。
- * 数字照样打印并写进 JSON，由人（或控制器）裁决。
+ * 两档**都**纳入退出码（2026-10-03 R2-K2 起）。
+ *
+ * 历史：本探针一度只守 fallback 档，chromium 档照量照打印但不判红 ——
+ * 因为当时它在"材质板是 .sidebar(fixed+z100) 的后代"这个结构下**必然是死的**
+ * （0.33），把一条结构性的、超出当轮授权的问题永久判红，会盖掉"主档有没有坏"
+ * 这个真正要守的信号。
+ *
+ * 现在前提变了：R2-K2 把玻璃层搬到 `.app` 上，chromium 档实测 0.05（活）。
+ * 那个"已知死"的豁免随之作废 —— 两档都是必须守的回归信号。
+ * 若哪天 chromium 又掉回 ≈1 − 染色（0.34 ⇒ 0.66 / 0.62 ⇒ 0.38），
+ * 说明材质板又落进了某个合成面里，探针必须失败，而不是把数字印出来让人自己看。
  */
-if (verdicts.chromium.production === 'alive') {
-  console.log(`  chromium 保留率 ${results.chromium.production.ratio} ⇒ alive`)
-} else {
-  console.log(
-    `  ⚠ chromium 保留率 ${results.chromium.production.ratio} ⇒ ${verdicts.chromium.production}（≈1 − 染色 0.34，只剩染色）。不纳入退出码：修法属"改材质板挂载"那一档，需单独评估。`
-  )
+console.log('\n【判定】')
+for (const k of ['fallback', 'chromium']) {
+  const r = results[k]
+  const v = verdicts[k].production
+  const mark = v === 'alive' ? '✓' : '✗'
+  console.log(`  ${mark} ${k} 保留率 ${r.production.ratio} ⇒ ${v}（阈值 ≤${ALIVE_MAX} 为活；"只剩染色"≈${r.tintOnly}）`)
 }
 if (contrastFailures.length) contrastFailures.forEach((f) => console.log(`  ✗ 可读性 ${f}`))
 else console.log(`  ✓ 标签对比度：两档 × 开/关 均 ≥ ${MIN_TEXT_CONTRAST}:1`)
@@ -470,7 +470,13 @@ writeFileSync(
 
 let code = 0
 const reasons = []
-if (verdicts.fallback.production !== 'alive') reasons.push(`fallback 保留率 ${primary.production.ratio} 判为 ${verdicts.fallback.production}（非 alive）`)
+for (const k of ['fallback', 'chromium']) {
+  if (verdicts[k].production !== 'alive') {
+    reasons.push(
+      `${k} 保留率 ${results[k].production.ratio} 判为 ${verdicts[k].production}（非 alive；"只剩染色"≈${results[k].tintOnly}）`
+    )
+  }
+}
 if (contrastFailures.length) reasons.push(`标签对比度不达标：${contrastFailures.join('；')}`)
 
 console.log('\n【错误收集】')
@@ -486,7 +492,7 @@ if (reasons.length) {
   console.error(`\n✗ 失败：${reasons.join(' | ')}`)
   code = 1
 } else {
-  console.log('\n✓ 通过：主档 fallback 材质活，且两档标签可读性达标')
+  console.log('\n✓ 通过：两档材质均活，且两档标签可读性达标')
 }
 await browser.close()
 process.exit(code)

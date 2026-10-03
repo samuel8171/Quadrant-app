@@ -4,7 +4,6 @@ import type { Page } from '../state/appStore'
 import { useAppStore } from '../state/appStore'
 import ConfirmDialog from './ConfirmDialog'
 import CloudLoginDialog from './CloudLoginDialog'
-import GlassSurface from './glass/GlassSurface'
 import type { SyncAction } from '../lib/syncSummary'
 import { hasCloudSession, supabase } from '../lib/cloudSync2'
 
@@ -97,23 +96,6 @@ export default function Sidebar(): JSX.Element {
 
   return (
     <aside className="sidebar">
-      {/*
-        底部 dock 的玻璃层。
-        必须**排在其它子元素之前**：它自己与 .nav 都是「已定位、z-index 自动」
-        的兄弟，同层时按 DOM 顺序绘制，排在前面才会被导航项压在下面。
-        桌面端由 CSS 隐藏（.gs-layer--dock 默认 display:none）——桌面端的
-        .sidebar 是 flex 兄弟、身后没有内容，模糊与折射都无对象可作用。
-
-        这一层 pointer-events: none（见 glass.css），所以它只提供材质，
-        不参与任何点击；导航项照旧可点。
-      */}
-      <GlassSurface
-        center={{ top: '50%', left: '50%' }}
-        padding="5px 8px"
-        contentClassName="gs-dock-plate"
-        layerClassName="gs-layer--dock"
-      />
-
       <div className="brand">
         <span className="brand-logo">
           <i />
