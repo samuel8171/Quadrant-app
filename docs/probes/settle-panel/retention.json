@@ -18,7 +18,7 @@
     "fallback": {
       "engine": "fallback",
       "opened": true,
-      "openMs": 6.3,
+      "openMs": 13.5,
       "struct": {
         "engine": "fallback",
         "plate": {
@@ -35,7 +35,7 @@
         },
         "maskExists": true,
         "seededRowVisible": true,
-        "sessionTitle": "待结算 1 天 · 正在结算 2026-10-02",
+        "sessionTitle": "待结算 1 天 · 正在结算 2026-10-03",
         "legacyOverlay": false,
         "legacyPanelStandalone": false,
         "chain": [
@@ -95,9 +95,9 @@
         },
         "on": "fallback-A-material-on.png",
         "ref": "fallback-A-material-off.png",
-        "controlStd": 22.7,
-        "onStd": 19.5,
-        "offStd": 67.57,
+        "controlStd": 22.73,
+        "onStd": 19.53,
+        "offStd": 67.6,
         "ratio": 0.289
       },
       "errors": []
@@ -105,7 +105,7 @@
     "chromium": {
       "engine": "chromium",
       "opened": true,
-      "openMs": 15.5,
+      "openMs": 40.4,
       "struct": {
         "engine": "chromium",
         "plate": {
@@ -122,7 +122,7 @@
         },
         "maskExists": true,
         "seededRowVisible": true,
-        "sessionTitle": "待结算 1 天 · 正在结算 2026-10-02",
+        "sessionTitle": "待结算 1 天 · 正在结算 2026-10-03",
         "legacyOverlay": false,
         "legacyPanelStandalone": false,
         "chain": [
@@ -182,9 +182,9 @@
         },
         "on": "chromium-A-material-on.png",
         "ref": "chromium-A-material-off.png",
-        "controlStd": 22.98,
-        "onStd": 29.16,
-        "offStd": 67.37,
+        "controlStd": 23.17,
+        "onStd": 29.21,
+        "offStd": 67.4,
         "ratio": 0.433
       },
       "errors": []

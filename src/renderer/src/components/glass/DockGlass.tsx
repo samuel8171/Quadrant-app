@@ -31,6 +31,28 @@ import GlassSurface from './GlassSurface'
  *
  * 几何（层的位置尺寸）全部在 CSS 的 `.gs-layer--dock` 上，本组件只给
  * 中心点与内边距 —— 那两项是 `.gs-plate` 的尺寸来源所必需的。
+ *
+ * ============================================================ 保底底为什么搬到这里
+ *
+ * ⭐ R3-F2（2026-10-03，用户报"底栏遮罩挡住底栏文字"）。保底底
+ * （`--gs-dock-floor`，50% 不透明）原本画在 `.sidebar` 上。`.sidebar` 是
+ * `z-index: 100` 的堆叠上下文，**底与导航文字同在里面**；而材质板在外面，
+ * 只要板压过 100（R3-F 为了修"趋势线没被糊"取的 103），就会连**整棵**
+ * `.sidebar` 一起压过 —— 包括那五个导航项的文字。
+ *
+ *   实测（`scripts/dock-label-order-probe.mjs`，量导航标签的笔画对比度，材质开/关两态）：
+ *     板 z:103（R3-F 修法）  开 1.28 / 关 2.38   Δ−1.10  ← 玻璃压住了文字
+ *     板 z:auto              开 6.51 / 关 6.51   Δ 0.00  ← 文字好，但趋势线不糊（缺陷三复发）
+ *     底搬进本层 + 板 z:50    开 5.93 / 关 5.90   Δ+0.03  ← 两全
+ *
+ * 结论：**底必须与文字分居两个堆叠上下文**。底搬到这里（材质板**之前**的兄弟，
+ * 见 GlassSurface 的 `layerPrefix`），层级就变成
+ *   底(z:0) → 材质板(z:50) → .sidebar 导航(z:100)
+ * 板夹在中间：够得着糊底，又压不到文字。`.sidebar` 手机档底色随之置为
+ * transparent（否则那层 50% 又跑到板之上，等于没搬）。
+ *
+ * ⚠️ 底**不能**放进 `panel`（`!laid` 时整块不渲染）—— 首帧就既无底也无文字。
+ * `layerPrefix` 是无条件渲染的，正合此用（弹窗遮罩用的是同一个槽位）。
  */
 export default function DockGlass(): JSX.Element {
   return (
@@ -39,6 +61,7 @@ export default function DockGlass(): JSX.Element {
       padding="5px 8px"
       contentClassName="gs-dock-plate"
       layerClassName="gs-layer--dock"
+      layerPrefix={<div className="gs-dock-floor" />}
     />
   )
 }

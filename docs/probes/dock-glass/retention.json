@@ -29,7 +29,7 @@
       "engine": "fallback",
       "diag": {
         "engine": "fallback",
-        "sidebarBackground": "rgba(26, 29, 35, 0.5)",
+        "sidebarBackground": "rgba(0, 0, 0, 0)",
         "plateBackground": "rgba(26, 29, 35, 0.62)",
         "tintAlpha": 0.62,
         "plateBackdrop": "blur(16.8px) saturate(1.4)",
@@ -45,7 +45,7 @@
             "tag": "div",
             "cls": "gs-plate",
             "position": "absolute",
-            "zIndex": "103",
+            "zIndex": "50",
             "transform": "none"
           },
           {
@@ -116,8 +116,8 @@
           "height": 46
         },
         "controlStd": 94.34,
-        "onStd": 3.2,
-        "offStd": 113.22,
+        "onStd": 1.6,
+        "offStd": 56.62,
         "ratio": 0.028
       },
       "contrastReal": {
@@ -128,45 +128,45 @@
             {
               "label": "目标",
               "color": "rgb(184, 189, 200)",
-              "bg": 0.0135,
+              "bg": 0.0108,
               "text": 0.5076,
-              "contrast": 8.78
+              "contrast": 9.18
             },
             {
               "label": "四象限",
               "color": "rgb(255, 255, 255)",
-              "bg": 0.0244,
+              "bg": 0.0317,
               "text": 1,
-              "contrast": 14.11
+              "contrast": 12.85
             },
             {
               "label": "周计划",
               "color": "rgb(184, 189, 200)",
-              "bg": 0.0135,
+              "bg": 0.0108,
               "text": 0.5076,
-              "contrast": 8.78
+              "contrast": 9.18
             },
             {
               "label": "周日复盘",
               "color": "rgb(184, 189, 200)",
-              "bg": 0.0137,
+              "bg": 0.0108,
               "text": 0.5076,
-              "contrast": 8.76
+              "contrast": 9.18
             },
             {
               "label": "我的",
               "color": "rgb(184, 189, 200)",
-              "bg": 0.0123,
+              "bg": 0.0108,
               "text": 0.5076,
-              "contrast": 8.96
+              "contrast": 9.18
             }
           ],
           "worst": {
-            "label": "周日复盘",
+            "label": "目标",
             "color": "rgb(184, 189, 200)",
-            "bg": 0.0137,
+            "bg": 0.0108,
             "text": 0.5076,
-            "contrast": 8.76
+            "contrast": 9.18
           }
         },
         "off": {
@@ -181,9 +181,9 @@
             {
               "label": "四象限",
               "color": "rgb(255, 255, 255)",
-              "bg": 0.0285,
+              "bg": 0.0282,
               "text": 1,
-              "contrast": 13.38
+              "contrast": 13.43
             },
             {
               "label": "周计划",
@@ -224,45 +224,45 @@
             {
               "label": "目标",
               "color": "rgb(184, 189, 200)",
-              "bg": 0.0327,
+              "bg": 0.0304,
               "text": 0.5076,
-              "contrast": 6.74
+              "contrast": 6.94
             },
             {
               "label": "四象限",
               "color": "rgb(255, 255, 255)",
-              "bg": 0.0428,
+              "bg": 0.056,
               "text": 1,
-              "contrast": 11.32
+              "contrast": 9.9
             },
             {
               "label": "周计划",
               "color": "rgb(184, 189, 200)",
-              "bg": 0.0327,
+              "bg": 0.0304,
               "text": 0.5076,
-              "contrast": 6.74
+              "contrast": 6.94
             },
             {
               "label": "周日复盘",
               "color": "rgb(184, 189, 200)",
-              "bg": 0.0327,
+              "bg": 0.0294,
               "text": 0.5076,
-              "contrast": 6.74
+              "contrast": 7.02
             },
             {
               "label": "我的",
               "color": "rgb(184, 189, 200)",
-              "bg": 0.0318,
+              "bg": 0.0294,
               "text": 0.5076,
-              "contrast": 6.82
+              "contrast": 7.02
             }
           ],
           "worst": {
             "label": "目标",
             "color": "rgb(184, 189, 200)",
-            "bg": 0.0327,
+            "bg": 0.0304,
             "text": 0.5076,
-            "contrast": 6.74
+            "contrast": 6.94
           }
         },
         "off": {
@@ -270,23 +270,23 @@
             {
               "label": "目标",
               "color": "rgb(184, 189, 200)",
-              "bg": 0.2404,
+              "bg": 0.2396,
               "text": 0.5076,
-              "contrast": 1.92
+              "contrast": 1.93
             },
             {
               "label": "四象限",
               "color": "rgb(255, 255, 255)",
-              "bg": 0.251,
+              "bg": 0.2539,
               "text": 1,
-              "contrast": 3.49
+              "contrast": 3.45
             },
             {
               "label": "周计划",
               "color": "rgb(184, 189, 200)",
-              "bg": 0.2404,
+              "bg": 0.2396,
               "text": 0.5076,
-              "contrast": 1.92
+              "contrast": 1.93
             },
             {
               "label": "周日复盘",
@@ -304,7 +304,7 @@
             }
           ],
           "worst": {
-            "label": "目标",
+            "label": "周日复盘",
             "color": "rgb(184, 189, 200)",
             "bg": 0.2404,
             "text": 0.5076,
@@ -319,7 +319,7 @@
       "engine": "chromium",
       "diag": {
         "engine": "chromium",
-        "sidebarBackground": "rgba(26, 29, 35, 0.5)",
+        "sidebarBackground": "rgba(0, 0, 0, 0)",
         "plateBackground": "rgba(20, 23, 29, 0.34)",
         "tintAlpha": 0.34,
         "plateBackdrop": "blur(16.8px) saturate(1.4)",
@@ -335,7 +335,7 @@
             "tag": "div",
             "cls": "gs-plate.gs-refract",
             "position": "absolute",
-            "zIndex": "103",
+            "zIndex": "50",
             "transform": "none"
           },
           {
@@ -406,9 +406,9 @@
           "height": 46
         },
         "controlStd": 94.34,
-        "onStd": 5.63,
-        "offStd": 113.22,
-        "ratio": 0.05
+        "onStd": 2.78,
+        "offStd": 56.62,
+        "ratio": 0.049
       },
       "contrastReal": {
         "tag": "chromium-real",
@@ -418,45 +418,45 @@
             {
               "label": "目标",
               "color": "rgb(184, 189, 200)",
-              "bg": 0.0128,
+              "bg": 0.0086,
               "text": 0.5076,
-              "contrast": 8.88
+              "contrast": 9.52
             },
             {
               "label": "四象限",
               "color": "rgb(255, 255, 255)",
-              "bg": 0.0342,
+              "bg": 0.0284,
               "text": 1,
-              "contrast": 12.48
+              "contrast": 13.38
             },
             {
               "label": "周计划",
               "color": "rgb(184, 189, 200)",
-              "bg": 0.0129,
+              "bg": 0.0086,
               "text": 0.5076,
-              "contrast": 8.87
+              "contrast": 9.52
             },
             {
               "label": "周日复盘",
               "color": "rgb(184, 189, 200)",
-              "bg": 0.0135,
+              "bg": 0.0086,
               "text": 0.5076,
-              "contrast": 8.78
+              "contrast": 9.52
             },
             {
               "label": "我的",
               "color": "rgb(184, 189, 200)",
-              "bg": 0.0114,
+              "bg": 0.0086,
               "text": 0.5076,
-              "contrast": 9.08
+              "contrast": 9.52
             }
           ],
           "worst": {
-            "label": "周日复盘",
+            "label": "目标",
             "color": "rgb(184, 189, 200)",
-            "bg": 0.0135,
+            "bg": 0.0086,
             "text": 0.5076,
-            "contrast": 8.78
+            "contrast": 9.52
           }
         },
         "off": {
@@ -471,9 +471,9 @@
             {
               "label": "四象限",
               "color": "rgb(255, 255, 255)",
-              "bg": 0.0285,
+              "bg": 0.0282,
               "text": 1,
-              "contrast": 13.38
+              "contrast": 13.43
             },
             {
               "label": "周计划",
@@ -514,45 +514,45 @@
             {
               "label": "目标",
               "color": "rgb(184, 189, 200)",
-              "bg": 0.0535,
+              "bg": 0.0471,
               "text": 0.5076,
-              "contrast": 5.39
+              "contrast": 5.74
             },
             {
               "label": "四象限",
               "color": "rgb(255, 255, 255)",
-              "bg": 0.0776,
+              "bg": 0.0752,
               "text": 1,
-              "contrast": 8.23
+              "contrast": 8.39
             },
             {
               "label": "周计划",
               "color": "rgb(184, 189, 200)",
-              "bg": 0.0523,
+              "bg": 0.0463,
               "text": 0.5076,
-              "contrast": 5.45
+              "contrast": 5.79
             },
             {
               "label": "周日复盘",
               "color": "rgb(184, 189, 200)",
-              "bg": 0.0526,
+              "bg": 0.046,
               "text": 0.5076,
-              "contrast": 5.43
+              "contrast": 5.81
             },
             {
               "label": "我的",
               "color": "rgb(184, 189, 200)",
-              "bg": 0.0507,
+              "bg": 0.046,
               "text": 0.5076,
-              "contrast": 5.53
+              "contrast": 5.81
             }
           ],
           "worst": {
             "label": "目标",
             "color": "rgb(184, 189, 200)",
-            "bg": 0.0535,
+            "bg": 0.0471,
             "text": 0.5076,
-            "contrast": 5.39
+            "contrast": 5.74
           }
         },
         "off": {
@@ -560,23 +560,23 @@
             {
               "label": "目标",
               "color": "rgb(184, 189, 200)",
-              "bg": 0.2404,
+              "bg": 0.2396,
               "text": 0.5076,
-              "contrast": 1.92
+              "contrast": 1.93
             },
             {
               "label": "四象限",
               "color": "rgb(255, 255, 255)",
-              "bg": 0.251,
+              "bg": 0.2539,
               "text": 1,
-              "contrast": 3.49
+              "contrast": 3.45
             },
             {
               "label": "周计划",
               "color": "rgb(184, 189, 200)",
-              "bg": 0.2404,
+              "bg": 0.2396,
               "text": 0.5076,
-              "contrast": 1.92
+              "contrast": 1.93
             },
             {
               "label": "周日复盘",
@@ -594,7 +594,7 @@
             }
           ],
           "worst": {
-            "label": "目标",
+            "label": "周日复盘",
             "color": "rgb(184, 189, 200)",
             "bg": 0.2404,
             "text": 0.5076,
