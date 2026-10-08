@@ -295,14 +295,31 @@ node scripts/verify-integrity.mjs --appdata <dir>  # 覆盖数据目录（默认
   单变量消融（`scripts/paint-order-ablation.mjs`，只动绘制顺序）：板抬到 `.sidebar` 之上
   → FWHM 4→130；`.sidebar` 降 `z:auto` → 11；**把 `.sidebar` 底调透明但板仍在下面 → 依旧 4**。
   ⇒ 不是"被底盖住的错觉"，是**板画的整块都在 `.sidebar` 之下**。
-  修法（`glass.css`）：`.gs-layer--dock .gs-plate { z-index: 103 }` —— 高于 `.sidebar` 的
-  100（它自成堆叠上下文，这是必须显式压过的）、低于菜单的 110；`.nav` 实测 `z:auto`，
-  板是「定位 + 非 auto 的 z」⇒ 一定画在 `.nav` 之前（下层），导航项照旧可点
-  （`elementFromPoint` 五项全中自身）。
+  ⭐⭐ **2026-10-03 R3-F2 定案：真正该做的是把「保底底」搬进玻璃层，而不是给板提级。**
+  上面那次照"板抬到 `.sidebar` 之上"取了 `z-index: 103` —— **材质活了，但用户随即报
+  「底栏遮罩挡住底栏文字」**。病因是 `.sidebar` 是 `z-index: 100` 的**堆叠上下文**，
+  而**保底底与五个导航项的文字同在里面**；板在外面，103 > 100 就压过**整棵** `.sidebar`，
+  文字当然一起被盖住。**病根是"底与文字挤在同一个堆叠上下文"，外部任何 z 都插不进两者之间。**
+  实测（`scripts/dock-label-order-probe.mjs`，量导航标签笔画对比度，材质开/关两态；
+  开态显著变低即"文字被板糊掉"）：
+
+  | 结构 | 文字Δ(开−关) | 趋势线 FWHM | 判 |
+  | --- | --- | --- | --- |
+  | 板 `z:103`（R3-F 修法） | **−1.10** | 12 | ❌ 文字被压 |
+  | 板 `z:auto` | 0.00 | 4 | ❌ 缺陷三复发 |
+  | **底搬进玻璃层 + 板 `z:50`** | **+0.03** | **12** | ✅ 两全 |
+
+  定案结构（三层，从下到上）：**底 `.gs-dock-floor`(z:0) → 材质板 `.gs-plate`(z:50) →
+  `.sidebar` 导航(z:100)**。底由 `DockGlass.tsx` 的 `layerPrefix` 插在材质板**之前**
+  （无条件渲染，`!laid` 时也在 —— 否则首帧既无底也无文字）；`.sidebar` 手机档
+  `background` 随之由 `var(--gs-dock-floor)` 改为 **`transparent`**（不搬走它，那层 50% 又跑到板之上）。
   ⚠️ **不能靠调 `.sidebar` 的 z-index 或那层保底底来修**：100 是手机档全局层级的一环
   （菜单 110、遮罩 120 都要压它）；底调淡是反效果（底越淡，未糊内容越显眼）。
-  ⚠️ 这条**只对 chromium 档有意义**，降级档不渲染库那棵子树，板与可见面同取 0 一直是对的。
-  守门：`scripts/trend-chart-glass.mjs` 的 `sharpRatio` 判据（见下条）。
+  ⚠️ 底的**不透明度别动**（0.5）：它是首帧可读性的下限（搬走后由玻璃层里的底承担），
+  `scripts/dock-glass-retention.mjs` 的"材质关"一列是它的守门人。
+  ⚠️ 这条**只对 chromium 档有意义**，降级档不渲染库那棵子树（R3-F2 复量：两档都过）。
+  守门：`scripts/dock-label-order-probe.mjs`（文字 Δ + FWHM 双判据，两档）+ 
+  `scripts/trend-chart-glass.mjs` 的 `sharpRatio`（见下条）。
 - ⭐ **iOS standalone 下"布局视口 ≠ 屏幕"，浮层盒子别用 `inset: 0`**（2026-09-27 第十八轮）：
   布局视口（＝`position: absolute` 的初始包含块）比**屏幕**矮一个状态栏安全区
   （本项目实测 iPhone 14 Pro：793 vs 852，差 59px）。于是 `inset: 0` 的弹窗遮罩
