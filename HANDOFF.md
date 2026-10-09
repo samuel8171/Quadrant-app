@@ -2,8 +2,9 @@
 
 > **本版整体重写**（上一版停在 2026-09-27 第十八轮）。
 > 生成：**2026-10-09 15:32**（GMT+8）
-> 本地 `main`：最后一次**代码**改动 **`ca97dc7`**（R3-F2），其上只叠了本文件所在的 doc 提交
-> 远端 `main`：**`392a16bd`**（树与本地逐字节相同，sha 不同 —— 见 §6）
+> 本地 `main`：最后一次**代码**改动 **`ca97dc7`**（R3-F2），其上叠了 doc 提交与
+> `chore(release): 1.3.1 → 1.4.0`（桌面端打包）—— **这两个尚未推送**
+> 远端 `main`：**`392a16bd`**（其树 == `ca97dc7` 的树，逐字节相同；sha 不同 —— 见 §6）
 > 线上：https://samuel8171.github.io/Quadrant-app/ ｜ 产物 `assets/index-CFBg2gX4.js` + `index-DSNHBsOY.css`
 
 ---
@@ -208,8 +209,16 @@ WeekSettlement { weekStart, weekEnd, weekTC, spentTC, weekOver, plannedMin, actu
     -H "apikey: sb_publishable_oPq0EiI_ofPDz2q0iy9EUQ_byXMWSk5"
   # 返回 bucket JSON（而非 404 Bucket not found）即为就绪
   ```
-- 桌面端 exe 最新是 `dist/象限-1.3.1.exe`，**不含金钱系统与 R3 系列**。要发布需先抬
-  `package.json` + `package-lock.json`（**根包两处**）的 version，再按 `AGENTS.md` 的打包流程走。
+- **桌面端 exe 最新是 `dist/象限-1.4.0.exe`**（2026-10-09，73,765,900 B = 70.35 MB），
+  **已包含**金钱系统全套与 R3-A…R3-F2 全部改动（验货见 §5.4 下方）。产物目录 `dist/` 是
+  **gitignored**，exe 不入库 ⇒ 换机器要重新打包。再发布新版本时先抬
+  `package.json` + `package-lock.json`（**根包两处**，注意锁文件里 `update-browserslist-db`
+  有自己的同名版本**不要动**）的 version，再按 `AGENTS.md` 的打包流程走。
+  1.4.0 的验货结果（解 `app.asar` 搜标识串，**别搜 exe**）：
+  `"version": "1.4.0"`、`.gs-layer--dock .gs-plate { z-index: 50 }`、
+  `.gs-layer--dock .gs-dock-floor` 规则在位（`gs-dock-floor` 出现 10 次）、
+  CSS 里 `103` **只在注释正文**、金钱系统标识 `DEFAULT_MONEY_CONFIG` / `settleDay` /
+  `selectMoneyStats` / `quadrantMultiplier` / 时币 / 娱币 全部命中。
 
 ---
 
@@ -222,7 +231,11 @@ R3-F2 走的是 REST 兜底（当时代理没开），API 建的提交与本地*
 ```bash
 git push --force-with-lease=refs/heads/main:392a16bd origin main
 ```
-推完本地/远端即恢复逐字节一致。**内容不会丢**（两边的树逐字节相同，已验证 `9f916857`）。
+推完本地/远端即恢复逐字节一致，并把本地未推的 doc 提交与 `1.4.0` 版本提交一并带上。
+**内容不会丢**（`ca97dc7` 与 `392a16bd` 的树逐字节相同，已验证 `9f916857`）。
+
+⚠️ 若届时想**分两次**推（先对齐、再推新提交），注意 `--force-with-lease` 的期望值要
+跟着远端当前 sha 走，别照抄 `392a16bd`。
 
 ---
 
