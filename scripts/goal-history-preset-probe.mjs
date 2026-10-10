@@ -166,29 +166,73 @@ console.log('\n== 目标主页：完成 → 3 秒保持 → 移入历史 ==')
   check('主页初始 3 张卡片', (await page.locator('.goal-card').count()) === 3)
 
   /*
-   * 先装一个 MutationObserver 记录「移出动画是否真的播过」。
-   * 不用 `waitForSelector('.is-leaving')`：那个类只存在约 200ms，靠轮询去抓是碰运气。
+   * 移出动画的采样器。
+   *
+   * ⚠️ 判据不是某个类名（上一版是 `.is-leaving`），而是 **auto-animate 的运行时特征**：
+   * 删掉一个子节点时它会把该节点重新挂回列表、临时改成 `position: absolute` 覆盖层
+   * （`styleReset` 里写死 top/left/width/height/margin/pointerEvents/zIndex），
+   * 再播一段 `transform: scale(1)→scale(.98)` + `opacity 1→0` 的 WAAPI 动画，
+   * 动画结束才真正摘除节点。所以「覆盖层出现过 + 它在淡出 + 停在原位」这三条
+   * 就是"移出动画播过、且用的是合成器动画"的证据。
+   *
+   * ⚠️ 必须 `setInterval`（20ms），不能用 rAF：headless 下 rAF 被压到 ~1Hz，采不到中间态。
    */
+  const firstCard = page.locator('.goal-column').first().locator('.goal-card').first()
+  const firstCardBefore = await firstCard.boundingBox()
   await page.evaluate(() => {
-    window.__leavingSeen = false
-    new MutationObserver(() => {
-      if (document.querySelector('.goal-card-slot.is-leaving')) window.__leavingSeen = true
-    }).observe(document.body, { subtree: true, attributes: true, attributeFilter: ['class'] })
+    window.__exit = { frames: [], sibling: [], waapi: 0, props: [] }
+    window.__exitIv = setInterval(() => {
+      const list = document.querySelector('.goal-column .goal-list')
+      if (!list) return
+      const cards = [...list.children]
+      const overlay = cards.find((c) => getComputedStyle(c).position === 'absolute')
+      if (!overlay) return
+      const r = overlay.getBoundingClientRect()
+      window.__exit.frames.push({
+        t: Math.round(performance.now()),
+        top: Math.round(r.top),
+        left: Math.round(r.left),
+        height: Math.round(r.height),
+        opacity: Number(getComputedStyle(overlay).opacity)
+      })
+      // 覆盖层的**兄弟**（下面那张卡）应当同时向上补位，且是补间而非瞬移。
+      const rest = cards.filter((c) => c !== overlay)
+      window.__exit.sibling.push(Math.round(rest[0]?.getBoundingClientRect().top ?? 0))
+      /*
+       * 收集"到底动了哪些 CSS 属性"。这是**替代"卡不卡"的客观判据**：
+       * 只动 `transform` / `opacity` ⇒ 合成器就能完成，不触发布局与重绘；
+       * 一旦出现 `height` / `grid-template-rows` 之类，每帧都要重排 ——
+       * 上一版那条 `grid-template-rows: 1fr → 0fr` 就是这么卡的。
+       * （headless 下 rAF 被压到 ~1Hz，直接量帧率是量不出真话的。）
+       */
+      const META = ['offset', 'computedOffset', 'easing', 'composite']
+      for (const a of document.getAnimations()) {
+        const t = a.effect && a.effect.target
+        if (!t || !t.classList || !t.classList.contains('goal-card')) continue
+        window.__exit.waapi += 1
+        try {
+          for (const kf of a.effect.getKeyframes()) {
+            for (const key of Object.keys(kf)) {
+              if (!META.includes(key) && !window.__exit.props.includes(key)) {
+                window.__exit.props.push(key)
+              }
+            }
+          }
+        } catch {
+          /* 非关键帧动画（如 CSS 过渡）没有 keyframes，忽略 */
+        }
+      }
+    }, 20)
   })
 
   // 勾选第一列的第一张（长期目标「考研英语 85+」）。
-  const firstCard = page.locator('.goal-column').first().locator('.goal-card').first()
   const t0 = Date.now()
   await firstCard.locator('.goal-check').click()
   await page.waitForTimeout(400)
   await page.screenshot({ path: `${OUT}/01-just-checked.png` })
 
   check('确认完成后立刻置为 done', (await firstCard.getAttribute('class'))?.includes('done') === true)
-  check(
-    '400ms 时仍在主页（未被摘除）',
-    (await page.locator('.goal-card').count()) === 3 &&
-      (await page.locator('.goal-card-slot.is-leaving').count()) === 0
-  )
+  check('400ms 时仍在主页（未被摘除）', (await page.locator('.goal-card').count()) === 3)
 
   // 按**实际流逝的时间**量一次中点：这里才是"不是瞬间消失"的证据。
   await page.waitForTimeout(Math.max(0, t0 + 1500 - Date.now()))
@@ -197,21 +241,101 @@ console.log('\n== 目标主页：完成 → 3 秒保持 → 移入历史 ==')
     (await page.locator('.goal-card').count()) === 3
   )
 
+  /*
+   * ⚠️ 判据必须是「**在流**的卡片数」，不能直接数 `.goal-card`：
+   * auto-animate 移出一个节点时会把它**重新挂回列表**改造成 `position: absolute`
+   * 覆盖层，动画播完（`duration` = 200ms）才真正摘除 ⇒ 直接数节点会把动画时长
+   * 混进"何时离开主页"里（实测 3247ms，看着像"还在等动画"，其实是覆盖层还没清）。
+   */
+  const inFlowCards = () =>
+    Array.from(document.querySelectorAll('.goal-card')).filter(
+      (c) => getComputedStyle(c).position !== 'absolute'
+    ).length
   const leftOk = await page
-    .waitForFunction(() => document.querySelectorAll('.goal-card').length === 2, null, {
-      timeout: 5000,
-      /*
-       * 显式按定时器轮询（默认是 rAF）。headless 里 rAF 会被压到 ~1Hz，
-       * 于是"卡片在 3.2s 离开"会被量成 4.2s —— 那是观测手段的延迟，不是产品行为。
-       */
-      polling: 25
-    })
+    .waitForFunction(
+      () =>
+        Array.from(document.querySelectorAll('.goal-card')).filter(
+          (c) => getComputedStyle(c).position !== 'absolute'
+        ).length === 2,
+      null,
+      {
+        timeout: 5000,
+        /*
+         * 显式按定时器轮询（默认是 rAF）。headless 里 rAF 会被压到 ~1Hz，
+         * 于是"卡片在 3.2s 离开"会被量成 4.2s —— 那是观测手段的延迟，不是产品行为。
+         */
+        polling: 25
+      }
+    )
     .then(() => true)
     .catch(() => false)
   const leftAt = Date.now() - t0
-  check('保持窗口过后离开主页', leftOk, `${leftAt}ms 后剩 2 张`)
+  check('保持窗口过后离开主页', leftOk, `${leftAt}ms 后在流卡片剩 ${await page.evaluate(inFlowCards)} 张`)
   check('离开主页发生在 3 秒之后', leftAt >= 3000, `${leftAt}ms`)
-  check('播放了移出动画（.is-leaving 出现过）', await page.evaluate(() => window.__leavingSeen === true))
+  /*
+   * 上界这条是 2026-10-10 换动画时的**新增判据**：以前摘除要多等一条
+   * `grid-template-rows` 过渡（200ms）＋ 兜底定时器，实测 3274ms；现在窗口一到点
+   * 就摘（React 直接卸载），移出动画由 auto-animate 在原地播，所以应当**贴着 3000ms**。
+   */
+  check('摘除不再等动画播完（贴住 3 秒窗口）', leftAt <= 3200, `${leftAt}ms`)
+
+  /*
+   * 抓一张**动画中间态**存档：`waitForFunction` 在 React 卸载那一刻返回（~3040ms），
+   * 而覆盖层的淡出是 3000→3200ms ⇒ 此刻正好是该卡片半透明、下方卡片正在上移的一帧。
+   */
+  await page.screenshot({ path: `${OUT}/13-goal-leaving.png` })
+
+  /*
+   * ⚠️ 采完再收工：上面那条 `waitForFunction` 在 **React 卸载**的那一刻就返回
+   * （3044ms），而覆盖层的移出动画还要再播 200ms。这里不等一等，采样器会被提前
+   * 掐掉，只采到 1 帧 —— 判据就成了空的（第一版就是这样，探针自己报的）。
+   */
+  await page.waitForTimeout(520)
+  const exit = await page.evaluate(() => {
+    clearInterval(window.__exitIv)
+    return window.__exit
+  })
+  const exitFrames = exit.frames
+  check(
+    '播放了移出动画（auto-animate 的 absolute 覆盖层出现过）',
+    exitFrames.length >= 3,
+    `${exitFrames.length} 帧`
+  )
+  check(
+    '移出用的是 WAAPI（不是 grid/height 这类布局动画）',
+    exit.waapi > 0,
+    `动画帧 ${exit.waapi}`
+  )
+  check(
+    '移出只动 transform / opacity（合成器动画 ⇒ 不触发重排，这才是"不卡"的根据）',
+    exit.props.length > 0 && exit.props.every((p) => p === 'transform' || p === 'opacity'),
+    exit.props.join(' + ') || '未采到属性'
+  )
+  check(
+    '覆盖层停在卡片原位（没被裁掉或错位）',
+    exitFrames.length > 0 &&
+      Math.abs(exitFrames[0].top - firstCardBefore.y) <= 2 &&
+      Math.abs(exitFrames[0].height - firstCardBefore.height) <= 2,
+    exitFrames.length > 0
+      ? `原 top=${Math.round(firstCardBefore.y)} → 覆盖层 ${exitFrames[0].top}（高 ${exitFrames[0].height}）`
+      : '无采样'
+  )
+  check(
+    '移出是淡出（opacity 递减）',
+    exitFrames.length >= 3 &&
+      exitFrames[exitFrames.length - 1].opacity < exitFrames[0].opacity,
+    exitFrames.length >= 3
+      ? `opacity ${exitFrames[0].opacity} → ${exitFrames[exitFrames.length - 1].opacity}`
+      : '无采样'
+  )
+  const sib = exit.sibling
+  const sibShift = sib.length >= 2 ? sib[0] - sib[sib.length - 1] : 0
+  const sibBetween = sib.filter((v) => v < sib[0] - 2 && v > sib[sib.length - 1] + 2).length
+  check(
+    '下方卡片向上补位是**补间**而不是瞬移',
+    sibShift > 8 && sibBetween >= 1,
+    `位移 ${sibShift}px，中间态 ${sibBetween}/${sib.length} 帧`
+  )
 
   const historyBtnText = await page
     .locator('.goal-column')
@@ -252,6 +376,97 @@ console.log('\n== 目标主页：完成 → 3 秒保持 → 移入历史 ==')
     `${backCount} 张 / done ${doneCount}`
   )
   await page.screenshot({ path: `${OUT}/04-back-to-main.png` })
+
+  // ---------------------------------------------------------------------------
+  // 新增 / 删除目标的卡片动画（2026-10-10 由 auto-animate 接管）
+  // ---------------------------------------------------------------------------
+  console.log('\n== 目标页：新增 / 删除的卡片动画 ==')
+
+  /*
+   * 采样器要在按 Enter **之前**装好：新增动画总长只有 300ms（库把 `duration` 乘 1.5），
+   * 事后装就什么都采不到。判据是"卡片中途的 opacity 既不是 0 也不是 1"，
+   * 也就是真的在补间，而不是直接出现。
+   */
+  await page.evaluate(() => {
+    window.__add = { frames: [], waapi: 0 }
+    window.__addIv = setInterval(() => {
+      window.__add.waapi += document
+        .getAnimations()
+        .filter(
+          (a) =>
+            a.effect && a.effect.target && a.effect.target.classList?.contains('goal-card')
+        ).length
+      const fresh = [...document.querySelectorAll('.goal-card')].filter(
+        (c) => Number(getComputedStyle(c).opacity) < 1
+      )
+      if (fresh.length) {
+        window.__add.frames.push(Number(getComputedStyle(fresh[fresh.length - 1]).opacity))
+      }
+    }, 20)
+  })
+  await page.locator('.goal-column').nth(1).locator('.add-goal-btn').click()
+  await page.locator('.add-goal-row input').fill('新增目标甲')
+  await page.keyboard.press('Enter')
+  await page.waitForTimeout(600)
+  const add = await page.evaluate(() => {
+    clearInterval(window.__addIv)
+    return window.__add
+  })
+  check('新增后卡片进入列表', (await page.locator('.goal-card').count()) === 4)
+  check(
+    '新增卡片是**淡入**（采到中间透明度，不是直接出现）',
+    add.frames.length >= 3 && add.frames[add.frames.length - 1] > add.frames[0],
+    add.frames.length
+      ? `opacity ${add.frames[0]} → ${add.frames[add.frames.length - 1]}（${add.frames.length} 帧）`
+      : '无采样'
+  )
+  check('新增用的是 WAAPI（补间动画）', add.waapi > 0, `动画帧 ${add.waapi}`)
+  await page.screenshot({ path: `${OUT}/11-goal-added.png` })
+
+  // 删除：走确认框。被删卡片应播**同一套**移出动画（同容器同一个控制器）。
+  const victim = page.locator('.goal-column').nth(1).locator('.goal-card').last()
+  const victimBox = await victim.boundingBox()
+  await page.evaluate(() => {
+    window.__del = { frames: [], waapi: 0 }
+    window.__delIv = setInterval(() => {
+      const list = document.querySelectorAll('.goal-column')[1]?.querySelector('.goal-list')
+      if (!list) return
+      const overlay = [...list.children].find((c) => getComputedStyle(c).position === 'absolute')
+      if (!overlay) return
+      window.__del.frames.push({
+        top: Math.round(overlay.getBoundingClientRect().top),
+        opacity: Number(getComputedStyle(overlay).opacity)
+      })
+      window.__del.waapi += document
+        .getAnimations()
+        .filter(
+          (a) =>
+            a.effect && a.effect.target && a.effect.target.classList?.contains('goal-card')
+        ).length
+    }, 20)
+  })
+  await victim.locator('.icon-btn.danger').click()
+  await page.locator('.confirm-modal .modal-btn.primary').click()
+  await page.waitForTimeout(600)
+  const del = await page.evaluate(() => {
+    clearInterval(window.__delIv)
+    return window.__del
+  })
+  check('确认删除后卡片离开列表', (await page.locator('.goal-card').count()) === 3)
+  check(
+    '删除也播了移出动画（覆盖层淡出）',
+    del.frames.length >= 3 && del.frames[del.frames.length - 1].opacity < del.frames[0].opacity,
+    del.frames.length
+      ? `opacity ${del.frames[0].opacity} → ${del.frames[del.frames.length - 1].opacity}（${del.frames.length} 帧）`
+      : '无采样'
+  )
+  check(
+    '删除的覆盖层停在原位',
+    del.frames.length > 0 && Math.abs(del.frames[0].top - victimBox.y) <= 2,
+    del.frames.length > 0 ? `原 top=${Math.round(victimBox.y)} → ${del.frames[0].top}` : '无采样'
+  )
+  check('删除用的是 WAAPI（补间动画）', del.waapi > 0, `动画帧 ${del.waapi}`)
+  await page.screenshot({ path: `${OUT}/12-goal-deleted.png` })
 
   await ctx.close()
 }

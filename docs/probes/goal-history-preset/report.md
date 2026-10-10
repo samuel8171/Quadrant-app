@@ -256,3 +256,82 @@ flex 列里装不下就按 `flex-shrink` 压缩 —— 正常情况下 `min-heig
 > 早已让位，两者的屏幕位置本来就不同。
 > **反向对照已做**：把 `sheet` 类临时撤掉后该条立刻转红（幽灵 11px / 本体 12.5px），
 > 证明判据不是空洞的。
+
+---
+
+# 第四轮（2026-10-10）：目标页的增 / 删 / 完成改用 auto-animate
+
+用户：「给目标页的添加、删除、完成目标加入 auto-animate 的动画」，
+并明确「**不要现有的动画，现有动画会卡顿**」。
+
+## 为什么现有那条会卡：它是**布局动画**
+
+原来「完成 → 移入历史」的移出走 `.goal-card-slot` 上的
+`transition: grid-template-rows 1fr → 0fr`（外加 `margin-top`、`opacity`）。
+`grid-template-rows` 每一帧都要**重算网格轨道 + 重排整列 + 重绘**，卡片一多就是
+纯主线程负载 —— 这正是"卡顿"的机制（不是主观感受）。
+
+新方案交给 `@formkit/auto-animate`：删节点时它把该节点改成 `position: absolute`
+覆盖层，播 `transform: scale(1)→scale(.98)` + `opacity 1→0`，同时对其余子元素做 FLIP
+（`transform` 位移）。**全程只有 `transform` / `opacity`，合成器就能完成，不触发布局。**
+
+> headless 下 rAF 被压到 ~1Hz，**直接量帧率是量不出真话的**。所以判据换成**客观的**
+> 一条：抓出这一刻所有作用在 `.goal-card` 上的 WAAPI 动画，把
+> `effect.getKeyframes()` 里的属性名取并集，断言它 ⊆ `{transform, opacity}`。
+> 实测输出 `transform + opacity`。这才是"不卡"的根据。
+
+## 删掉的代码（净减）
+
+| 删掉 | 原来干什么 |
+| --- | --- |
+| `.goal-card-slot` / `.goal-card-slot + .goal-card-slot` / `.goal-card-slot > .goal-card` / `.goal-card-slot.is-leaving` | 承载折叠动画的槽位及其 4 条规则 |
+| `.goal-list > .goal-card + .goal-card { margin-top: 8px }` | 历史页单独补的间距（现在统一走 `gap`） |
+| `LEAVE_MS` / `LEAVE_FALLBACK_MS` | 过渡时长常量 + 兜底定时器（`transitionend` 缺席时的保险） |
+| `leaving` 状态、`onTransitionEnd`、`finishLeave` 里的清类、`onFinishLeave` 的逐层透传 | 手写移出状态机 |
+| `timersRef` 的 `Map<string, number[]>` | 一个目标曾挂两个定时器（保持窗口 + 移出兜底），现在只有一个 |
+
+**保持窗口（3 秒）原样保留** —— 那是产品需求，不是动画：卡片何时离开仍由
+`COMPLETION_HOLD_MS` 决定，只是窗口到点后**直接卸载**，动画由库在节点离场时播。
+
+新增 `src/renderer/src/lib/motion.ts`（`MOTION_MS` / `MOTION_EASE` / `MOTION_SETTLE_MS`），
+预设排序面板改为从它取同一套节奏（值不变，只是不再各写一份）。
+
+## ⚠️ 探针踩到的两个坑（都会让判据变成空的）
+
+1. **数 `.goal-card` 节点 ≠ 卡片离开了主页**。auto-animate 把被删节点**重新挂回列表**
+   当覆盖层，动画播完（200ms）才真摘除 ⇒ 直接数节点会量到 **3247ms**，
+   看着像"还在等动画"，其实是覆盖层还没清。
+   判据改成数**在流**（`position !== 'absolute'`）的卡片 ⇒ 实测 **3035ms**，
+   正好贴住 3000ms 的保持窗口。
+2. **采样器收工太早**：`waitForFunction` 在 React 卸载那一刻（3040ms）就返回，
+   而覆盖层还要再播 200ms。第一版当场只采到 **1 帧**、两条断言转红 ——
+   所以判据必须"等动画播完再收工"（本文件里那两段注释就是这么来的）。
+
+## 本轮新增的 13 条断言（总数 69 → 82）
+
+```
+== 目标主页：完成 → 3 秒保持 → 移入历史 ==
+  [ok] 摘除不再等动画播完（贴住 3 秒窗口） — 3035ms
+  [ok] 播放了移出动画（auto-animate 的 absolute 覆盖层出现过） — 10 帧
+  [ok] 移出用的是 WAAPI（不是 grid/height 这类布局动画） — 动画帧 20
+  [ok] 移出只动 transform / opacity（合成器动画 ⇒ 不触发重排，这才是"不卡"的根据） — transform + opacity
+  [ok] 覆盖层停在卡片原位（没被裁掉或错位） — 原 top=146 → 覆盖层 146（高 50）
+  [ok] 移出是淡出（opacity 递减） — opacity 0.946 → 0.008
+  [ok] 下方卡片向上补位是**补间**而不是瞬移 — 位移 50px，中间态 5/10 帧
+
+== 目标页：新增 / 删除的卡片动画 ==
+  [ok] 新增卡片是**淡入**（采到中间透明度，不是直接出现） — opacity 0 → 0.853（15 帧）
+  [ok] 新增用的是 WAAPI（补间动画） — 动画帧 25
+  [ok] 删除也播了移出动画（覆盖层淡出） — opacity 0.944 → 0.008（10 帧）
+  [ok] 删除的覆盖层停在原位 — 原 top=204 → 204
+  [ok] 删除用的是 WAAPI（补间动画） — 动画帧 20
+```
+
+新增截图：`13-goal-leaving.png`（**动画中间态**：离场卡片半透明、下方卡片正在上移）、
+`11-goal-added.png`、`12-goal-deleted.png`。
+
+## 回归
+
+单测 **465/465**（24 文件）｜`tsc` web / node 各 0 错｜网页端 `vite build` 通过
+（CSS 里 `goal-card-slot` / `is-leaving` 残留 **0**；`.goal-list{…gap:8px;position:relative}` 在位）。
+预设排序那 30 余条断言全绿（只换了常量来源，值未变）。
