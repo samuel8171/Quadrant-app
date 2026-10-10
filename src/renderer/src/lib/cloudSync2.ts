@@ -67,6 +67,13 @@ export async function fetchCloudData(): Promise<{ revision: string | null; data:
  *
  * 修订号取自云端回写的 `updated_at`；若因 RLS 未返回行，则退回本机时钟——
  * 两侧都只是「用来比对是否变化」的标记，不参与业务判定。
+ *
+ * ⚠️ **本函数不做「空数据保护」**。之前想过在這一层拦「空覆盖非空」，但那条闸门
+ * 与「用户真的把内容删光了，要同步这个删除」是同一件事的两面：拦了它，
+ * 网页端（没有显式上传按钮）就再也删不掉自己的数据了。
+ * 空数据保护改由**判断层**承担，且只拦真正危险的那一支：
+ * `syncMeta.decideStartup` 的「本机没有同步记忆 ⇒ 采纳云端」与
+ * `appStore` 的「首屏对账完成之前不许自动上传」。
  */
 export async function pushCloudData(data: AppData): Promise<{ revision: string }> {
   const userId = await requireUserId()

@@ -22,7 +22,7 @@ const cloud = vi.hoisted(() => ({
 
 vi.mock('../src/renderer/src/lib/cloudSync2', () => cloud)
 
-import { useAppStore } from '../src/renderer/src/state/appStore'
+import { resetSyncGate, useAppStore } from '../src/renderer/src/state/appStore'
 
 const DATA_KEY = 'quadrant-web-data-v2'
 const storage = new Map<string, string>()
@@ -75,6 +75,22 @@ const settleSave = async (): Promise<void> => {
   await vi.advanceTimersByTimeAsync(600)
 }
 
+/**
+ * 走到「已对账、自动上传闸门已开」的状态。
+ *
+ * ⚠️ 新契约下**必须先对账再编辑**：`appStore.init()` 里对账排在最前面，
+ * 而在它出结论之前一律不上传（见 `reconciled` 的注释）。测试若不先走这一步，
+ * 量到的只是"闸门关着"这个状态本身，而不是上传逻辑。
+ *
+ * 用 `markPushed(cloudRevision)` 把本机记忆对齐到云端当前修订 ⇒ `already-synced`
+ * ⇒ 保留本地并开闸，正是"同一台设备继续增量编辑"的真实前置状态。
+ */
+async function reconcileFirst(data: AppData): Promise<void> {
+  seedLocalData(data)
+  await markPushed('r-cloud')
+  await useAppStore.getState().init()
+}
+
 beforeEach(() => {
   vi.useFakeTimers()
   flushPendingSave()
@@ -83,6 +99,7 @@ beforeEach(() => {
   desktop = false
   installWindow()
   resetSyncMetaCache()
+  resetSyncGate()
   cloud.pushCloudData.mockResolvedValue({ revision: 'r-new' })
   cloud.fetchCloudData.mockResolvedValue({ revision: 'r-cloud', data: cloudData })
   cloud.fetchCloudMeta.mockResolvedValue({ exists: true, revision: 'r-cloud' })
@@ -98,26 +115,22 @@ afterEach(() => {
 
 describe('空数据写入保护（路径 ①）', () => {
   it('本机没有同步记忆时，把内容清空不会上传，改为采纳云端', async () => {
-    useAppStore.setState({ data: localData })
-    useAppStore.getState().deleteGoal('local-1')
-    await settleSave()
+    seedLocalData(defaultData())
+    await useAppStore.getState().init()
 
     expect(cloud.pushCloudData).not.toHaveBeenCalled()
-    expect(cloud.fetchCloudData).toHaveBeenCalledTimes(1)
     expect(useAppStore.getState().data.goals.map((g) => g.id)).toEqual(['cloud-1', 'cloud-2'])
   })
 
   it('采纳云端后会把云端数据落盘，冷启动不会退回旧数据', async () => {
-    useAppStore.setState({ data: localData })
-    useAppStore.getState().deleteGoal('local-1')
-    await settleSave()
+    seedLocalData(defaultData())
+    await useAppStore.getState().init()
 
     expect(storage.get(DATA_KEY)).toContain('cloud-1')
   })
 
   it('本机同步过时，删空属于正常编辑，照常上传', async () => {
-    await markPushed('r-old')
-    useAppStore.setState({ data: localData })
+    await reconcileFirst(localData)
     useAppStore.getState().deleteGoal('local-1')
     await settleSave()
 
@@ -125,20 +138,59 @@ describe('空数据写入保护（路径 ①）', () => {
     expect((cloud.pushCloudData.mock.calls[0][0] as AppData).goals).toEqual([])
   })
 
-  it('云端也是空的时候不会白白拉一次', async () => {
+  it('云端也是空的时候不会白白推一份空数据', async () => {
     cloud.fetchCloudData.mockResolvedValue({ revision: 'r-empty', data: defaultData() })
-    useAppStore.setState({ data: localData })
-    useAppStore.getState().deleteGoal('local-1')
-    await settleSave()
+    seedLocalData(defaultData())
+    await useAppStore.getState().init()
 
     expect(cloud.pushCloudData).not.toHaveBeenCalled()
     expect(useAppStore.getState().data.goals).toEqual([])
   })
 })
 
+// ============================================================================
+// 2026-10-10 事故回归：新设备（含 dev origin）绝不顶掉云端
+// ============================================================================
+
+/**
+ * 用户报告：`npm run dev:web` 打开后云端数据被本地数据整份覆盖。
+ *
+ * `localStorage` 按 origin 隔离 ⇒ `localhost:5173` 在同步层看来是一台**新设备**，
+ * 口袋里还装着开发期残留的旧数据；而旧实现里 `dirty` 会把这份"另一份东西"当成
+ * "离线编辑"优先保留并上传。
+ */
+describe('新设备不得顶掉云端（数据丢失回归）', () => {
+  it('⭐ 本机从未同步过 + 本地有内容 + 带未上传标记 ⇒ 采纳云端，绝不上传', async () => {
+    seedLocalData(localData)
+    await markSyncDirty()
+    await useAppStore.getState().init()
+
+    expect(cloud.pushCloudData).not.toHaveBeenCalled()
+    expect(useAppStore.getState().data.goals.map((g) => g.id)).toEqual(['cloud-1', 'cloud-2'])
+  })
+
+  it('被顶掉的本机那份会留一份快照，不会无声消失', async () => {
+    seedLocalData(localData)
+    await markSyncDirty()
+    await useAppStore.getState().init()
+
+    const snapshot = storage.get('quadrant-web-data-conflict-snapshot') ?? ''
+    expect(snapshot).toContain('local-1')
+  })
+
+  it('⭐ 首屏对账出结论之前，编辑一律不上传（只记 dirty）', async () => {
+    // 不走 init：模拟"界面已渲染、对账还在路上"的那个窗口。
+    useAppStore.getState().addGoal('long', '抢跑的目标')
+    await settleSave()
+
+    expect(cloud.pushCloudData).not.toHaveBeenCalled()
+    expect((await readSyncMeta()).dirty).toBe(true)
+  })
+})
+
 describe('普通编辑的自动上传', () => {
   it('即时上传并记录修订号与时间戳', async () => {
-    await markPushed('r-old')
+    await reconcileFirst(localData)
     useAppStore.getState().addGoal('long', '新目标')
     await settleSave()
 
@@ -151,6 +203,7 @@ describe('普通编辑的自动上传', () => {
   })
 
   it('上传失败（离线）时保留 dirty 且不抛异常', async () => {
+    await reconcileFirst(localData)
     cloud.pushCloudData.mockRejectedValue(new Error('offline'))
     useAppStore.getState().addGoal('long', '离线目标')
     await settleSave()
@@ -179,7 +232,9 @@ describe('启动对账', () => {
   })
 
   it('上次离线留下的改动会被补传，而不是被云端盖掉', async () => {
+    // 离线编辑的真实前置：本机记忆**对得上云端当前修订**，只是有未上传的改动。
     seedLocalData(localData)
+    await markPushed('r-cloud')
     await markSyncDirty()
     await useAppStore.getState().init()
 

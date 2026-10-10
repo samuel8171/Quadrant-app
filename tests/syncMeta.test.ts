@@ -5,6 +5,7 @@ import type { AppData, CloudMeta, LedgerDay, SyncMeta } from '../src/shared/type
 import {
   decideStartup,
   hasCloudRevision,
+  hasSyncedBefore,
   isCloudChangedElsewhere,
   markPulled,
   markPushed,
@@ -74,7 +75,7 @@ describe('同步元信息：启动判定', () => {
     ).toEqual({ kind: 'adopt-cloud', reason: 'local-empty' })
   })
 
-  it('本地有未上传改动时保留本地，且优先于"云端更新"', () => {
+  it('修订号不一致时采纳云端 —— **哪怕本机 dirty**（旧实现会保留并上传，是丢失入口）', () => {
     expect(
       decideStartup({
         hasSession: true,
@@ -82,7 +83,7 @@ describe('同步元信息：启动判定', () => {
         cloud: cloud('r9'),
         meta: meta({ cloudRevision: 'r1', dirty: true })
       })
-    ).toEqual({ kind: 'keep-local', reason: 'local-dirty' })
+    ).toEqual({ kind: 'adopt-cloud', reason: 'cloud-newer' })
   })
 
   it('修订号一致时判定为已同步', () => {
@@ -111,6 +112,68 @@ describe('同步元信息：启动判定', () => {
     expect(
       decideStartup({ hasSession: true, local: nonEmpty(), cloud: cloud('r1'), meta: meta() }).kind
     ).toBe('adopt-cloud')
+  })
+})
+
+// ============================================================================
+// 2026-10-10 数据丢失事故：新设备带着本地数据把云端顶掉
+// ============================================================================
+
+/**
+ * 事故现场：`npm run dev:web` 打开后，云端数据被一份**陈旧且无关**的本地数据整份覆盖。
+ *
+ * 根因是第 4 条（`local-dirty`）之前没有「本机是否与云端对过账」这一问 ——
+ * `dirty` 标记不区分「离线编辑」与「本机从来就是另一份东西」。
+ * `localStorage` 按 origin 隔离，所以 `localhost:5173` 在同步层看来是一台**新设备**，
+ * 而 `init()` 里的本地维护步骤会 `saveSoon` ⇒ 把 `dirty` 置真并触发上传。
+ *
+ * 这一组用例把「新设备永远不许顶掉云端」钉死。
+ */
+describe('同步元信息：新设备不得顶掉云端（数据丢失回归）', () => {
+  it('⭐ 新设备 + 本地有数据 + dirty + 云端有数据 ⇒ 采纳云端（事故那条路径）', () => {
+    expect(
+      decideStartup({
+        hasSession: true,
+        local: nonEmpty(),
+        cloud: cloud('r9'),
+        meta: meta({ dirty: true })
+      })
+    ).toEqual({ kind: 'adopt-cloud', reason: 'never-synced' })
+  })
+
+  it('同一台设备的离线改动：修订号一致时保留本地（随后补传）', () => {
+    expect(
+      decideStartup({
+        hasSession: true,
+        local: nonEmpty(),
+        cloud: cloud('r1'),
+        meta: meta({ cloudRevision: 'r1', lastPulledAt: '2026-10-09T00:00:00.000Z', dirty: true })
+      })
+    ).toEqual({ kind: 'keep-local', reason: 'already-synced' })
+  })
+
+  it('同一台设备但云端已被别人改过 ⇒ 云端胜出（旧实现会保留本地并顶掉云端）', () => {
+    expect(
+      decideStartup({
+        hasSession: true,
+        local: nonEmpty(),
+        cloud: cloud('r9'),
+        meta: meta({ cloudRevision: 'r1', lastPushedAt: '2026-10-09T00:00:00.000Z', dirty: true })
+      })
+    ).toEqual({ kind: 'adopt-cloud', reason: 'cloud-newer' })
+  })
+
+  it('新设备但云端为空：没有可保护的东西，不采纳（留给补传逻辑）', () => {
+    expect(
+      decideStartup({ hasSession: true, local: nonEmpty(), cloud: cloud(null), meta: meta() })
+    ).toEqual({ kind: 'keep-local', reason: 'cloud-empty' })
+  })
+
+  it('只有 deviceId 不算"对过账"（每次冷启动都会换/补 deviceId）', () => {
+    expect(hasSyncedBefore(defaultSyncMeta('dev-x'))).toBe(false)
+    expect(hasSyncedBefore(meta({ cloudRevision: 'r1' }))).toBe(true)
+    expect(hasSyncedBefore(meta({ lastPulledAt: '2026-10-09T00:00:00.000Z' }))).toBe(true)
+    expect(hasSyncedBefore(meta({ lastPushedAt: '2026-10-09T00:00:00.000Z' }))).toBe(true)
   })
 })
 

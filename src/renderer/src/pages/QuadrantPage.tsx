@@ -993,11 +993,27 @@ export default function QuadrantPage(): JSX.Element {
             onConfirm={(answer) => {
               const target = billingEvent
               setBillingId(null)
-              // 「不计费」= 不写任何账（spec 7.4 的默认路径）。
-              if (!target || !answer.billable) return
-              // 把本页持有的日期一并交出去：气泡的 alreadyBilled 用的就是它，
-              // 整条路径跑在同一个时钟、同一个日期上（跨零点不再各算各的）。
-              completeQuadrantEvent(target, answer.actualMin, nowMin, today)
+              if (!target) return
+              /*
+               * 「不计费」只是**不记账**，卡片一律离场 —— 用户已经在气泡里回答过
+               * 「是否计时」这一问，把卡片留在原地会让人以为没生效。删除与记账
+               * 收敛在 store 的同一次 set 里（见 completeQuadrantEvent），
+               * 顺带会解除它与周计划事件的镜像链接。
+               *
+               * 把本页持有的日期一并交出去：气泡的 alreadyBilled 用的就是它，
+               * 整条路径跑在同一个时钟、同一个日期上（跨零点不再各算各的）。
+               */
+              const photoIds = target.photos ?? []
+              completeQuadrantEvent(target, answer, nowMin, today)
+              /*
+               * 照片实体必须跟着一起回收，与「删除事件」那条路径同规矩：
+               * 事件一旦不在，挂在上面的 id 就再也访问不到，实体却还占着
+               * IndexedDB / 桌面文件 / 云端三份空间，是不可回收的孤儿。
+               * `forgetPhotoUrl` 顺手把 object URL 缓存摘掉（否则缓存里那条
+               * URL 仍指向已删的 blob，而查看器可能正开着这张图）。
+               */
+              for (const id of photoIds) forgetPhotoUrl(id)
+              void Promise.all(photoIds.map((id) => removePhoto(id)))
             }}
             onCancel={() => setBillingId(null)}
           />

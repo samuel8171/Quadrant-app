@@ -359,7 +359,80 @@ body {
 .goal-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+}
+
+/*
+ * 卡片槽位：承载「完成后移入历史」的移出动画。
+ *
+ * 高度用 `grid-template-rows: 1fr → 0fr` 折叠（与 `.preset-collapse` 同一套手法，
+ * 理由见那处注释：fr 是数值、浏览器可插值，于是"高度自适应内容"也能有过渡，
+ * 且时长恒定）。间距因此从 `.goal-list` 的 `gap` 挪到槽位上 —— `gap` 不可插值，
+ * 留在外面会让卡片移出后多出一条 8px 空隙，直到卸载才消失。
+ *
+ * `.is-leaving` 只由移出动画驱动；何时摘除槽位由 JS 的 `transitionend`（+ 兜底
+ * 定时器）决定，见 `GoalsPage` 的 `finishLeave`。
+ */
+.goal-card-slot {
+  display: grid;
+  grid-template-rows: 1fr;
+  overflow: hidden;
+  transition: grid-template-rows 200ms ease, margin-top 200ms ease, opacity 200ms ease;
+}
+
+.goal-card-slot + .goal-card-slot {
+  margin-top: 8px;
+}
+
+/*
+ * 历史列表里没有槽位（那里不需要移出动画），卡片是 `.goal-list` 的直接子元素，
+ * 所以间距还得单独给一条 —— 上面的 `+.goal-card-slot` 覆盖不到它。
+ */
+.goal-list > .goal-card + .goal-card {
+  margin-top: 8px;
+}
+
+/* 槽位是 grid 容器、卡片是它的 grid 项：不给 min-height: 0 就压不到 0。 */
+.goal-card-slot > .goal-card {
+  min-height: 0;
+}
+
+.goal-card-slot.is-leaving {
+  grid-template-rows: 0fr;
+  margin-top: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+/*
+ * 列标题右侧的「历史」入口。
+ * 列标题是 flex 容器，`margin-left: auto` 即可靠右，无需再包一层。
+ * 字号显式压到 12px：`.goal-column-title` 是 16px，继承下来会盖过标题本身。
+ */
+.goal-history-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 400;
+  cursor: pointer;
+}
+
+.goal-history-btn:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+}
+
+.goal-history-empty {
+  padding: 28px 0;
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: 14px;
 }
 
 .goal-card,
@@ -2070,6 +2143,26 @@ body {
   flex-direction: column;
   gap: 10px;
   padding-right: 2px;
+  /*
+   * 显式给定位上下文：`@formkit/auto-animate` 在父元素计算样式为 `static` 时会
+   * **自己往内联样式里塞 `position: relative`**，与其被它悄悄改，不如这里写清楚。
+   */
+  position: relative;
+  /*
+   * ⭐⭐ **关掉浏览器的滚动锚定**（2026-10-10 实测）。
+   *
+   * 拖动期间我们**自己**在重排 DOM（按草稿顺序渲染，让位动画的前提）。而 Chrome 的
+   * 滚动锚定会在内容变化时"帮你"调 `scrollTop` 以保持视觉稳定 —— 两套机制争同一个
+   * 滚动位置，结果是列表在用户指尖下自己跳一段。
+   *
+   * 实测（`tmp/diag-scroll-anchor.mjs`，矮视口 + 已滚到底 + 拖动跨中线触发一次重排）：
+   *   overflow-anchor: auto（默认）→ scrollTop 195 → **105**，位移 **−90px**
+   *   overflow-anchor: none        → scrollTop 195 → 195，位移 **0px**
+   *
+   * 关掉之后不仅不跳，落点判定也少了一个变数：产品侧每次都现读 `scrollTop`
+   * （见 `PresetPanel` 的 `listOrigin`），滚动位置由手指与滚动条说了算。
+   */
+  overflow-anchor: none;
 }
 
 .preset-empty {
@@ -2139,6 +2232,288 @@ body {
 
 .preset-card:hover .preset-actions {
   display: flex;
+}
+
+/* ---------- 预设「调整顺序」模式 ---------- */
+
+/*
+ * 面板工具条上的两个按钮（「调整顺序」+「新建预设」）。
+ * `.preset-head` 是 `space-between`，把两个按钮包成一组才不会把标题顶到中间。
+ */
+.preset-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+}
+
+.icon-btn.active {
+  color: var(--accent);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.icon-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/*
+ * 排序模式下卡片退化为「纯容器」：不响应指针、不飘起来。
+ * `transform` 尤其要压掉——桌面端 hover 会把卡片上移 3px，而排序时用户正盯着
+ * 卡片之间的间隙判断落点，卡片在手下游走会让判断失真。
+ */
+.preset-card.reordering {
+  cursor: default;
+  /* 给左侧的拖柄让位，否则手柄会盖在标题上。 */
+  padding-left: 26px;
+}
+
+.preset-card.reordering:hover {
+  transform: none;
+  box-shadow: 0 0 0 rgba(0, 0, 0, 0);
+}
+
+/*
+ * 被拖的那张卡片：**留在原位占着槽位**（`visibility: hidden` 不脱流），
+ * 它自己就是"让位之后的那个空位"。真正跟手抬起的是挂在 body 上的幽灵副本
+ * （见下面的 `.preset-drag-ghost`）。
+ *
+ * 为什么不让它直接跟着手指走：让位动画由 auto-animate 用 WAAPI 播，
+ * 而 CSS 动画/WAAPI 的层叠优先级**高于内联样式**，会盖掉我们写在这张卡片上的
+ * transform —— 同一张元素上二者只能留一个。所以拆成"隐身本体 + 幽灵副本"。
+ */
+.preset-card.is-drag-source {
+  visibility: hidden;
+}
+
+.preset-grip {
+  position: absolute;
+  left: 2px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 40px;
+  border-radius: 6px;
+  color: var(--text-secondary);
+  cursor: grab;
+  /*
+   * 必须在 `pointerdown` 之前就声明：`touch-action` 在指针按下那一刻被锁存，
+   * 整段手势期间再改类不生效（见 AGENTS.md 的移动端手势结论）。手机上缺了它，
+   * 手指在把手上滑动会被抽屉的横向滚动抢走，排序根本起不来。
+   * 拖拽期间本元素虽然不可见，但锁存的判定仍然有效，整段手势不会退化成滚动。
+   */
+  touch-action: none;
+}
+
+.preset-grip:active {
+  cursor: grabbing;
+}
+
+.preset-grip:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.preset-grip:focus-visible {
+  outline: 2px solid var(--accent);
+}
+
+/*
+ * 跟手抬起的幽灵卡片（portal 到 body）。复用 `.preset-card` 的外观。
+ *
+ * 选择器写成两个类（`.preset-card.preset-drag-ghost`）是**必须的**：手机档那条
+ * `.preset-card { margin: 10px 0 12px }` 在文件更后面，同权重下后写的赢，
+ * 单个类压不住它，幽灵会被那 10/12px 外边距顶偏。
+ */
+.preset-card.preset-drag-ghost {
+  position: fixed;
+  margin: 0;
+  /* 盖过手机 dock 的 100、抽屉的 90、以及手机全屏排序面板的 210（幽灵要浮在它之上）。 */
+  z-index: 220;
+  pointer-events: none;
+  cursor: default;
+  /* 抬升：与 `.preset-card:hover` 同族（同样上移 3px），但阴影更重，表示"拿在手里"。 */
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.45);
+  will-change: transform;
+  /* 跟手阶段绝不能有过渡（会慢半拍）；落位阶段的过渡由内联样式给（见组件里的 ghost 样式）。 */
+  transition: none;
+}
+
+/*
+ * 拖拽期间关掉横向吸附。
+ * 手机档 `.preset-list` 的 `scroll-snap-type: x proximity` 会把让位后的卡片
+ * 吸回原位，与让位动画直接打架；类一移除即恢复（松手就恢复）。
+ * 桌面档本来就没有 scroll-snap，这条对它是空操作。
+ */
+.preset-list.is-dragging {
+  scroll-snap-type: none;
+}
+
+/* 排序模式下的上移/下移按钮：桌面端也要常显，不能等 hover。 */
+.preset-card.reordering .preset-actions {
+  display: flex;
+}
+
+/* ---------- 手机档「调整顺序」全屏面板 ---------- */
+
+/*
+ * 抽屉最高只有 `min(300px, 46dvh)`，列表还是横向单行的：在 390px 宽里排 5~8 张
+ * 卡片要反复横滑，而排序恰恰是"来回比较"的操作，在抽屉里非常难受。
+ * 所以手机档一进排序模式就换成**全屏面板**，列表回到纵向 —— 与桌面端同一套排布、
+ * 同一个轴向判定（`PresetPanel` 里没有一行逻辑是手机专属的）。
+ *
+ * 打开播 220ms 放大（scale .9 → 1）+ 淡入；关闭 160ms 缩小淡出
+ * （`.closing` 由 `useClosing` 驱动，真正卸载发生在动画之后）。
+ */
+@media (max-width: 767px) {
+  .preset-sort-sheet {
+    position: fixed;
+    inset: 0;
+    /* 盖过抽屉的 90 与手机 dock 的 100；幽灵卡片按 220 再压一层（见上）。 */
+    z-index: 210;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg);
+    padding: calc(12px + var(--safe-top)) 14px calc(12px + env(safe-area-inset-bottom));
+    transform-origin: center;
+    animation: preset-sort-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+
+  .preset-sort-sheet.closing {
+    animation: preset-sort-out 160ms ease-in forwards;
+  }
+
+  .preset-sort-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    height: 46px;
+    flex: none;
+  }
+
+  .preset-sort-head h3 {
+    margin: 0;
+    font-size: 16px;
+  }
+
+  .preset-sort-done {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 7px 14px;
+    border: 1px solid var(--accent);
+    border-radius: 999px;
+    background: transparent;
+    color: var(--accent);
+    font: inherit;
+    font-size: 14px;
+    cursor: pointer;
+  }
+
+  /*
+   * 全屏面板里的列表**回到纵向**，把手机档那条 `flex-direction: row` + 横向吸附
+   * 一并覆盖掉（两个类压过单类）。`scroll-snap-type: none` 在这里是常驻的，
+   * 不需要拖拽期临时切换 —— 面板里本来就没有"横向吸附"这回事。
+   */
+  .preset-list.preset-sort-list {
+    flex: 1;
+    min-height: 0;
+    flex-direction: column;
+    overflow-x: hidden;
+    overflow-y: auto;
+    gap: 10px;
+    padding: 0;
+    scroll-snap-type: none;
+  }
+
+  /*
+   * 卡片恢复"块状"形态：抽屉里那条 `flex: 0 0 136px` 是给横排用的，
+   * 在纵向 flex 里它会变成**固定高度** 136px，把卡片撑成一块死板的方块。
+   *
+   * ⭐⭐ 下面这一组覆盖是 2026-10-10 修的"事件名称看不见 + 箭头不居中"：
+   *
+   * **① 标题被压成 0 高**（实测 h=0，2.5 小时那张剩 8px 于是与 meta 糊成重影）。
+   *   链条是：卡片高度是**内联写死的**（随预设时长伸缩，20 分钟=64px、2.5 小时=116px）
+   *   而内容有 19+15+15+行距+内边距 ≈ 77px ⇒ flex 列里的子项按 `flex-shrink` 被压缩。
+   *   正常情况下 `min-height: auto` 会兜住，但 **`.preset-title` 带 `overflow: hidden`**，
+   *   按 Flexbox 规范这类元素的"自动最小尺寸"退化为 **0**，于是它被压得比一行字还矮。
+   *   修法两条腿：文字块 `flex: none` 不参与收缩，卡片给一个装得下文字的最小高度。
+   *
+   * **② 箭头落到卡片底部、还被裁掉一截**。`.preset-actions` 在抽屉里被改成
+   *   `position: static`（横排窄条 136px 放不下浮动按钮），这条规则同时命中了排序面板，
+   *   于是 44px 的按钮组混进纵向流、顶到卡片下沿（实测 top=53 + h=44 > 卡高 80）。
+   *   修法是把它按回浮动并**垂直居中**（需求：「箭头应居中事件块」），右侧留给它一条
+   *   `padding-right` 通道，标题的省略号在通道之前就结束，不会钻到按钮底下。
+   */
+  .preset-sort-list .preset-card {
+    flex: none;
+    width: auto;
+    margin: 0;
+    scroll-snap-align: none;
+    /* 文字栈（19+15+15）＋两处行距 4×2 ＋上下内边距 10×2 = 77 ⇒ 取 78 留 1px 余量。 */
+    min-height: 78px;
+    /* 内容在卡片里垂直居中：卡片高度仍随时长伸缩，不居中就会"字顶在上沿、箭头飘在中间"。 */
+    justify-content: center;
+    /* 右侧按钮通道：两个 44px 按钮 + 间隙 2 + 右偏移 10 + 余量 6。 */
+    padding-right: 106px;
+  }
+
+  .preset-sort-list .preset-card .preset-title,
+  .preset-sort-list .preset-card .preset-meta,
+  .preset-sort-list .preset-card .preset-duration {
+    /* 见上①：不参与收缩，否则固定高度不够时标题会被压成 0 高。 */
+    flex: none;
+  }
+
+  .preset-sort-list .preset-card .preset-actions {
+    /* 见上②：按回浮动，并相对卡片**垂直居中**。 */
+    position: absolute;
+    top: 50%;
+    right: 10px;
+    transform: translateY(-50%);
+    display: flex;
+    gap: 2px;
+    padding: 0;
+    background: none;
+  }
+
+  /*
+   * 幽灵是面板里那张卡片的**副本**，几何必须逐项对齐（内容居中 + 右侧按钮通道），
+   * 否则起拖/落位的那一刻文字会跳一下（本体已经居中、副本还顶在上沿）。
+   * 它挂在 `document.body` 上，没有 `.preset-sort-list` 祖先，只能靠 `sheet` 类认亲。
+   */
+  .preset-card.preset-drag-ghost.sheet {
+    justify-content: center;
+    padding-right: 106px;
+  }
+
+  /* 抽屉的 ::before/::after 是给横滑留首尾余量的，纵向里没有意义。 */
+  .preset-sort-list::before,
+  .preset-sort-list::after {
+    content: none;
+  }
+}
+
+@keyframes preset-sort-in {
+  from {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes preset-sort-out {
+  to {
+    opacity: 0;
+    transform: scale(0.94);
+  }
 }
 
 .weekly-dialog {
@@ -3930,6 +4305,28 @@ body {
    */
   .settle-card {
     margin: calc(24px + var(--safe-top)) 20px 24px;
+  }
+
+  /*
+   * ⭐⭐ 日结卡片在场时，它下面的页面**不许再避让一次顶部安全区**（2026-10-10 修）。
+   *
+   * 安全区已经在卡片上面消化掉了（卡片的 `margin-top` 就是 `24px + safe-top`），
+   * 而 `.weekly-page` / `.day-page` 的 `calc(24px + var(--safe-top))` 是给
+   * "页面直接顶到屏幕顶"那种情形准备的。两者叠加的后果：
+   *   ① **安全区被避让两次**；
+   *   ② 卡片底边与「周计划」标题之间凭空多出 `24 + (24 + safe-top)` ——
+   *      safe-top 取真机常见的 47 时就是 **95px** 的空档（用户报的"空隙非常大"）。
+   *
+   * `.weekly-page` 自己没有背景也没有边框（`theme.css:1554`），它的内边距纯粹是间距，
+   * 所以这里把**上内边距整个让出去**，由卡片的 `margin-bottom: 24px` 充当唯一的区块间隔，
+   * 回到全站统一的 24px 节律。（`.weekly-shell` 是纵向 flex，外边距不折叠，24 就是 24。）
+   *
+   * 选择器用相邻兄弟：`SettleCard` 在 `count <= 0` 时返回 `null`，此时没有
+   * `.settle-card` 元素、这条规则不命中，页面照常自己避让安全区。左右内边距不动。
+   */
+  .settle-card + .weekly-page,
+  .settle-card + .day-page {
+    padding-top: 0;
   }
 
   /*

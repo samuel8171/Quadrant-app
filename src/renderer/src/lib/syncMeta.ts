@@ -16,9 +16,9 @@ import { getPlatformApi } from './platformApi'
 export type StartupAction =
   | {
       kind: 'keep-local'
-      reason: 'no-session' | 'cloud-empty' | 'local-dirty' | 'already-synced'
+      reason: 'no-session' | 'cloud-empty' | 'already-synced'
     }
-  | { kind: 'adopt-cloud'; reason: 'local-empty' | 'cloud-newer' }
+  | { kind: 'adopt-cloud'; reason: 'local-empty' | 'never-synced' | 'cloud-newer' }
 
 export interface StartupInput {
   /** 当前是否有可用的云端会话（未登录时无从谈起）。 */
@@ -34,28 +34,59 @@ export function hasCloudRevision(cloud: CloudMeta): boolean {
   return cloud.exists && typeof cloud.revision === 'string' && cloud.revision.length > 0
 }
 
+/**
+ * 本机是否**与云端对过账**（拉或推任一方向成功过一次）。
+ *
+ * 用途只有一个：区分「另一台设备」与「同一台设备」。`localStorage` 是按 **origin**
+ * 隔离的，所以 `http://localhost:5173`（`npm run dev:web`）与线上 Pages 在同步层看来
+ * 是**两台不同的设备**；换端口、换 host（`localhost` ↔ `127.0.0.1`）同样算新设备。
+ * 新设备的口袋里可能有任意陈旧的本地数据，它绝不能凌驾于云端之上。
+ */
+export function hasSyncedBefore(meta: SyncMeta): boolean {
+  return meta.cloudRevision !== null || meta.lastPulledAt !== null || meta.lastPushedAt !== null
+}
+
 /** 云端修订与本机记忆不一致 ⇒ 期间有别的设备写过云端。 */
 export function isCloudChangedElsewhere(cloud: CloudMeta, meta: SyncMeta): boolean {
   return hasCloudRevision(cloud) && cloud.revision !== meta.cloudRevision
 }
 
 /**
- * 启动时的单向取舍。判定顺序即优先级，前面的规则先命中就先返回——
+ * 启动时的单向取舍。**判定只看"修订号"这一个事实**，顺序即优先级：
  *
- * 1. 没有会话：只能本地。**桌面端靠这条把自动同步整体关掉**（桌面编辑不自动
- *    上传，自动拉取会静默丢掉桌面端未同步的改动）。
- * 2. 云端没有有效修订：没有可采纳的东西。
- * 3. **本地是空数据而云端有数据 ⇒ 采纳云端**（修正「新设备/清缓存 → 覆盖云端为空」）。
- * 4. **本地有未上传改动 ⇒ 保留本地**（离线编辑优先，避免被云端盖掉）。
- * 5. 云端修订与记忆一致 ⇒ 双方已同步，什么都不用做。
- * 6. 其余 ⇒ 云端更新，采纳云端。
+ * 1. 没有会话：只能本地。**桌面端靠这条把自动同步整体关掉**。
+ * 2. 云端没有有效修订：没有可采纳的东西（云端还没被写过 ⇒ 本机是唯一副本）。
+ * 3. **本地是空数据而云端有数据 ⇒ 采纳云端**（新设备 / 清缓存 → 不许把云端冲空）。
+ * 4. ⭐ **本机从未与云端对过账 ⇒ 采纳云端**（`never-synced`，见下）。
+ * 5. 云端修订与本机记忆**一致** ⇒ 双方已同步，保留本地（可以安全地继续增量上传）。
+ * 6. 其余（云端修订与本机记忆**不一致**）⇒ 云端更新，采纳云端。
+ *
+ * ⭐⭐ 两条与旧实现不同的地方，都是 2026-10-10 修全量数据丢失时定下的：
+ *
+ * **① 第 4 条是新增的。** `localStorage` 按 **origin** 隔离，所以
+ * `http://localhost:5173`（`npm run dev:web`）与线上 Pages 在同步层看来是**两台设备**；
+ * 换端口、换 host（`localhost` ↔ `127.0.0.1`）同样算新设备。而新设备的口袋里往往有
+ * 开发期残留的旧数据 —— 它绝不能凌驾于云端之上。
+ * 之前就是在这里丢的数据：`npm run dev:web` 打开后，`init()` 里的本地维护步骤触发
+ * 一次自动上传，把云端整份覆盖成了陈旧的本地数据，用户什么都没点。
+ *
+ * **② 「本地有未上传改动 ⇒ 保留本地」那条被删掉了。** 它原本写作第 4 条，理由是
+ * "离线编辑优先"。但 `dirty` 这个标记**不区分**「同一台设备的离线编辑」与
+ * 「本机从来就是另一份东西」，于是它同时是数据丢失的入口：
+ * 一台曾经同步过、但本地已经陈旧的设备（例如几天前同步过一次的第三台设备），
+ * 只要它的 `dirty` 为真，就会把那份陈旧数据推上去、把云端的较新内容整份顶掉。
+ *
+ * 删掉之后规则变成一句可预测的话：**谁的修订号新谁说了算；修订号一致 = 已同步；
+ * 本机没有记忆 = 新设备，听云端的。** 代价是"两边都改过"时云端胜出 —— 这是刻意的
+ * 取舍（用户明确要求云端不能被顶掉）。被顶掉的本地那一份会在采纳前
+ * **另存一份快照**（见 `appStore` 的 `stashConflictSnapshot`），不会凭空消失。
  */
 export function decideStartup(input: StartupInput): StartupAction {
   const { hasSession, local, cloud, meta } = input
   if (!hasSession) return { kind: 'keep-local', reason: 'no-session' }
   if (!hasCloudRevision(cloud)) return { kind: 'keep-local', reason: 'cloud-empty' }
   if (isEmptyData(local)) return { kind: 'adopt-cloud', reason: 'local-empty' }
-  if (meta.dirty) return { kind: 'keep-local', reason: 'local-dirty' }
+  if (!hasSyncedBefore(meta)) return { kind: 'adopt-cloud', reason: 'never-synced' }
   if (cloud.revision === meta.cloudRevision) return { kind: 'keep-local', reason: 'already-synced' }
   return { kind: 'adopt-cloud', reason: 'cloud-newer' }
 }

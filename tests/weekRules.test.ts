@@ -17,10 +17,12 @@ import {
   minutesToLabel,
   mondayOf,
   moveWeekEventInList,
+  reorderPresetsInList,
   shouldCommitMove,
   snapEventStart,
   snapToHour,
   streakNumber,
+  unlinkQuadrantEvent,
   updatePresetInList,
   updateWeekEventInList,
   validateEventTimes,
@@ -242,5 +244,69 @@ describe('weekRules', () => {
     const b = event({ id: 'b', startMin: 480, date: '2026-08-15' })
     const c = event({ id: 'c', startMin: 600 })
     expect(eventsOnDate([a, b, c], '2026-08-14').map((e) => e.id)).toEqual(['c', 'a'])
+  })
+})
+
+// ============================================================================
+// 预设顺序：数组顺序即显示顺序
+// ============================================================================
+
+describe('weekRules · reorderPresetsInList', () => {
+  const a = preset({ id: 'a' })
+  const b = preset({ id: 'b' })
+  const c = preset({ id: 'c' })
+
+  it('按给定 id 顺序重排', () => {
+    expect(reorderPresetsInList([a, b, c], ['c', 'a', 'b']).map((p) => p.id)).toEqual(['c', 'a', 'b'])
+  })
+
+  it('未提及的预设补到尾部，保持它们之间的相对顺序（不许丢）', () => {
+    expect(reorderPresetsInList([a, b, c], ['c']).map((p) => p.id)).toEqual(['c', 'a', 'b'])
+  })
+
+  it('多余的 id 直接忽略', () => {
+    expect(reorderPresetsInList([a, b], ['b', 'ghost', 'a']).map((p) => p.id)).toEqual(['b', 'a'])
+  })
+
+  it('重复的 id 只取第一次', () => {
+    expect(reorderPresetsInList([a, b, c], ['b', 'b', 'a']).map((p) => p.id)).toEqual(['b', 'a', 'c'])
+  })
+
+  it('顺序未变时返回原数组对象（调用方据此短路掉落盘与同步）', () => {
+    const list = [a, b, c]
+    expect(reorderPresetsInList(list, ['a', 'b', 'c'])).toBe(list)
+  })
+
+  it('空 id 序列等于"没有意见"，原样保留', () => {
+    const list = [a, b]
+    expect(reorderPresetsInList(list, []).map((p) => p.id)).toEqual(['a', 'b'])
+  })
+})
+
+// ============================================================================
+// 解除周计划事件与四象限卡片的镜像链接
+// ============================================================================
+
+describe('weekRules · unlinkQuadrantEvent', () => {
+  it('命中 id 时清掉 showInQuadrant 与 quadrantEventId', () => {
+    const linked = event({ id: 'we-1', showInQuadrant: true, quadrantEventId: 'q-1' })
+    const [next] = unlinkQuadrantEvent([linked], 'q-1')
+    expect(next.showInQuadrant).toBe(false)
+    expect(next.quadrantEventId).toBeUndefined()
+    // 其余字段原样保留（这是"解除链接"，不是"删掉这条计划"）。
+    expect(next.title).toBe(linked.title)
+    expect(next.startMin).toBe(linked.startMin)
+  })
+
+  it('只认精确 id：指向别的卡片的链接不受影响', () => {
+    const other = event({ id: 'we-2', showInQuadrant: true, quadrantEventId: 'q-2' })
+    const [next] = unlinkQuadrantEvent([other], 'q-1')
+    expect(next.quadrantEventId).toBe('q-2')
+    expect(next.showInQuadrant).toBe(true)
+  })
+
+  it('没有命中时返回原数组对象', () => {
+    const list = [event({ id: 'we-1' })]
+    expect(unlinkQuadrantEvent(list, 'q-9')).toBe(list)
   })
 })

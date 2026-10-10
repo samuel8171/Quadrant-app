@@ -129,6 +129,13 @@ interface AppState {
   }) => void
   updatePreset: (id: string, patch: Partial<WeekPreset>) => void
   deletePreset: (id: string) => void
+  /**
+   * 按给定的 id 全序列重排预设 —— 预设列表的**显示顺序就是 `weekPresets` 的数组顺序**。
+   *
+   * 顺序未变时是空操作（`reorderPresetsInList` 原对象返回）：拖动一次却没跨过中线、
+   * 或上移已在首位的项，都不该白写一次盘、白推一次云。
+   */
+  setPresetOrder: (ids: string[]) => void
   addWeekEvent: (fields: {
     date: string
     title: string
@@ -170,20 +177,27 @@ interface AppState {
   /** 把一条计划外条目追加进 `date`（未结算）的账本。 */
   addUnplannedEntry: (date: string, entry: LedgerEntry) => void
   /**
-   * 象限事件「标记完成」→ 为今天记一条 `kind: 'planned'` 的条目（spec 7.4）。
+   * 象限事件「标记完成」：**记账可选、卡片离场必做**（spec 7.4）。
    *
-   * `nowMin` 是完成时刻自 0 点起的分钟数，由气泡传入 —— 与气泡预览同源，
-   * 保证「显示的时币」等于「记下的时币」。当天已为同一事件记过账时直接拒绝
-   * （见 `isEventBilledOn`：`QuadrantEvent` 上没有「已计费」标记，账本即判据）。
+   * `answer.billable` 为真时，为今天记一条 `kind: 'planned'` 的条目；无论真假，
+   * 这一张 `QuadrantEvent` 都会被删除，并解除它与周计划事件之间的镜像链接。
+   * 「删除」是需求里「标记完成并确认是否计时后应该消失」的直接落点 —— 用户已经在
+   * 气泡里回答过那一问，把卡片留在原地会让人以为没生效。
    *
-   * `date` 同样由气泡（页面）传入，**不在这里现取时钟**：气泡的 `alreadyBilled` 用的是
-   * 页面渲染时算好的 `today`，若本动作另取一个 `dateKey(new Date())`，跨零点的那几十秒里
-   * 两者会分叉 —— 气泡按旧日期判「没记过」，本动作按新日期判「已记过」并静默拒绝，
-   * 而气泡已经关闭，用户以为记上了。整条路径必须跑在**同一个时钟、同一个日期**上。
+   * 删除必须和记账放进**同一次 `set`**：分两次写会让界面出现"卡片没了但账还没记上"
+   * 的中间态，也让一次落盘变成两次。
+   *
+   * 记账侧两道闸不变：
+   * - **当天已结算** → 不记账（已冻结的一天只能由 `confirmNight` 改动），但卡片照样删；
+   * - **当天已为同一事件记过账** → 不重复记账（判据见 `isEventBilledOn`）。
+   *
+   * `nowMin` 与 `date` 都由气泡（页面）传入，**不在这里现取时钟**：气泡里的实时预览
+   * 用的是同一个 `nowMin`，而 `alreadyBilled` 用的是同一个 `date`，整条路径必须跑在
+   * 同一个时钟、同一个日期上（见 `QuadrantPage` 的跨零点说明）。
    */
   completeQuadrantEvent: (
     event: QuadrantEvent,
-    actualMin: number,
+    answer: { billable: boolean; actualMin: number },
     nowMin: number,
     date: string
   ) => void
@@ -207,25 +221,88 @@ function saveSoon(data: AppData): void {
 }
 
 /**
+ * 首屏对账是否已经有结论（成功取到云端元信息并做过取舍）。
+ *
+ * ⭐⭐ **这道闸门是为了修一次真实发生过的全量数据丢失**（2026-10-10）：
+ *
+ * `init()` 在拿到本地数据、把界面渲染出来之后，还会跑几个"本地维护"步骤
+ * （`materializeLedgerDays` / `abandonExpiredLedgerDays` / `rolloverMoneyWeek`）。
+ * 它们内部会 `saveSoon`，而 `saveSoon` 会走 `syncAfterLocalSave` 自动上传 ——
+ * 也就是说**用户什么都还没点，一份陈旧的本地数据就已经被推上云端了**。
+ * `npm run dev:web` 尤为致命：`localhost:5173` 与线上 Pages 是**两个 origin**，
+ * 在同步层看来是两台设备，而本地那个 origin 里往往是开发期残留的旧数据。
+ *
+ * 所以：**在对账有结论之前，一律不许自动上传**，只把 `dirty` 记上。
+ * 数据不会丢（改动仍在本地、`dirty` 为真），只是晚一步传。
+ *
+ * 为什么不是"对账失败也开闸"：`fetchCloudMeta` 抛错说明我们**不知道云端有什么**，
+ * 此时上传与盲目覆盖没有区别。保持关闭、下次前台恢复再试，是唯一安全的选项。
+ */
+let reconciled = false
+
+/**
+ * 仅供测试：把上面的闸门复位，让每个用例都从「冷启动、尚未对账」开始。
+ *
+ * 与 `syncMeta.resetSyncMetaCache` 同一性质 —— 模块级状态在同一个测试文件里会
+ * 跨用例残留，不复位的话"对账前不许上传"这类用例会因为前一个用例已经开过闸而假绿。
+ */
+export function resetSyncGate(): void {
+  reconciled = false
+}
+
+/**
+ * 采纳云端前，把本机那份**未上传**的数据另存一份快照。
+ *
+ * 为什么要留：新的取舍规则是"云端胜出"（见 `syncMeta.decideStartup`），也就是说
+ * 一台曾经同步过、但本地也改过东西的设备在发现云端更新时，**本机那份改动会被覆盖掉**。
+ * 用户的诉求是"云端不能被顶掉"，这条规则必须这么定；但"覆盖"不等于"销毁" ——
+ * 留一份快照，需要时能从浏览器存储里人工取回，代价只有一次 `setItem`。
+ *
+ * 只在网页端有意义（桌面端 `init` 根本不对账，云端动作全是显式按钮），
+ * 且失败一律吞掉：留不下快照不能反而把对账打断。
+ */
+const CONFLICT_SNAPSHOT_KEY = 'quadrant-web-data-conflict-snapshot'
+function stashConflictSnapshot(data: AppData): void {
+  try {
+    // 结构性类型而非 DOM 的 `Storage`：本文件同时被 node 那套 tsconfig 编译，
+    // 那份配置里没有 DOM lib。
+    const storage = (
+      globalThis as { window?: { localStorage?: { setItem(key: string, value: string): void } } }
+    ).window?.localStorage
+    storage?.setItem(
+      CONFLICT_SNAPSHOT_KEY,
+      JSON.stringify({ at: new Date().toISOString(), reason: 'adopt-cloud', data })
+    )
+  } catch {
+    /* 隐私模式 / 配额满 / 存储不可用：留不下就算了 */
+  }
+}
+
+/**
  * 本地落盘之后的云端副作用。
  *
- * 关键约束：**桌面端不自动上传**。桌面端的云端动作全部是显式按钮行为
- * （「上传到云端」/「从云端恢复」），这样用户对"什么被覆盖"始终有感知。
+ * 关键约束：
+ * - **桌面端不自动上传**（桌面端的云端动作全部是显式按钮行为）；
+ * - **首屏对账之前不自动上传**（见 `reconciled` 的注释）。
  */
 async function syncAfterLocalSave(data: AppData): Promise<void> {
   if (isDesktopRuntime()) return
   try {
+    if (!reconciled) {
+      // 对账还没结论：只记脏，等对账（或下次前台恢复）之后再传。
+      await markSyncDirty()
+      return
+    }
     const before = await readSyncMeta()
     await markSyncDirty()
     if (isEmptyData(data) && before.cloudRevision === null) {
-      // 空数据写入保护。触发场景：新设备、或清了浏览器缓存 → 读不到本地数据 →
-      // 本地退化为空。此时若照常自动上传，**第一笔操作就会把云端整份覆盖成空**。
-      //
+      // 空数据写入保护（新设备/清缓存 → 本地退化为空）。此时若照常自动上传，
+      // **第一笔操作就会把云端整份覆盖成空**。
       // 判据特意收紧到「本机没有任何同步记忆」：有记忆说明本机同步过，此刻为空
       // 就是用户真的把内容删光了，那是正常编辑，必须照常上传（否则会"删了又回来"）。
-      // 清缓存/换设备都会连同步记忆一起丢，所以真正危险的场景仍然被覆盖。
       const cloud = await fetchCloudData()
       if (cloud.data && !isEmptyData(cloud.data)) {
+        stashConflictSnapshot(data)
         useAppStore.getState().applyCloudData(cloud.data)
         await markPulled(cloud.revision)
       }
@@ -256,16 +333,29 @@ async function reconcileWithCloud(): Promise<void> {
   }
   const session = await hasCloudSession()
   const input = { hasSession: session, local, cloud, meta }
+  const action = decideStartup(input)
 
-  if (decideStartup(input).kind === 'adopt-cloud') {
+  if (action.kind === 'adopt-cloud') {
     try {
       const { revision, data } = await fetchCloudData()
       if (!data) return
+      // 本机有未上传的改动却要采纳云端 ⇒ 先把本机那份另存一份，别让它无声消失。
+      if (meta.dirty && !isEmptyData(local)) stashConflictSnapshot(local)
       state.applyCloudData(data)
       await markPulled(revision)
+      if (action.reason === 'never-synced' || action.reason === 'cloud-newer') {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[象限] 本机与云端不一致（${action.reason}），已采纳云端以免顶掉它。` +
+            '本机原先那份数据已留快照在 localStorage 的 ' +
+            `${CONFLICT_SNAPSHOT_KEY}（仅网页端）。`
+        )
+      }
     } catch {
       /* 拉取失败保持原状，下次前台恢复会重试 */
     }
+    // 已经知道云端是什么了：开闸（本机数据此刻就是云端那份）。
+    reconciled = true
     return
   }
 
@@ -277,7 +367,19 @@ async function reconcileWithCloud(): Promise<void> {
     } catch {
       /* 补传失败不致命：dirty 仍为真 */
     }
+    reconciled = true
+    return
   }
+
+  /*
+   * 走到这里说明「保留本地」且不需要补传。能落到这一个分支的 reason 只有
+   * `already-synced`（修订号一致）与 `cloud-empty`（云端还没有可被顶掉的东西），
+   * 两种都是安全的 ⇒ 开闸。
+   *
+   * 未登录（`no-session`）时**不开闸**：没有会话就传不上去，闸门留着更安全；
+   * 登录后 `App` 会重跑一次 `init()`，那时自然打开。
+   */
+  if (session) reconciled = true
 }
 
 /**
@@ -393,17 +495,24 @@ export const useAppStore = create<AppState>((set, get) => ({
   pendingPage: null,
 
   init: async () => {
-    // 先把本地数据渲染出来，云端对账放到后面——网络慢时首屏不该等它。
+    // 先把本地数据渲染出来，网络慢时首屏不该等它。
     const data = await getPlatformApi().loadData()
     set({ data, loaded: true })
+    /*
+     * ⭐⭐ **对账必须排在这三个本地维护步骤之前**（2026-10-10 修数据丢失时改的）。
+     *
+     * 它们内部会 `saveSoon`（`materializeLedgerDays` 在启用金钱系统时会把
+     * [今天−7, 今天) 的日账本补出来），而 `saveSoon` 会走自动上传 ——
+     * 在还不知道云端有什么的情况下上传，就是"新设备把云端顶掉"的入口。
+     * 首屏不受影响：`set` 已经在上一行发生了，界面早就渲染出来了。
+     */
+    if (!isDesktopRuntime()) await reconcileWithCloud()
     // 顺序不能反：先物化 [今天−7, 今天) 的每一天，再把掉出窗口的未结算日放弃冻结，
     // 最后才滚动周结算。放弃必须在滚动之前 —— 被放弃的一天会变成「已结算」，
     // 而一周只有在它的日账本全部已结算、且没有 nightPending 时才结算（见 ensureWeekRollover）。
     get().materializeLedgerDays()
     get().abandonExpiredLedgerDays()
     get().rolloverMoneyWeek()
-    if (isDesktopRuntime()) return
-    await reconcileWithCloud()
   },
 
   inspectCloud: async (action) => {
@@ -636,7 +745,16 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   deleteEvent: (id) => {
-    const data = { ...get().data, events: eventRules.deleteEventFromList(get().data.events, id) }
+    const data = {
+      ...get().data,
+      events: eventRules.deleteEventFromList(get().data.events, id),
+      /*
+       * 顺带解除周计划的镜像链接。**这不是可选的清理**：留着悬空的
+       * `quadrantEventId` 会让用户下次编辑那条周事件时凭空长出一张新卡片
+       * （见 `weekRules.unlinkQuadrantEvent` 的推导）。
+       */
+      weekEvents: weekRules.unlinkQuadrantEvent(get().data.weekEvents, id)
+    }
     saveSoon(data)
     set({ data })
   },
@@ -657,7 +775,13 @@ export const useAppStore = create<AppState>((set, get) => ({
   cutEvent: (id) => {
     clipboard = get().data.events.find((e) => e.id === id) ?? null
     if (clipboard) {
-      const data = { ...get().data, events: eventRules.deleteEventFromList(get().data.events, id) }
+      const data = {
+        ...get().data,
+        events: eventRules.deleteEventFromList(get().data.events, id),
+        // 剪切同样是一次"删除"：镜像没了，链接必须一起解除（粘贴出来的那张是**新 id**，
+        // 永远不会自动接回原来的周事件上）。理由见 weekRules.unlinkQuadrantEvent。
+        weekEvents: weekRules.unlinkQuadrantEvent(get().data.weekEvents, id)
+      }
       saveSoon(data)
       set({ data })
     }
@@ -701,6 +825,14 @@ export const useAppStore = create<AppState>((set, get) => ({
       ...get().data,
       weekPresets: weekRules.deletePresetFromList(get().data.weekPresets, id)
     }
+    saveSoon(data)
+    set({ data })
+  },
+
+  setPresetOrder: (ids) => {
+    const list = weekRules.reorderPresetsInList(get().data.weekPresets, ids)
+    if (list === get().data.weekPresets) return
+    const data = { ...get().data, weekPresets: list }
     saveSoon(data)
     set({ data })
   },
@@ -1048,18 +1180,18 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   /**
-   * 象限事件「标记完成」（spec 7.4）。
+   * 象限事件「标记完成」（spec 7.4 + 完成即离场）。
    *
-   * 象限卡片是空间上的事项、没有开始时刻也没有完成状态，所以「完成」这件事在数据层
-   * **只体现为账本里多了一条 `kind: 'planned'` 的条目**（`QuadrantEvent` 上不加任何字段）。
-   * 条目的构造全部交给纯函数 `quadrantEntryOf`，这里只负责落进**今天**的账本、并在两道
-   * 闸上挡住不该写的情况：
+   * 象限卡片是空间上的事项、没有开始时刻也没有完成状态，所以「完成」在数据层**不体现为
+   * 给 `QuadrantEvent` 加字段**，而是两件事一起做：
    *
-   * - **当天已结算** → 拒绝。已冻结的一天只能由 `confirmNight` 那一处改动（与
-   *   `addUnplannedEntry` 同一条规则）。
-   * - **当天已为同一事件记过账** → 拒绝。`QuadrantEvent` 没有「已计费」标记（本任务不许加），
-   *   于是「今天是否已经计过费」只能查账本里有没有同一个 `sourceId`。少了这道闸，同一张卡片
-   *   一天内可以被重复「完成」并重复扣钱。
+   * 1. **记账**（可选，`answer.billable`）：账本里多一条 `kind: 'planned'` 的条目，
+   *    构造交给纯函数 `quadrantEntryOf`。两道闸挡住不该写的情况 ——
+   *    当天已结算 → 不记账（已冻结的一天只能由 `confirmNight` 改动，与
+   *    `addUnplannedEntry` 同一条规则）；当天已为同一事件记过账 → 不重复记账
+   *    （`QuadrantEvent` 刻意没有「已计费」标记，判据只能是账本里的 `sourceId`，
+   *    少了这道闸同一张卡片一天内能被重复「完成」并重复扣钱）。
+   * 2. **删除这张卡片**并解除它与周计划事件的镜像链接 —— 无条件的，与答案无关。
    *
    * `nowMin` 与 `date` 都由气泡传入而非这里现取时钟：`nowMin` 是「完成时刻」的唯一证据
    * （spec 6.3），气泡里的实时预览用的是同一个值 —— 两者同源才能保证「气泡显示的数」
@@ -1069,43 +1201,58 @@ export const useAppStore = create<AppState>((set, get) => ({
    * 不调用 `rolloverMoneyWeek`：这笔条目落在**今天**（未结算），日结与周滚动都在更晚的时点
    * 发生；与 `addUnplannedEntry` 一致。
    */
-  completeQuadrantEvent: (event, actualMin, nowMin, date) => {
+  completeQuadrantEvent: (event, answer, nowMin, date) => {
     const data = get().data
     const money = data.money
     if (money?.enabled !== true) return
+
+    /*
+     * 卡片离场与解除镜像链接是**无条件**的，先算出来。
+     *
+     * 解除链接这一步不能省：周计划里那条事件的 `showInQuadrant` 若仍为 true、
+     * `quadrantEventId` 又指向一个已经不在的卡片，用户下次编辑它时 `updateWeekEvent`
+     * 会重新造一张卡片出来（见 `weekRules.unlinkQuadrantEvent`）。
+     */
+    const events = eventRules.deleteEventFromList(data.events, event.id)
+    const weekEvents = weekRules.unlinkQuadrantEvent(data.weekEvents, event.id)
+    let next: AppData = { ...data, events, weekEvents }
+
+    /*
+     * 记账（可选）。两道闸都只是"不记账"，**不影响上面的删除**：
+     * 已结算的一天不能再追加条目（唯一豁免是 confirmNight）；同一张卡片一天只记一次。
+     */
     const existing = money.days.find((d) => d.date === date)
-    // 已结算的一天不可再追加条目（唯一豁免是 confirmNight）。
-    if (existing?.settledAt != null) return
-    // 防重复计费：同一张卡片一天只记一次（见函数头注释）。
-    if (isEventBilledOn(money.days, date, event.id)) return
-    const entry = quadrantEntryOf(
-      {
-        id: crypto.randomUUID(),
-        event: { id: event.id, text: event.text, quadrant: event.quadrant },
-        actualMin,
-        nowMin
-      },
-      money.config
-    )
-    const day: LedgerDay = existing
-      ? { ...existing, entries: [...existing.entries, entry] }
-      : {
-          date,
-          settledAt: null,
-          entries: [entry],
-          videoMin: 0,
-          gameMin: 0,
-          // 未结算的记录还没有那一问的答案：它要等这一天的日结才问（spec R2 §6）。
-          latePhone: false,
-          dayLimit: 0,
-          spentTC: 0,
-          overdraft: 0,
-          deltaLT: 0,
-          nightPending: true,
-          // 未结算的记录不可能是休息日：休息日一经申报即结算（见 markRestDay）。
-          isRestDay: false
-        }
-    const next = { ...data, money: { ...money, days: upsertLedgerDay(money.days, day) } }
+    if (answer.billable && existing?.settledAt == null && !isEventBilledOn(money.days, date, event.id)) {
+      const entry = quadrantEntryOf(
+        {
+          id: crypto.randomUUID(),
+          event: { id: event.id, text: event.text, quadrant: event.quadrant },
+          actualMin: answer.actualMin,
+          nowMin
+        },
+        money.config
+      )
+      const day: LedgerDay = existing
+        ? { ...existing, entries: [...existing.entries, entry] }
+        : {
+            date,
+            settledAt: null,
+            entries: [entry],
+            videoMin: 0,
+            gameMin: 0,
+            // 未结算的记录还没有那一问的答案：它要等这一天的日结才问（spec R2 §6）。
+            latePhone: false,
+            dayLimit: 0,
+            spentTC: 0,
+            overdraft: 0,
+            deltaLT: 0,
+            nightPending: true,
+            // 未结算的记录不可能是休息日：休息日一经申报即结算（见 markRestDay）。
+            isRestDay: false
+          }
+      next = { ...next, money: { ...money, days: upsertLedgerDay(money.days, day) } }
+    }
+
     saveSoon(next)
     set({ data: next })
   },

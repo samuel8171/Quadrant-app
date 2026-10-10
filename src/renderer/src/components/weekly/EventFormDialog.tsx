@@ -137,7 +137,13 @@ export default function EventFormDialog({ form, onClose }: Props): JSX.Element {
 
   const isPreset = form.kind === 'preset-create' || form.kind === 'preset-edit'
   const isEdit = form.kind === 'preset-edit' || form.kind === 'event-edit'
-  const sortedPresets = [...weekPresets].sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+  /*
+   * 下拉里的预设与左侧面板**用同一个顺序**：都取 `weekPresets` 的数组顺序。
+   * 面板曾按 `createdAt` 重排，而下拉这里也照抄了一份；两者一旦分叉，用户
+   * 在面板里拖出来的顺序到下拉里就对不上。数组顺序是唯一真源（见
+   * `weekRules.reorderPresetsInList`）。
+   */
+  const sortedPresets = weekPresets
 
   const startHour = Math.min(23, Math.max(7, Math.floor(fields.startMin / 60)))
   const startMinute = fields.startMin % 60

@@ -154,6 +154,40 @@ export function deletePresetFromList(list: WeekPreset[], id: string): WeekPreset
   return list.filter((p) => p.id !== id)
 }
 
+/**
+ * 按给定 id 顺序重排预设列表 —— **数组顺序就是显示顺序**。
+ *
+ * 为什么不给 `WeekPreset` 加 `order` 字段：数组顺序本来就已持久化
+ * （`addPreset` 一直是尾部追加，`createdAt` 只是恰好与之同序），而加字段要同步
+ * `shared/types.ts` / `main/dataCodec.normalizeWeekPreset`（逐字段重建）/
+ * `lib/platformApi.validAppData`（网页端校验）三处，还得给旧数据做一次性迁移赋值；
+ * 漏一处的代价是静默丢字段。数组顺序的改动面为零，且"列表的顺序就是数组的顺序"
+ * 本来就是最诚实的表达。
+ *
+ * **`ids` 里没提到的预设一律追加到尾部**（保持它们之间的相对顺序）：任何一次不完整的
+ * 调用都不会让预设凭空消失 —— 丢预设是不可逆的。重复的 id 只取第一次，多余的 id 忽略。
+ *
+ * 顺序未变时**返回原数组对象**，调用方据此短路掉无谓的落盘与云同步。
+ */
+export function reorderPresetsInList(list: WeekPreset[], ids: string[]): WeekPreset[] {
+  const byId = new Map(list.map((p) => [p.id, p]))
+  const next: WeekPreset[] = []
+  for (const id of ids) {
+    const preset = byId.get(id)
+    if (!preset) continue
+    next.push(preset)
+    byId.delete(id)
+  }
+  // 未被提及的按原数组顺序补到尾部，保证一个都不少。
+  for (const preset of list) {
+    if (!byId.has(preset.id)) continue
+    next.push(preset)
+    byId.delete(preset.id)
+  }
+  if (next.length === list.length && next.every((p, i) => p === list[i])) return list
+  return next
+}
+
 export function createWeekEvent(date: string, preset: WeekPreset, startMin: number): WeekEvent {
   const start = clampEventStart(startMin, preset.durationMin)
   return {
@@ -199,6 +233,34 @@ export function updateWeekEventInList(
 
 export function deleteWeekEventFromList(list: WeekEvent[], id: string): WeekEvent[] {
   return list.filter((e) => e.id !== id)
+}
+
+/**
+ * 解除周计划事件与四象限卡片之间的**镜像链接**。
+ *
+ * 背景：`WeekEvent.showInQuadrant === true` 表示"这条计划在四象限里有一份镜像"，
+ * `quadrantEventId` 是那份镜像的 id（见 `appStore.addWeekEvent` / `updateWeekEvent`）。
+ *
+ * 为什么必须显式解除：镜像被删掉（完成、删除、剪切）之后这两个字段若原样保留，
+ * 就留下一个**悬空引用**。用户下次在周计划里编辑这条事件时会走进
+ * `updateWeekEvent` 的「show 为真、但 events 里找不到 `quadrantEventId`」分支，
+ * 于是 `findFreePosition` **重新造一张卡片**出来 —— 用户看到的是
+ * "我明明已经完成了 / 删掉了，它又自己回来了"。这类"幽灵复活"极难从界面上归因，
+ * 所以删除镜像的三条路径（`completeQuadrantEvent` / `deleteEvent` / `cutEvent`）
+ * 都必须调用本函数。
+ *
+ * 只按 id 精确匹配；没有任何一条命中时**返回原数组对象**，调用方据此短路掉无谓的落盘。
+ */
+export function unlinkQuadrantEvent(weekEvents: WeekEvent[], quadrantEventId: string): WeekEvent[] {
+  let changed = false
+  const next = weekEvents.map((e) => {
+    if (e.quadrantEventId !== quadrantEventId) return e
+    changed = true
+    const copy: WeekEvent = { ...e, showInQuadrant: false }
+    delete copy.quadrantEventId
+    return copy
+  })
+  return changed ? next : weekEvents
 }
 
 export function moveWeekEventInList(

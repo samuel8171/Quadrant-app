@@ -3,6 +3,7 @@ import {
   ArrowLeft,
   Calendar,
   ChevronRight,
+  History,
   Info,
   Lock,
   MoreHorizontal,
@@ -11,26 +12,130 @@ import {
   Plus,
   Trash2
 } from 'lucide-react'
-import type { Goal, Subtask } from '../../../shared/types'
+import type { GoalType, Subtask } from '../../../shared/types'
 import ConfirmDialog from '../components/ConfirmDialog'
 import GlassSurface from '../components/glass/GlassSurface'
 import { clampMenuCenter, MENU_PAD, useMenuRowHeight } from '../components/glass/glassMenu'
 import GoalDetailDialog from '../components/GoalDetailDialog'
 import { useClosing } from '../hooks/useClosing'
 import {
+  COMPLETION_HOLD_MS,
   MAX_GROUPS,
   canCheckSubtask,
   groupCountOf,
   groupTitleOf,
+  partitionGoals,
   progressOf
 } from '../lib/goalRules'
 import { useAppStore } from '../state/appStore'
 
+/**
+ * 移出动画时长（毫秒），与 `theme.css` 的 `.goal-card-slot` 过渡时长**必须一致**。
+ * 过渡结束由 `transitionend` 精确驱动，本常量只作为兜底定时器的依据。
+ */
+const LEAVE_MS = 200
+
+/**
+ * 兜底：`transitionend` 在少数情况下不会到来（`prefers-reduced-motion` 把过渡
+ * 时长压成 0、标签页被挂起导致过渡帧丢失、插值未发生等），届时卡片会永远停在
+ * 「正在移出」的 0 高状态。这个定时器保证它一定被清掉。
+ */
+const LEAVE_FALLBACK_MS = LEAVE_MS + 250
+
+/** `Set` 的不可变增删：内容未变时**返回原对象**，避免无谓的重渲染。 */
+function withId(set: ReadonlySet<string>, id: string, present: boolean): ReadonlySet<string> {
+  if (set.has(id) === present) return set
+  const next = new Set(set)
+  if (present) next.add(id)
+  else next.delete(id)
+  return next
+}
+
 export default function GoalsPage(): JSX.Element {
   const activeGoalId = useAppStore((s) => s.activeGoalId)
+  const toggleGoal = useAppStore((s) => s.toggleGoal)
   const [returning, setReturning] = useState(false)
+  /** 非 null = 正在查看该类型的历史子页面。 */
+  const [historyType, setHistoryType] = useState<GoalType | null>(null)
+  /**
+   * 已经完成、但仍在保持窗口内的目标（卡片留在主页）。
+   *
+   * 与 `leaving` 的关系：进入 `leaving` 时**仍留在 `holding` 里**，否则卡片会在
+   * 动画开始前就被卸载，移出动画根本播不出来；直到动画结束（或兜底定时器到点）
+   * 才把 id 从两个集合一起摘掉，卡片转由历史列表渲染。
+   */
+  const [holding, setHolding] = useState<ReadonlySet<string>>(() => new Set<string>())
+  /** 正在播移出动画的目标。只驱动 CSS 类，不决定归属。 */
+  const [leaving, setLeaving] = useState<ReadonlySet<string>>(() => new Set<string>())
+  /** 每个目标当前挂着的定时器（保持窗口 / 移出兜底）。 */
+  const timersRef = useRef(new Map<string, number[]>())
+
+  const clearTimers = (id: string): void => {
+    for (const timer of timersRef.current.get(id) ?? []) window.clearTimeout(timer)
+    timersRef.current.delete(id)
+  }
+
+  useEffect(() => {
+    const timers = timersRef.current
+    return () => {
+      for (const list of timers.values()) for (const timer of list) window.clearTimeout(timer)
+      timers.clear()
+    }
+  }, [])
+
+  /** 卡片移出动画结束（或兜底到点）：正式从主页摘除，交给历史列表。 */
+  const finishLeave = (id: string): void => {
+    clearTimers(id)
+    setHolding((prev) => withId(prev, id, false))
+    setLeaving((prev) => withId(prev, id, false))
+  }
+
+  /**
+   * 主页面的勾选动作 —— **先落库，再安排展示**。
+   *
+   * 顺序不能反：`toggleGoal` 是唯一的状态真源，保持窗口纯属展示层约定。
+   * 先落库也意味着「点完立刻切页/刷新」不会丢状态，只是卡片直接出现在历史里
+   * （少了三秒的过渡），这是可接受的降级。
+   */
+  const toggleWithHold = (id: string): void => {
+    clearTimers(id)
+    const goal = useAppStore.getState().data.goals.find((g) => g.id === id)
+    if (!goal) return
+    const willComplete = !goal.done
+    toggleGoal(id)
+
+    if (!willComplete) {
+      // 窗口内反悔：勾选被取消，卡片原地留下（从未离开主页）。
+      setHolding((prev) => withId(prev, id, false))
+      setLeaving((prev) => withId(prev, id, false))
+      return
+    }
+
+    setHolding((prev) => withId(prev, id, true))
+    setLeaving((prev) => withId(prev, id, false))
+    const hold = window.setTimeout(() => {
+      setLeaving((prev) => withId(prev, id, true))
+      const drop = window.setTimeout(() => finishLeave(id), LEAVE_FALLBACK_MS)
+      timersRef.current.set(id, [drop])
+    }, COMPLETION_HOLD_MS)
+    timersRef.current.set(id, [hold])
+  }
+
   if (activeGoalId) {
     return <LongTermDetailPage goalId={activeGoalId} onBeforeClose={() => setReturning(true)} />
+  }
+  if (historyType) {
+    return (
+      <GoalHistoryPage
+        type={historyType}
+        holding={holding}
+        onToggle={toggleWithHold}
+        onClose={() => {
+          setReturning(true)
+          setHistoryType(null)
+        }}
+      />
+    )
   }
   return (
     <div className={`page goals-page ${returning ? 'page-enter-left' : ''}`}>
@@ -39,27 +144,60 @@ export default function GoalsPage(): JSX.Element {
         <span className="title-underline" />
       </header>
       <div className="goal-columns">
-        <GoalColumn type="long" title="长期目标" icon={Mountain} accentClass="accent-blue" />
-        <GoalColumn type="short" title="短期目标" icon={Calendar} accentClass="accent-green" />
+        <GoalColumn
+          type="long"
+          title="长期目标"
+          icon={Mountain}
+          accentClass="accent-blue"
+          holding={holding}
+          leaving={leaving}
+          onToggleGoal={toggleWithHold}
+          onFinishLeave={finishLeave}
+          onOpenHistory={() => setHistoryType('long')}
+        />
+        <GoalColumn
+          type="short"
+          title="短期目标"
+          icon={Calendar}
+          accentClass="accent-green"
+          holding={holding}
+          leaving={leaving}
+          onToggleGoal={toggleWithHold}
+          onFinishLeave={finishLeave}
+          onOpenHistory={() => setHistoryType('short')}
+        />
       </div>
     </div>
   )
+}
+
+interface GoalColumnProps {
+  type: GoalType
+  title: string
+  icon: typeof Mountain
+  accentClass: string
+  holding: ReadonlySet<string>
+  leaving: ReadonlySet<string>
+  onToggleGoal: (id: string) => void
+  onFinishLeave: (id: string) => void
+  onOpenHistory: () => void
 }
 
 function GoalColumn({
   type,
   title,
   icon: Icon,
-  accentClass
-}: {
-  type: 'long' | 'short'
-  title: string
-  icon: typeof Mountain
-  accentClass: string
-}): JSX.Element {
-  const goals = useAppStore((s) => s.data.goals.filter((g) => g.type === type))
+  accentClass,
+  holding,
+  leaving,
+  onToggleGoal,
+  onFinishLeave,
+  onOpenHistory
+}: GoalColumnProps): JSX.Element {
+  const allGoals = useAppStore((s) => s.data.goals)
   const addGoal = useAppStore((s) => s.addGoal)
   const updateGoalRemark = useAppStore((s) => s.updateGoalRemark)
+  const { active: goals, history } = partitionGoals(allGoals, type, holding)
   const [adding, setAdding] = useState(false)
   const [draft, setDraft] = useState('')
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -68,6 +206,7 @@ function GoalColumn({
   const [deletePendingId, setDeletePendingId] = useState<string | null>(null)
   /** 窄屏上「…」展开的目标，其操作走底部菜单。 */
   const [moreForId, setMoreForId] = useState<string | null>(null)
+
 
   const submitNew = (): void => {
     if (draft.trim()) addGoal(type, draft)
@@ -91,18 +230,48 @@ function GoalColumn({
       <h2 className="goal-column-title">
         <Icon size={18} />
         {title}
+        {/*
+         * 历史入口按列分设：长期与短期各有一份历史，两列各自独立。
+         * 计数用 `history`（已完成且已离开保持窗口），因此刚点完的瞬间
+         * 计数还是旧值、卡片也还在下面 —— 两者是一致的。
+         */}
+        <button
+          className="goal-history-btn"
+          title={`查看已完成的${title}`}
+          aria-haspopup="dialog"
+          onClick={onOpenHistory}
+        >
+          <History size={14} />
+          <span>历史{history.length > 0 ? ` · ${history.length}` : ''}</span>
+        </button>
       </h2>
       <div className="goal-list">
         {goals.map((goal) => (
-          <div key={goal.id} className={`goal-card${goal.done ? ' done' : ''}`}>
+          /*
+           * 卡片外面套一层「可折叠槽位」：完成后的移出动画靠
+           * `grid-template-rows: 1fr → 0fr` 把高度压到 0（与 `.preset-collapse`
+           * 同一套手法），间距也一并收掉，所以下面各行的 8px 间距由
+           * `.goal-card-slot + .goal-card-slot` 的 margin 承担，而不是 `.goal-list` 的 gap。
+           */
+          <div
+            key={goal.id}
+            className={`goal-card-slot${leaving.has(goal.id) ? ' is-leaving' : ''}`}
+            onTransitionEnd={(e) => {
+              // transitionend 会从子元素冒泡上来，只认槽位自己那一条属性。
+              if (e.target !== e.currentTarget || e.propertyName !== 'grid-template-rows') return
+              onFinishLeave(goal.id)
+            }}
+          >
+          <div className={`goal-card${goal.done ? ' done' : ''}`}>
             <label className="goal-check">
               <input
                 type="checkbox"
                 checked={goal.done}
-                onChange={() => useAppStore.getState().toggleGoal(goal.id)}
+                onChange={() => onToggleGoal(goal.id)}
               />
               <span className="checkmark" />
             </label>
+
             {editingId === goal.id ? (
               <input
                 className="goal-edit-input"
@@ -164,6 +333,7 @@ function GoalColumn({
               <MoreHorizontal size={16} />
             </button>
           </div>
+          </div>
         ))}
       </div>
       {adding ? (
@@ -218,6 +388,132 @@ function GoalColumn({
         />
       )}
     </section>
+  )
+}
+
+interface GoalHistoryPageProps {
+  type: GoalType
+  /** 仍在保持窗口内的目标 id：它们此刻属于主页，不属于历史。 */
+  holding: ReadonlySet<string>
+  onToggle: (id: string) => void
+  onClose: () => void
+}
+
+/**
+ * 已完成目标的归档页（**两列各一份**，入口在各自列标题右侧）。
+ *
+ * 归属判据与主页完全同源（`partitionGoals`），所以「一张卡片在任一时刻只出现在
+ * 一边」这条不变量跨页也成立：正处在保持窗口里的目标不会同时出现在主页与历史。
+ *
+ * **取消勾选即回主页** —— 走的是主页那一套 `toggleWithHold`，它在「取消完成」
+ * 分支里只做集合清理、不排保持窗口，所以卡片回到主页后立刻可见，不会再等三秒。
+ *
+ * **长期目标的「展开子目标」入口原样保留**：`LongTermDetailPage` 按 `activeGoalId`
+ * 取目标、不看 `done`，因此从历史进去管理子目标与从主页进去完全等价（改的也只是
+ * 子目标，回到这里时若又被勾满会重新入历史，语义自洽）。
+ */
+function GoalHistoryPage({ type, holding, onToggle, onClose }: GoalHistoryPageProps): JSX.Element {
+  const allGoals = useAppStore((s) => s.data.goals)
+  const { history } = partitionGoals(allGoals, type, holding)
+  const [detailId, setDetailId] = useState<string | null>(null)
+  const [deletePendingId, setDeletePendingId] = useState<string | null>(null)
+  const [moreForId, setMoreForId] = useState<string | null>(null)
+
+  const title = type === 'long' ? '长期目标' : '短期目标'
+  const detailGoal = detailId ? history.find((g) => g.id === detailId) : undefined
+  const deletePendingGoal = deletePendingId
+    ? history.find((g) => g.id === deletePendingId)
+    : undefined
+  const moreGoal = moreForId ? history.find((g) => g.id === moreForId) : undefined
+
+  return (
+    <div className="page goals-page page-enter-right">
+      <div className="subtask-topbar">
+        <button className="back-btn" onClick={onClose}>
+          <ArrowLeft size={16} />
+          返回
+        </button>
+        <header className="subtask-header">
+          <h1>{title} · 历史</h1>
+          {history.length > 0 && <span className="subtask-progress">已完成 {history.length} 项</span>}
+        </header>
+      </div>
+      {history.length === 0 ? (
+        <div className="goal-history-empty">暂无已完成的目标</div>
+      ) : (
+        <div className="goal-list">
+          {history.map((goal) => (
+            <div key={goal.id} className="goal-card done">
+              <label className="goal-check" title="取消勾选即回到目标主页">
+                <input type="checkbox" checked onChange={() => onToggle(goal.id)} />
+                <span className="checkmark" />
+              </label>
+              <span className="goal-title">{goal.title}</span>
+              {goal.type === 'long' && goal.subtasks.length > 0 && (
+                <span className="goal-progress">
+                  {progressOf(goal).done}/{progressOf(goal).total}
+                </span>
+              )}
+              {goal.type === 'long' && (
+                <button
+                  className="icon-btn"
+                  title="展开子目标"
+                  onClick={() => useAppStore.getState().openGoal(goal.id)}
+                >
+                  <ChevronRight size={16} />
+                </button>
+              )}
+              <span className="goal-actions">
+                <button
+                  className="icon-btn danger"
+                  title="删除"
+                  onClick={() => setDeletePendingId(goal.id)}
+                >
+                  <Trash2 size={15} />
+                </button>
+              </span>
+              <button
+                className="icon-btn goal-more"
+                title="更多操作"
+                aria-haspopup="menu"
+                onClick={() => setMoreForId(goal.id)}
+              >
+                <MoreHorizontal size={16} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      {detailGoal && (
+        <GoalDetailDialog
+          title={detailGoal.title}
+          remark={detailGoal.remark}
+          onSave={(remark) => useAppStore.getState().updateGoalRemark(detailGoal.id, remark)}
+          onClose={() => setDetailId(null)}
+        />
+      )}
+      {deletePendingGoal && (
+        <ConfirmDialog
+          message={`确定删除目标「${deletePendingGoal.title}」？`}
+          onConfirm={() => useAppStore.getState().deleteGoal(deletePendingGoal.id)}
+          onCancel={() => setDeletePendingId(null)}
+        />
+      )}
+      {moreGoal && (
+        <OverflowMenu
+          onClose={() => setMoreForId(null)}
+          items={[
+            { label: '详细信息', icon: Info, onSelect: () => setDetailId(moreGoal.id) },
+            {
+              label: '删除',
+              icon: Trash2,
+              danger: true,
+              onSelect: () => setDeletePendingId(moreGoal.id)
+            }
+          ]}
+        />
+      )}
+    </div>
   )
 }
 

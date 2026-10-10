@@ -6,8 +6,10 @@ import type {
   MoneyState,
   Quadrant,
   QuadrantEvent,
+  WeekEvent,
   WeekSettlement
 } from '../src/shared/types'
+import { WEEK_COLORS } from '../src/shared/types'
 import { defaultData } from '../src/shared/defaults'
 import { addDays, dateKey, parseDateKey } from '../src/shared/dateKey'
 import {
@@ -2987,11 +2989,120 @@ describe('completeQuadrantEvent · 日期由页面传入', () => {
       createdAt: '2026-09-30T20:00:00.000Z'
     }
     // 气泡在 23:59 持有的日期是 PAGE_TODAY；确认时把它一并交给 store。
-    useAppStore.getState().completeQuadrantEvent(event, 120, 1439, PAGE_TODAY)
+    useAppStore.getState().completeQuadrantEvent(event, { billable: true, actualMin: 120 }, 1439, PAGE_TODAY)
 
     const days = useAppStore.getState().data.money?.days ?? []
     // 不得把条目记到时钟所在的「新一天」上。
     expect(days.some((d) => d.date === '2026-10-01')).toBe(false)
     expect(days.find((d) => d.date === PAGE_TODAY)?.entries).toHaveLength(1)
+  })
+})
+
+// ============================================================================
+// 完成即离场：completeQuadrantEvent 删除卡片 + 解除周计划镜像链接
+// ============================================================================
+
+/**
+ * 「标记完成并确认是否计时后应该消失」这条需求同时牵动两个实体：
+ * 象限卡片本身，以及它在周计划里的镜像（`showInQuadrant` / `quadrantEventId`）。
+ *
+ * 后半个必须由 store 一起处理 —— 留下悬空 id 的话，用户下次编辑那条周事件时
+ * `updateWeekEvent` 会重新造一张卡片出来（"删了又回来"）。用例把它钉死。
+ */
+describe('completeQuadrantEvent · 确认后卡片必须离场', () => {
+  const DAY = '2026-09-30'
+  const event: QuadrantEvent = {
+    id: 'ev-done',
+    text: '写周报',
+    remark: '',
+    quadrant: 2,
+    x: 0,
+    y: 0,
+    width: 1,
+    createdAt: '2026-09-30T20:00:00.000Z'
+  }
+  const mirroredWeekEvent: WeekEvent = {
+    id: 'we-1',
+    date: DAY,
+    title: '写周报',
+    color: WEEK_COLORS[0],
+    quadrant: 2,
+    startMin: 600,
+    endMin: 660,
+    remark: '',
+    showInQuadrant: true,
+    quadrantEventId: event.id,
+    createdAt: '2026-09-30T08:00:00.000Z'
+  }
+
+  function seed(days: LedgerDay[]): void {
+    useAppStore.setState({
+      data: {
+        ...defaultData(),
+        events: [event],
+        weekEvents: [mirroredWeekEvent],
+        money: { enabled: true, config: DEFAULT_MONEY_CONFIG, days, weeks: [], enabledAt: DAY }
+      },
+      loaded: true
+    })
+  }
+
+  afterEach(() => {
+    useAppStore.setState({ data: defaultData(), loaded: true })
+  })
+
+  it('计费：记一条账，同时删掉卡片并解除镜像链接', () => {
+    seed([unsettledDay(DAY, [])])
+    useAppStore.getState().completeQuadrantEvent(event, { billable: true, actualMin: 60 }, 600, DAY)
+
+    const data = useAppStore.getState().data
+    expect(data.events).toHaveLength(0)
+    expect(data.weekEvents[0].quadrantEventId).toBeUndefined()
+    expect(data.weekEvents[0].showInQuadrant).toBe(false)
+    expect(data.money?.days.find((d) => d.date === DAY)?.entries).toHaveLength(1)
+  })
+
+  it('不计费：不记账，但卡片一样离场', () => {
+    seed([unsettledDay(DAY, [])])
+    useAppStore.getState().completeQuadrantEvent(event, { billable: false, actualMin: 0 }, 600, DAY)
+
+    const data = useAppStore.getState().data
+    expect(data.events).toHaveLength(0)
+    expect(data.money?.days.find((d) => d.date === DAY)?.entries).toHaveLength(0)
+  })
+
+  it('当天已结算：不记账（快照不可改），但卡片仍然离场', () => {
+    seed([settledDay(DAY, [])])
+    useAppStore.getState().completeQuadrantEvent(event, { billable: true, actualMin: 60 }, 600, DAY)
+
+    const data = useAppStore.getState().data
+    expect(data.events).toHaveLength(0)
+    expect(data.money?.days.find((d) => d.date === DAY)?.entries).toHaveLength(0)
+  })
+
+  it('当天已为同一事件记过账：不重复记账，但卡片仍然离场', () => {
+    const billed = quadrantEntryOf(
+      {
+        id: 'l1',
+        event: { id: event.id, text: event.text, quadrant: event.quadrant },
+        actualMin: 60,
+        nowMin: 540
+      },
+      DEFAULT_MONEY_CONFIG
+    )
+    seed([unsettledDay(DAY, [billed])])
+    expect(isEventBilledOn(useAppStore.getState().data.money?.days ?? [], DAY, event.id)).toBe(true)
+
+    useAppStore.getState().completeQuadrantEvent(event, { billable: true, actualMin: 60 }, 600, DAY)
+
+    const data = useAppStore.getState().data
+    expect(data.events).toHaveLength(0)
+    expect(data.money?.days.find((d) => d.date === DAY)?.entries).toHaveLength(1)
+  })
+
+  it('未开启金钱系统：整个动作是空操作（spec §4.3「关掉开关就一字不差还回去」）', () => {
+    useAppStore.setState({ data: { ...defaultData(), events: [event] }, loaded: true })
+    useAppStore.getState().completeQuadrantEvent(event, { billable: true, actualMin: 60 }, 600, DAY)
+    expect(useAppStore.getState().data.events).toHaveLength(1)
   })
 })

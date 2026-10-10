@@ -8,6 +8,7 @@ import {
   canCheckSubtask,
   groupCountOf,
   groupTitleOf,
+  partitionGoals,
   removeGoalFromList,
   removeGroupFromGoal,
   removeSubtaskFromGoal,
@@ -163,5 +164,44 @@ describe('goalRules', () => {
     const result = removeGroupFromGoal(goal, 2)
     expect(groupCountOf(result)).toBe(1)
     expect(result.done).toBe(true)
+  })
+})
+
+// ============================================================================
+// 主页 / 历史的归属划分
+// ============================================================================
+
+describe('goalRules · partitionGoals', () => {
+  const activeGoal: Goal = { ...makeGoal(), id: 'g-active', done: false }
+  const doneGoal: Goal = { ...makeGoal(), id: 'g-done', done: true }
+  const holdingGoal: Goal = { ...makeGoal(), id: 'g-holding', done: true }
+  const shortGoal: Goal = { ...makeGoal(), id: 'g-short', type: 'short', done: true }
+  const all = [activeGoal, doneGoal, holdingGoal, shortGoal]
+
+  it('未完成的在主页、已完成且不在窗口内的在历史', () => {
+    const { active, history } = partitionGoals(all, 'long', new Set())
+    expect(active.map((g) => g.id)).toEqual(['g-active'])
+    expect(history.map((g) => g.id)).toEqual(['g-done', 'g-holding'])
+  })
+
+  it('保持窗口内的目标仍算主页 —— 两个集合互斥', () => {
+    const { active, history } = partitionGoals(all, 'long', new Set(['g-holding']))
+    expect(active.map((g) => g.id)).toEqual(['g-active', 'g-holding'])
+    expect(history.map((g) => g.id)).toEqual(['g-done'])
+  })
+
+  it('两类目标各算各的：同一份数据按 type 划分互不串台', () => {
+    const { active, history } = partitionGoals(all, 'short', new Set())
+    expect(active).toHaveLength(0)
+    expect(history.map((g) => g.id)).toEqual(['g-short'])
+  })
+
+  it('两个集合合起来恰好覆盖全部目标，各自保持原数组内的相对顺序', () => {
+    const { active, history } = partitionGoals(all, 'long', new Set(['g-holding']))
+    expect([...active, ...history].map((g) => g.id)).toEqual([
+      'g-active',
+      'g-holding',
+      'g-done'
+    ])
   })
 })

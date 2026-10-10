@@ -1,6 +1,43 @@
-import type { Goal, Subtask } from '../../../shared/types'
+import type { Goal, GoalType, Subtask } from '../../../shared/types'
 
 export const MAX_GROUPS = 8
+
+/**
+ * 主页面上「确认完成后仍留在主页」的保持窗口（毫秒）。
+ *
+ * 存在的理由有两个，缺一不可：① 勾选动画（圆环填色）需要被看见，卡片当场消失
+ * 会让用户怀疑自己点没点中；② 给误点一次反悔的机会 —— 窗口内再点一下就是取消。
+ * 窗口只影响**展示**：`toggleGoal` 在点下的那一刻就把 `done` 落库了，所以刷新、
+ * 切页、同步都不会让状态分叉。
+ */
+export const COMPLETION_HOLD_MS = 3000
+
+/**
+ * 按「是否已归档到历史」把同一类型的目标分成两组。
+ *
+ * 「在历史」的判据就是 `done` —— 需求里「取消勾选回到主页面」正是 `done → false`，
+ * 与现有唯一布尔位一一对应。**刻意不另设 `archived` 字段**：那要同步
+ * `platformApi.validAppData`（网页端校验）/ `main/dataCodec.normalizeGoal`（桌面端
+ * 逐字段重建）/ `shared/types.ts` 三处，漏一处就静默丢字段；而 `done` 已经在
+ * 所有同步点上，改动面为零。
+ *
+ * `holdingIds` 是主页面维护的**保持窗口**（见 `COMPLETION_HOLD_MS`）：
+ * - `active`  = 未完成，或刚完成但仍在窗口内；
+ * - `history` = 已完成且已离开窗口。
+ *
+ * 两个集合互斥且覆盖同一类型的全部目标 —— 同一张卡片在任一时刻只会出现在一边。
+ */
+export function partitionGoals(
+  goals: Goal[],
+  type: GoalType,
+  holdingIds: ReadonlySet<string>
+): { active: Goal[]; history: Goal[] } {
+  const ofType = goals.filter((g) => g.type === type)
+  return {
+    active: ofType.filter((g) => !g.done || holdingIds.has(g.id)),
+    history: ofType.filter((g) => g.done && !holdingIds.has(g.id))
+  }
+}
 
 export function newId(prefix: string): string {
   return `${prefix}-${crypto.randomUUID()}`

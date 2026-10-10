@@ -113,6 +113,7 @@ export default function DayView({
   const deleteWeekEvent = useAppStore((s) => s.deleteWeekEvent)
   const moveWeekEvent = useAppStore((s) => s.moveWeekEvent)
   const deletePreset = useAppStore((s) => s.deletePreset)
+  const setPresetOrder = useAppStore((s) => s.setPresetOrder)
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLDivElement>(null)
@@ -547,6 +548,7 @@ export default function DayView({
           onDelete={(preset) =>
             setDeleteTarget({ kind: 'preset', id: preset.id, title: preset.title })
           }
+          onReorder={setPresetOrder}
         />
       </div>
       {form && <EventFormDialog form={form} onClose={() => setForm(null)} />}
