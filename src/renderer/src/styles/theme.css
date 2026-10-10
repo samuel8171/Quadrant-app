@@ -359,48 +359,21 @@ body {
 .goal-list {
   display: flex;
   flex-direction: column;
-}
-
-/*
- * 卡片槽位：承载「完成后移入历史」的移出动画。
- *
- * 高度用 `grid-template-rows: 1fr → 0fr` 折叠（与 `.preset-collapse` 同一套手法，
- * 理由见那处注释：fr 是数值、浏览器可插值，于是"高度自适应内容"也能有过渡，
- * 且时长恒定）。间距因此从 `.goal-list` 的 `gap` 挪到槽位上 —— `gap` 不可插值，
- * 留在外面会让卡片移出后多出一条 8px 空隙，直到卸载才消失。
- *
- * `.is-leaving` 只由移出动画驱动；何时摘除槽位由 JS 的 `transitionend`（+ 兜底
- * 定时器）决定，见 `GoalsPage` 的 `finishLeave`。
- */
-.goal-card-slot {
-  display: grid;
-  grid-template-rows: 1fr;
-  overflow: hidden;
-  transition: grid-template-rows 200ms ease, margin-top 200ms ease, opacity 200ms ease;
-}
-
-.goal-card-slot + .goal-card-slot {
-  margin-top: 8px;
-}
-
-/*
- * 历史列表里没有槽位（那里不需要移出动画），卡片是 `.goal-list` 的直接子元素，
- * 所以间距还得单独给一条 —— 上面的 `+.goal-card-slot` 覆盖不到它。
- */
-.goal-list > .goal-card + .goal-card {
-  margin-top: 8px;
-}
-
-/* 槽位是 grid 容器、卡片是它的 grid 项：不给 min-height: 0 就压不到 0。 */
-.goal-card-slot > .goal-card {
-  min-height: 0;
-}
-
-.goal-card-slot.is-leaving {
-  grid-template-rows: 0fr;
-  margin-top: 0;
-  opacity: 0;
-  pointer-events: none;
+  /*
+   * 间距用 `gap`（主页面与历史页共用同一条）。上一版把间距挪到「卡片槽位」的
+   * margin 上，是因为槽位要用 `grid-template-rows: 1fr → 0fr` 折掉高度 ——
+   * 那条是**布局动画**，每帧重算轨道 + 重排整列，用户实测卡顿（2026-10-10）。
+   * 现在移出动画交给 auto-animate（WAAPI 的 transform/opacity，不触发布局），
+   * 间距就回归最简单也最省的一条 `gap`。
+   */
+  gap: 8px;
+  /*
+   * 显式给定位上下文：auto-animate 在父元素计算样式为 `static` 时**会自己往内联样式
+   * 里塞 `position: relative`**（它要把被删卡片临时改成 `absolute` 覆盖层，需要一个
+   * 确定的参照物）。与其被它悄悄改，不如这里写清楚。副作用是它也成为本列表内绝对
+   * 定位后代的包含块 —— 卡片里没有这类元素，安全。
+   */
+  position: relative;
 }
 
 /*

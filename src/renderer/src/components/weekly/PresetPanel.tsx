@@ -15,6 +15,7 @@ import { useAutoAnimate } from '@formkit/auto-animate/react'
 import type { WeekPreset } from '../../../../shared/types'
 import { useClosing } from '../../hooks/useClosing'
 import { withAlpha } from '../../lib/color'
+import { MOTION_EASE, MOTION_MS, MOTION_SETTLE_MS } from '../../lib/motion'
 import { QUADRANT_META } from '../../lib/quadrantMath'
 import { formatDuration } from '../../lib/weekRules'
 import { shouldUsePresetOnTap } from '../../lib/weeklyMobileLayout'
@@ -26,15 +27,15 @@ import { moveWithin, orderAfterDrop, resolveDropIndex, type Axis, type DropTarge
  * ① `useAutoAnimate` 的 options（兄弟块让位，由库用 WAAPI 播）；
  * ② 幽灵卡片落位时的内联 transition（见下面的 `ghostStyle`）。
  * 之所以能在 JS 里写死而不用 CSS 变量：幽灵的 transition 也是内联给的，
- * 不需要 CSS 参与，就不存在"两处常量要同步"的问题。
+ * 不需要 CSS 参与。
  *
- * 取值理由见 `docs/research/2026-10-09-preset-reorder-animation.md` §4.3：
- * 先快后缓 = "迅速让开、轻轻停住"。
+ * ⭐ 取值本身挪到了 `lib/motion.ts` —— 目标页的增删动画用的是同一套节奏，
+ * 两处各写一份就会各自漂移（取值理由也在那里）。
  */
-const REORDER_MS = 200
-const REORDER_EASE = 'cubic-bezier(0.2, 0.8, 0.2, 1)'
+const REORDER_MS = MOTION_MS
+const REORDER_EASE = MOTION_EASE
 /** 落位比让位略短促一点，避免拖泥带水。 */
-const SETTLE_MS = 180
+const SETTLE_MS = MOTION_SETTLE_MS
 
 function prefersReducedMotion(): boolean {
   return typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
