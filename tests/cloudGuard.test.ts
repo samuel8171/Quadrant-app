@@ -27,6 +27,7 @@ import { resetSyncGate, useAppStore } from '../src/renderer/src/state/appStore'
 const DATA_KEY = 'quadrant-web-data-v2'
 const storage = new Map<string, string>()
 let desktop = false
+let failLocalWrite = false
 
 const goal = (id: string): Goal => ({
   id,
@@ -60,7 +61,10 @@ function installWindow(): void {
   ;(globalThis as unknown as { window: unknown }).window = {
     localStorage: {
       getItem: (key: string) => storage.get(key) ?? null,
-      setItem: (key: string, value: string) => void storage.set(key, value)
+      setItem: (key: string, value: string) => {
+        if (failLocalWrite && key === DATA_KEY) throw new Error('quota exceeded')
+        storage.set(key, value)
+      }
     },
     ...(desktop ? { quadrantApi: desktopApi() } : {})
   }
@@ -273,7 +277,7 @@ describe('启动对账', () => {
 describe('显式云端动作', () => {
   it('从云端恢复会整份替换并落盘', async () => {
     useAppStore.setState({ data: localData })
-    const result = await useAppStore.getState().pullFromCloud()
+    const result = await useAppStore.getState().pullFromCloud({ revision: 'r-cloud', local: localData })
 
     expect(result.ok).toBe(true)
     expect(useAppStore.getState().data.goals.map((g) => g.id)).toEqual(['cloud-1', 'cloud-2'])
@@ -283,7 +287,7 @@ describe('显式云端动作', () => {
   it('云端没有数据时如实报告，不改动本地', async () => {
     cloud.fetchCloudData.mockResolvedValue({ revision: null, data: null })
     useAppStore.setState({ data: localData })
-    const result = await useAppStore.getState().pullFromCloud()
+    const result = await useAppStore.getState().pullFromCloud({ revision: 'r-cloud', local: localData })
 
     expect(result.ok).toBe(false)
     expect(useAppStore.getState().data.goals.map((g) => g.id)).toEqual(['local-1'])
@@ -291,7 +295,7 @@ describe('显式云端动作', () => {
 
   it('上传会更新修订号并广播给其他设备', async () => {
     useAppStore.setState({ data: localData })
-    const result = await useAppStore.getState().pushToCloud()
+    const result = await useAppStore.getState().pushToCloud({ revision: 'r-cloud', local: localData })
 
     expect(result.ok).toBe(true)
     expect((await readSyncMeta()).cloudRevision).toBe('r-new')
@@ -299,8 +303,9 @@ describe('显式云端动作', () => {
   })
 
   it('上传失败时把原因回报给界面', async () => {
+    useAppStore.setState({ data: localData })
     cloud.pushCloudData.mockRejectedValue(new Error('请先登录云端账号'))
-    const result = await useAppStore.getState().pushToCloud()
+    const result = await useAppStore.getState().pushToCloud({ revision: 'r-cloud', local: localData })
 
     expect(result.ok).toBe(false)
     expect(result.message).toContain('请先登录云端账号')
@@ -323,5 +328,88 @@ describe('显式云端动作', () => {
 
     expect(info.hasWarning).toBe(true)
     expect(info.detail).toContain('尚未上传')
+  })
+})
+
+describe('快照提交顺序', () => {
+  it('云端正文拉取失败后，本地编辑只落盘', async () => {
+    seedLocalData(localData)
+    cloud.fetchCloudData.mockRejectedValue(new Error('offline'))
+    await useAppStore.getState().init()
+    useAppStore.getState().addGoal('long', '本地编辑')
+    await settleSave()
+    expect(storage.get(DATA_KEY)).toContain('本地编辑')
+    expect(cloud.pushCloudData).not.toHaveBeenCalled()
+  })
+
+  it('备份未落盘的编辑，旧回调不会写回刚采纳的云端快照', async () => {
+    await reconcileFirst(localData)
+    useAppStore.getState().addGoal('long', '待保存编辑')
+    cloud.fetchCloudMeta.mockResolvedValue({ exists: true, revision: 'r-new' })
+    cloud.fetchCloudData.mockResolvedValue({ revision: 'r-new', data: cloudData })
+    await useAppStore.getState().syncOnResume()
+    await settleSave()
+    expect(cloud.pushCloudData).not.toHaveBeenCalled()
+    expect(storage.get(DATA_KEY)).toContain('cloud-1')
+    expect(storage.get('quadrant-web-data-conflict-snapshot')).toContain('待保存编辑')
+  })
+
+  it('离线删除最后一项目标在联网后提交到相同基准修订', async () => {
+    await reconcileFirst(localData)
+    cloud.pushCloudData.mockRejectedValueOnce(new Error('offline'))
+    useAppStore.getState().deleteGoal('local-1')
+    await settleSave()
+    await useAppStore.getState().syncOnResume()
+    expect(useAppStore.getState().data.goals).toEqual([])
+    expect(cloud.pushCloudData).toHaveBeenLastCalledWith(expect.objectContaining({ goals: [] }), 'r-cloud')
+  })
+
+  it('本地落盘失败不会上传', async () => {
+    await reconcileFirst(localData)
+    failLocalWrite = true
+    useAppStore.getState().addGoal('long', '待保存编辑')
+    await settleSave()
+    expect(cloud.pushCloudData).not.toHaveBeenCalled()
+    failLocalWrite = false
+  })
+
+  it('损坏的云端实体不会进入 Store', async () => {
+    seedLocalData(localData)
+    cloud.fetchCloudData.mockResolvedValue({ revision: 'r-cloud', data: { ...cloudData, goals: [null] } })
+    await useAppStore.getState().init()
+    expect(useAppStore.getState().data).toEqual(localData)
+    expect(storage.get(DATA_KEY)).toContain('local-1')
+  })
+})
+
+describe('待提交快照身份', () => {
+  it('较早的上传成功不能清掉期间已保存的较新编辑', async () => {
+    await reconcileFirst(localData)
+    let finish!: (result: { revision: string }) => void
+    cloud.pushCloudData.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve }))
+    useAppStore.getState().addGoal('long', '第一笔')
+    await settleSave()
+    useAppStore.getState().addGoal('long', '第二笔')
+    await settleSave()
+    expect(storage.get(DATA_KEY)).toContain('第二笔')
+    cloud.pushCloudData.mockRejectedValueOnce(new Error('offline'))
+    finish({ revision: 'r-accepted' })
+    await vi.advanceTimersByTimeAsync(0)
+    expect((await readSyncMeta()).dirty).toBe(true)
+    resetSyncMetaCache()
+    expect((await readSyncMeta()).cloudRevision).toBe('r-accepted')
+    expect((await readSyncMeta()).dirty).toBe(true)
+  })
+
+  it('本标签不覆盖另一标签已经落盘的待上传快照', async () => {
+    await reconcileFirst(localData)
+    useAppStore.getState().addGoal('long', '旧标签页')
+    const otherTabData = { ...localData, goals: [goal('other-tab')] }
+    const otherTabMeta = { ...(await readSyncMeta()), dirty: true, snapshotId: 'other-tab' }
+    storage.set(DATA_KEY, JSON.stringify({ ...otherTabData, __quadrantLocalSnapshot: otherTabMeta }))
+    await settleSave()
+    expect(storage.get(DATA_KEY)).toContain('other-tab')
+    expect(cloud.pushCloudData).not.toHaveBeenCalled()
+    expect(storage.get('quadrant-web-data-conflict-snapshot')).toContain('旧标签页')
   })
 })

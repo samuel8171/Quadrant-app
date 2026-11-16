@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { CalendarDays, Cloud, CloudUpload, Grid2x2, RefreshCcw, Target, User } from 'lucide-react'
 import type { Page } from '../state/appStore'
-import { useAppStore } from '../state/appStore'
+import { useAppStore, type CloudConfirmation } from '../state/appStore'
 import ConfirmDialog from './ConfirmDialog'
 import CloudLoginDialog from './CloudLoginDialog'
 import type { SyncAction } from '../lib/syncSummary'
@@ -19,6 +19,7 @@ interface PendingConfirm {
   action: SyncAction
   detail: string
   warning: boolean
+  target: CloudConfirmation
 }
 
 export default function Sidebar(): JSX.Element {
@@ -51,9 +52,9 @@ export default function Sidebar(): JSX.Element {
     }
   }, [isDesktop])
 
-  async function perform(action: SyncAction): Promise<void> {
+  async function perform({ action, target }: PendingConfirm): Promise<void> {
     setBusy(true)
-    const r = action === 'push' ? await pushToCloud() : await pullFromCloud()
+    const r = action === 'push' ? await pushToCloud(target) : await pullFromCloud(target)
     setMessage(r.message)
     setBusy(false)
     window.setTimeout(() => setMessage(''), 2500)
@@ -69,7 +70,11 @@ export default function Sidebar(): JSX.Element {
     setBusy(true)
     const info = await inspectCloud(action)
     setBusy(false)
-    setConfirm({ action, detail: info.detail, warning: info.hasWarning })
+    if (!info.confirmation) {
+      setMessage(info.detail)
+      return
+    }
+    setConfirm({ action, detail: info.detail, warning: info.hasWarning, target: info.confirmation })
   }
 
   async function run(action: SyncAction): Promise<void> {
@@ -168,7 +173,7 @@ export default function Sidebar(): JSX.Element {
           message={confirmLabel(confirm.action)}
           detail={confirm.detail}
           warning={confirm.warning}
-          onConfirm={() => void perform(confirm.action)}
+          onConfirm={() => void perform(confirm)}
           onCancel={() => setConfirm(null)}
         />
       )}

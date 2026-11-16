@@ -1,7 +1,6 @@
 import { create } from 'zustand'
 import type {
   AppData,
-  CloudMeta,
   LedgerDay,
   LedgerEntry,
   MoneyConfig,
@@ -12,7 +11,7 @@ import type {
   WeekEvent,
   WeekPreset
 } from '../../../shared/types'
-import { defaultData, isEmptyData } from '../../../shared/defaults'
+import { defaultData } from '../../../shared/defaults'
 import { addDays, dateKey, parseDateKey } from '../../../shared/dateKey'
 import {
   DEFAULT_MONEY_CONFIG,
@@ -35,7 +34,7 @@ import * as quadrantSync from '../lib/quadrantSync'
 import * as weekRules from '../lib/weekRules'
 import { reviewDirty } from '../lib/reviewRules'
 import type { ViewState } from '../lib/quadrantMath'
-import { flushPendingSave, scheduleSave } from '../lib/scheduleSave'
+import { createSnapshotSync } from '../lib/snapshotSync'
 import { getPlatformApi, isDesktopRuntime } from '../lib/platformApi'
 import {
   announceSync,
@@ -50,15 +49,7 @@ import {
   formatSyncDetail,
   type SyncAction
 } from '../lib/syncSummary'
-import {
-  decideStartup,
-  isCloudChangedElsewhere,
-  markPulled,
-  markPushed,
-  markSyncDirty,
-  readSyncMeta,
-  shouldPushOnStartup
-} from '../lib/syncMeta'
+import { isCloudChangedElsewhere, readSyncMeta } from '../lib/syncMeta'
 
 export type Page = 'goals' | 'quadrant' | 'weekly' | 'review' | 'mine'
 
@@ -76,7 +67,14 @@ export interface DayAnswers {
   latePhone: boolean
 }
 
+export interface CloudConfirmation {
+  ownerId?: string
+  revision: string | null
+  local: AppData
+}
+
 export interface CloudInspect {
+  confirmation?: CloudConfirmation
   ok: boolean
   /** 差异摘要正文（失败时是错误原因）。 */
   detail: string
@@ -89,13 +87,15 @@ interface AppState {
   page: Page
   activeGoalId: string | null
   loaded: boolean
+  storageNotice: string
+  recoveryMode: boolean
+  hasConflictCopies: boolean
   init: () => Promise<void>
   inspectCloud: (action: SyncAction) => Promise<CloudInspect>
-  pushToCloud: () => Promise<{ ok: boolean; message: string }>
-  pullFromCloud: () => Promise<{ ok: boolean; message: string }>
+  pushToCloud: (confirmation: CloudConfirmation) => Promise<{ ok: boolean; message: string }>
+  pullFromCloud: (confirmation: CloudConfirmation) => Promise<{ ok: boolean; message: string }>
   /** 前台恢复 / 网络恢复时对账一次。 */
   syncOnResume: () => Promise<void>
-  applyCloudData: (data: AppData) => void
   setPage: (page: Page) => void
   openGoal: (id: string) => void
   closeGoal: () => void
@@ -213,173 +213,36 @@ export function hasClipboardEvent(): boolean {
 
 export type WeekSyncResult = { ok: true } | { ok: false; reason: 'quadrant-full' }
 
-function saveSoon(data: AppData): void {
-  scheduleSave(() => {
-    void getPlatformApi().saveData(data)
-    void syncAfterLocalSave(data)
-  })
-}
-
-/**
- * 首屏对账是否已经有结论（成功取到云端元信息并做过取舍）。
- *
- * ⭐⭐ **这道闸门是为了修一次真实发生过的全量数据丢失**（2026-10-10）：
- *
- * `init()` 在拿到本地数据、把界面渲染出来之后，还会跑几个"本地维护"步骤
- * （`materializeLedgerDays` / `abandonExpiredLedgerDays` / `rolloverMoneyWeek`）。
- * 它们内部会 `saveSoon`，而 `saveSoon` 会走 `syncAfterLocalSave` 自动上传 ——
- * 也就是说**用户什么都还没点，一份陈旧的本地数据就已经被推上云端了**。
- * `npm run dev:web` 尤为致命：`localhost:5173` 与线上 Pages 是**两个 origin**，
- * 在同步层看来是两台设备，而本地那个 origin 里往往是开发期残留的旧数据。
- *
- * 所以：**在对账有结论之前，一律不许自动上传**，只把 `dirty` 记上。
- * 数据不会丢（改动仍在本地、`dirty` 为真），只是晚一步传。
- *
- * 为什么不是"对账失败也开闸"：`fetchCloudMeta` 抛错说明我们**不知道云端有什么**，
- * 此时上传与盲目覆盖没有区别。保持关闭、下次前台恢复再试，是唯一安全的选项。
- */
-let reconciled = false
-
-/**
- * 仅供测试：把上面的闸门复位，让每个用例都从「冷启动、尚未对账」开始。
- *
- * 与 `syncMeta.resetSyncMetaCache` 同一性质 —— 模块级状态在同一个测试文件里会
- * 跨用例残留，不复位的话"对账前不许上传"这类用例会因为前一个用例已经开过闸而假绿。
- */
-export function resetSyncGate(): void {
-  reconciled = false
-}
-
-/**
- * 采纳云端前，把本机那份**未上传**的数据另存一份快照。
- *
- * 为什么要留：新的取舍规则是"云端胜出"（见 `syncMeta.decideStartup`），也就是说
- * 一台曾经同步过、但本地也改过东西的设备在发现云端更新时，**本机那份改动会被覆盖掉**。
- * 用户的诉求是"云端不能被顶掉"，这条规则必须这么定；但"覆盖"不等于"销毁" ——
- * 留一份快照，需要时能从浏览器存储里人工取回，代价只有一次 `setItem`。
- *
- * 只在网页端有意义（桌面端 `init` 根本不对账，云端动作全是显式按钮），
- * 且失败一律吞掉：留不下快照不能反而把对账打断。
- */
-const CONFLICT_SNAPSHOT_KEY = 'quadrant-web-data-conflict-snapshot'
-function stashConflictSnapshot(data: AppData): void {
-  try {
-    // 结构性类型而非 DOM 的 `Storage`：本文件同时被 node 那套 tsconfig 编译，
-    // 那份配置里没有 DOM lib。
-    const storage = (
-      globalThis as { window?: { localStorage?: { setItem(key: string, value: string): void } } }
-    ).window?.localStorage
-    storage?.setItem(
-      CONFLICT_SNAPSHOT_KEY,
-      JSON.stringify({ at: new Date().toISOString(), reason: 'adopt-cloud', data })
-    )
-  } catch {
-    /* 隐私模式 / 配额满 / 存储不可用：留不下就算了 */
-  }
-}
-
-/**
- * 本地落盘之后的云端副作用。
- *
- * 关键约束：
- * - **桌面端不自动上传**（桌面端的云端动作全部是显式按钮行为）；
- * - **首屏对账之前不自动上传**（见 `reconciled` 的注释）。
- */
-async function syncAfterLocalSave(data: AppData): Promise<void> {
-  if (isDesktopRuntime()) return
-  try {
-    if (!reconciled) {
-      // 对账还没结论：只记脏，等对账（或下次前台恢复）之后再传。
-      await markSyncDirty()
-      return
-    }
-    const before = await readSyncMeta()
-    await markSyncDirty()
-    if (isEmptyData(data) && before.cloudRevision === null) {
-      // 空数据写入保护（新设备/清缓存 → 本地退化为空）。此时若照常自动上传，
-      // **第一笔操作就会把云端整份覆盖成空**。
-      // 判据特意收紧到「本机没有任何同步记忆」：有记忆说明本机同步过，此刻为空
-      // 就是用户真的把内容删光了，那是正常编辑，必须照常上传（否则会"删了又回来"）。
-      const cloud = await fetchCloudData()
-      if (cloud.data && !isEmptyData(cloud.data)) {
-        stashConflictSnapshot(data)
-        useAppStore.getState().applyCloudData(cloud.data)
-        await markPulled(cloud.revision)
-      }
-      return
-    }
-    const { revision } = await pushCloudData(data)
-    const meta = await markPushed(revision)
-    void announceSync({ deviceId: meta.deviceId, revision })
-  } catch {
-    /* 离线或未登录：保留 dirty，留给启动对账与前台恢复补传 */
-  }
-}
-
-/**
- * 启动 / 前台恢复时的对账：先比元信息（廉价），再决定拉还是推。
- *
- * 首屏不会被它阻塞——调用方先把本地数据渲染出来，再在后台跑这里。
- */
-async function reconcileWithCloud(): Promise<void> {
+function maintainLedger(): void {
   const state = useAppStore.getState()
-  const local = state.data
-  const meta = await readSyncMeta()
-  let cloud: CloudMeta
-  try {
-    cloud = await fetchCloudMeta()
-  } catch {
-    return
-  }
-  const session = await hasCloudSession()
-  const input = { hasSession: session, local, cloud, meta }
-  const action = decideStartup(input)
+  state.materializeLedgerDays()
+  state.abandonExpiredLedgerDays()
+  state.rolloverMoneyWeek()
+}
 
-  if (action.kind === 'adopt-cloud') {
-    try {
-      const { revision, data } = await fetchCloudData()
-      if (!data) return
-      // 本机有未上传的改动却要采纳云端 ⇒ 先把本机那份另存一份，别让它无声消失。
-      if (meta.dirty && !isEmptyData(local)) stashConflictSnapshot(local)
-      state.applyCloudData(data)
-      await markPulled(revision)
-      if (action.reason === 'never-synced' || action.reason === 'cloud-newer') {
-        // eslint-disable-next-line no-console
-        console.warn(
-          `[象限] 本机与云端不一致（${action.reason}），已采纳云端以免顶掉它。` +
-            '本机原先那份数据已留快照在 localStorage 的 ' +
-            `${CONFLICT_SNAPSHOT_KEY}（仅网页端）。`
-        )
-      }
-    } catch {
-      /* 拉取失败保持原状，下次前台恢复会重试 */
-    }
-    // 已经知道云端是什么了：开闸（本机数据此刻就是云端那份）。
-    reconciled = true
-    return
+const snapshotSync = createSnapshotSync({
+  platform: getPlatformApi,
+  desktop: isDesktopRuntime,
+  current: () => useAppStore.getState().data,
+  install: (data, recoveryMode = false) => useAppStore.setState({ data, loaded: true, recoveryMode }),
+  maintain: maintainLedger,
+  report: (storageNotice) => useAppStore.setState({ storageNotice }),
+  conflictCopyAvailable: () => useAppStore.setState({ hasConflictCopies: true }),
+  cloud: {
+    hasSession: hasCloudSession,
+    readMeta: fetchCloudMeta,
+    read: fetchCloudData,
+    write: pushCloudData,
+    notify: announceSync
   }
+})
 
-  if (shouldPushOnStartup(input)) {
-    try {
-      const { revision } = await pushCloudData(local)
-      const next = await markPushed(revision)
-      void announceSync({ deviceId: next.deviceId, revision })
-    } catch {
-      /* 补传失败不致命：dirty 仍为真 */
-    }
-    reconciled = true
-    return
-  }
+function saveSoon(data: AppData): void {
+  snapshotSync.edit(data)
+}
 
-  /*
-   * 走到这里说明「保留本地」且不需要补传。能落到这一个分支的 reason 只有
-   * `already-synced`（修订号一致）与 `cloud-empty`（云端还没有可被顶掉的东西），
-   * 两种都是安全的 ⇒ 开闸。
-   *
-   * 未登录（`no-session`）时**不开闸**：没有会话就传不上去，闸门留着更安全；
-   * 登录后 `App` 会重跑一次 `init()`，那时自然打开。
-   */
-  if (session) reconciled = true
+export function resetSyncGate(): void {
+  snapshotSync.resetForTests()
 }
 
 /**
@@ -490,48 +353,34 @@ export const useAppStore = create<AppState>((set, get) => ({
   page: 'goals',
   activeGoalId: null,
   loaded: false,
+  storageNotice: '',
+  recoveryMode: false,
+  hasConflictCopies: false,
   reviewDraft: { completion: 0, quality: 0, stress: 0, text: '' },
   reviewEdit: { completion: 0, quality: 0, stress: 0, text: '' },
   pendingPage: null,
 
-  init: async () => {
-    // 先把本地数据渲染出来，网络慢时首屏不该等它。
-    const data = await getPlatformApi().loadData()
-    set({ data, loaded: true })
-    /*
-     * ⭐⭐ **对账必须排在这三个本地维护步骤之前**（2026-10-10 修数据丢失时改的）。
-     *
-     * 它们内部会 `saveSoon`（`materializeLedgerDays` 在启用金钱系统时会把
-     * [今天−7, 今天) 的日账本补出来），而 `saveSoon` 会走自动上传 ——
-     * 在还不知道云端有什么的情况下上传，就是"新设备把云端顶掉"的入口。
-     * 首屏不受影响：`set` 已经在上一行发生了，界面早就渲染出来了。
-     */
-    if (!isDesktopRuntime()) await reconcileWithCloud()
-    // 顺序不能反：先物化 [今天−7, 今天) 的每一天，再把掉出窗口的未结算日放弃冻结，
-    // 最后才滚动周结算。放弃必须在滚动之前 —— 被放弃的一天会变成「已结算」，
-    // 而一周只有在它的日账本全部已结算、且没有 nightPending 时才结算（见 ensureWeekRollover）。
-    get().materializeLedgerDays()
-    get().abandonExpiredLedgerDays()
-    get().rolloverMoneyWeek()
-  },
+  init: () => snapshotSync.init(),
 
   inspectCloud: async (action) => {
-    const local = countEntities(get().data)
+    const local = get().data
     try {
       const meta = await readSyncMeta()
-      const { revision, data } = await fetchCloudData()
+      const { ownerId, revision, updatedAt, data } = await snapshotSync.inspectCloud()
       const detail = buildSyncDetail({
         action,
-        local,
+        local: countEntities(local),
         cloud: data ? countEntities(data) : null,
-        cloudUpdatedAt: revision,
-        cloudChangedElsewhere: isCloudChangedElsewhere(
-          { exists: revision !== null, revision },
-          meta
-        ),
-        localDirty: meta.dirty
+        cloudUpdatedAt: updatedAt ?? revision,
+        cloudChangedElsewhere: isCloudChangedElsewhere({ exists: revision !== null, revision }, meta),
+        localDirty: meta.dirty || snapshotSync.hasPendingEdit()
       })
-      return { ok: true, detail: formatSyncDetail(detail), hasWarning: detail.warning !== null }
+      return {
+        ok: true,
+        detail: formatSyncDetail(detail),
+        hasWarning: detail.warning !== null,
+        confirmation: { ownerId, revision, local }
+      }
     } catch (error) {
       return {
         ok: false,
@@ -541,46 +390,25 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
-  pushToCloud: async () => {
+  pushToCloud: async (confirmation) => {
     try {
-      const { revision } = await pushCloudData(get().data)
-      const meta = await markPushed(revision)
-      void announceSync({ deviceId: meta.deviceId, revision })
+      await snapshotSync.push(confirmation.revision, confirmation.local, confirmation.ownerId)
       return { ok: true, message: '已上传到云端' }
     } catch (error) {
       return { ok: false, message: error instanceof Error ? error.message : '上传失败' }
     }
   },
 
-  pullFromCloud: async () => {
+  pullFromCloud: async (confirmation) => {
     try {
-      const { revision, data } = await fetchCloudData()
-      if (!data) return { ok: false, message: '云端暂无数据' }
-      get().applyCloudData(data)
-      await markPulled(revision)
+      await snapshotSync.pull(confirmation.revision, confirmation.local, confirmation.ownerId)
       return { ok: true, message: '已从云端恢复' }
     } catch (error) {
       return { ok: false, message: error instanceof Error ? error.message : '恢复失败' }
     }
   },
 
-  syncOnResume: async () => {
-    if (isDesktopRuntime()) return
-    await reconcileWithCloud()
-  },
-
-  applyCloudData: (data) => {
-    // 实时/对账推送过来的数据必须**落盘**：只改内存的话，下次冷启动又回到旧数据，
-    // 表现为"同步过的东西过一会儿自己变回去了"。
-    set({ data })
-    void getPlatformApi().saveData(data)
-    // 云端那份可能是另一台设备写的：先补出窗口内的未结算日、放弃逾期日，再补周结算
-    // （顺序同 init —— 物化与放弃都必须在滚动之前）。
-    get().materializeLedgerDays()
-    get().abandonExpiredLedgerDays()
-    // 云端那份可能是在另一个设备上、跨了周才写下的，落地后立刻补一次周结算。
-    get().rolloverMoneyWeek()
-  },
+  syncOnResume: () => snapshotSync.resume(),
 
   setPage: (page) => set({ page }),
   setReviewEdit: (patch) => set((s) => ({ reviewEdit: { ...s.reviewEdit, ...patch } })),
@@ -1334,10 +1162,5 @@ export const useAppStore = create<AppState>((set, get) => ({
     get().rolloverMoneyWeek()
   },
 
-  saveNow: () => {
-    // 先兑现挂起的防抖写入（它捕获的 data 可能比此刻的内存快照更早被触发），
-    // 再落一次当前快照，确保两笔都不丢。
-    flushPendingSave()
-    void getPlatformApi().saveData(get().data)
-  }
+  saveNow: () => snapshotSync.flush()
 }))

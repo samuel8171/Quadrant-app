@@ -1,9 +1,10 @@
 import { app } from 'electron'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
-import type { AppData } from '../shared/types'
+import type { AppData, LocalSnapshot } from '../shared/types'
+import { decodeAppDataText, validAppData } from '../shared/appDataCodec'
 import { defaultData } from '../shared/defaults'
-import { parseData, serializeData } from './dataCodec'
+import { serializeData } from './dataCodec'
 
 const FILE_NAME = 'plan.json'
 const BACKUP_NAME = 'plan.backup.json'
@@ -22,22 +23,28 @@ function dataDir(): string {
   return app.getPath('userData')
 }
 
-export async function loadData(): Promise<AppData> {
-  const dir = dataDir()
-  const file = path.join(dir, FILE_NAME)
-  const backup = path.join(dir, BACKUP_NAME)
+async function readSnapshot(file: string): Promise<LocalSnapshot> {
   try {
-    return parseData(await fs.readFile(file, 'utf-8'))
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-      return defaultData()
-    }
-    try {
-      return parseData(await fs.readFile(backup, 'utf-8'))
-    } catch {
-      return defaultData()
-    }
+    return decodeAppDataText(await fs.readFile(file, 'utf-8'))
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT'
+      ? { kind: 'missing', data: defaultData() }
+      : { kind: 'recovery', data: defaultData() }
   }
+}
+
+export async function loadSnapshot(): Promise<LocalSnapshot> {
+  const dir = dataDir()
+  const primary = await readSnapshot(path.join(dir, FILE_NAME))
+  if (primary.kind === 'ready') return primary
+  const backup = await readSnapshot(path.join(dir, BACKUP_NAME))
+  if (backup.kind === 'missing') return primary
+  if (primary.kind === 'missing') return backup
+  return backup.kind === 'ready' ? { kind: 'recovery', data: backup.data } : primary
+}
+
+export async function loadData(): Promise<AppData> {
+  return (await loadSnapshot()).data
 }
 
 async function writeAtomic(data: AppData): Promise<void> {
@@ -45,6 +52,8 @@ async function writeAtomic(data: AppData): Promise<void> {
   const file = path.join(dir, FILE_NAME)
   const backup = path.join(dir, BACKUP_NAME)
   const tmp = path.join(dir, TMP_NAME)
+  if ((await loadSnapshot()).kind === 'recovery') throw new Error('存档需要恢复，原始文件已保留')
+  if (!validAppData(data)) throw new Error('存档结构无效')
   await fs.mkdir(dir, { recursive: true })
   await fs.copyFile(file, backup).catch(() => {})
   await fs.writeFile(tmp, serializeData(data), 'utf-8')

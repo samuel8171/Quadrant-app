@@ -85,7 +85,7 @@ export function decideStartup(input: StartupInput): StartupAction {
   const { hasSession, local, cloud, meta } = input
   if (!hasSession) return { kind: 'keep-local', reason: 'no-session' }
   if (!hasCloudRevision(cloud)) return { kind: 'keep-local', reason: 'cloud-empty' }
-  if (isEmptyData(local)) return { kind: 'adopt-cloud', reason: 'local-empty' }
+  if (isEmptyData(local) && !meta.dirty) return { kind: 'adopt-cloud', reason: 'local-empty' }
   if (!hasSyncedBefore(meta)) return { kind: 'adopt-cloud', reason: 'never-synced' }
   if (cloud.revision === meta.cloudRevision) return { kind: 'keep-local', reason: 'already-synced' }
   return { kind: 'adopt-cloud', reason: 'cloud-newer' }
@@ -98,7 +98,10 @@ export function decideStartup(input: StartupInput): StartupAction {
  * `dirty` 只会在离线编辑或上次上传失败后保持为真。
  */
 export function shouldPushOnStartup(input: StartupInput): boolean {
-  return input.hasSession && !isEmptyData(input.local) && input.meta.dirty
+  if (!input.hasSession || !input.meta.dirty) return false
+  return !isEmptyData(input.local) || (
+    input.meta.cloudRevision !== null && input.meta.cloudRevision === input.cloud.revision
+  )
 }
 
 // ---------------------------------------------------------------- 持久化
@@ -129,7 +132,9 @@ export function normalizeSyncMeta(value: unknown): SyncMeta {
     lastPulledAt: typeof raw.lastPulledAt === 'string' ? raw.lastPulledAt : null,
     lastPushedAt: typeof raw.lastPushedAt === 'string' ? raw.lastPushedAt : null,
     cloudRevision: typeof raw.cloudRevision === 'string' ? raw.cloudRevision : null,
-    dirty: raw.dirty === true
+    dirty: raw.dirty === true,
+    ...(typeof raw.ownerId === 'string' ? { ownerId: raw.ownerId } : {}),
+    ...(typeof raw.snapshotId === 'string' ? { snapshotId: raw.snapshotId } : {})
   }
 }
 
@@ -160,6 +165,10 @@ export async function readSyncMeta(): Promise<SyncMeta> {
   // 身份，广播通知的回环抑制（比对自己的 deviceId）就永远认不出这是自己发的。
   if (!stored) await persist(cache)
   return cache
+}
+
+export function rememberSyncMeta(meta: SyncMeta): void {
+  cache = meta
 }
 
 export async function patchSyncMeta(patch: Partial<SyncMeta>): Promise<SyncMeta> {

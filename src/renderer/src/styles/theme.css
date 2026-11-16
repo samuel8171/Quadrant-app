@@ -5610,3 +5610,9 @@ html[data-standalone='true'] {
     --app-height: 100vh;
   }
 }
+
+.storage-notice {
+  padding: 0.6rem 1rem;
+  color: #ffdb99;
+  background: #34291b;
+}

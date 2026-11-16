@@ -1,16 +1,10 @@
 import { createClient } from '@supabase/supabase-js'
+import { decodeAppData, validAppData } from '../../../shared/appDataCodec'
+import type { CloudSnapshot } from './snapshotSync'
 import type { AppData, CloudMeta } from '../../../shared/types'
-import { validCloudData, validSyncNotice, type SyncNotice } from './cloudValidation'
+import { validSyncNotice, type SyncNotice } from './cloudValidation'
 
-/**
- * 注意：本模块在**顶层**就 `createClient(...)`，而 supabase 的 realtime 层需要
- * 运行环境提供原生 `WebSocket` 全局（浏览器 / Node 22+）。所以在没有该全局的
- * 环境（如 Node 20）下，本模块一 import 就抛。
- *
- * 因此**纯校验函数请从 ./cloudValidation 取**，别放这里——否则一个只想测纯函数的
- * 单测会把整个客户端拖进模块图，在 Node 20 上直接令测试套件加载失败。
- * `validCloudData` / `validSyncNotice` / `SyncNotice` 已经搬到那边。
- */
+// Keep the serializable snapshot rules separate from the browser Supabase client.
 export const SUPABASE_URL = 'https://nktsnjbkvdyhxdjfbxkh.supabase.co'
 export const SUPABASE_ANON_KEY = 'sb_publishable_oPq0EiI_ofPDz2q0iy9EUQ_byXMWSk5'
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
@@ -37,54 +31,64 @@ async function requireUserId(): Promise<string> {
  * 用于「云端是否变了」的廉价比对：整份 jsonb 随数据增长，动不动就拉全量
  * 在网络差时很痛；而同步判定只需要一个修订号。
  */
+function revisionOf(row: { revision?: unknown }): string {
+  if (typeof row.revision !== 'string' || row.revision.length === 0) throw new Error('云端修订号无效')
+  return row.revision
+}
+
 export async function fetchCloudMeta(): Promise<CloudMeta> {
   const userId = await requireUserId()
   const { data, error } = await supabase
     .from('user_data')
-    .select('updated_at')
+    .select('revision')
     .eq('user_id', userId)
     .maybeSingle()
-  if (error) throw error
-  const revision = typeof data?.updated_at === 'string' ? data.updated_at : null
-  return { exists: Boolean(data) && revision !== null, revision }
+  if (error) throw new Error(error.message)
+  return { ownerId: userId, exists: Boolean(data), revision: data ? revisionOf(data) : null }
 }
 
-export async function fetchCloudData(): Promise<{ revision: string | null; data: AppData | null }> {
+export async function fetchCloudData(): Promise<CloudSnapshot> {
   const userId = await requireUserId()
-  const { data, error } = await supabase
-    .from('user_data')
-    .select('data, updated_at')
-    .eq('user_id', userId)
-    .maybeSingle()
-  if (error) throw error
-  const revision = typeof data?.updated_at === 'string' ? data.updated_at : null
-  const payload = validCloudData(data?.data) ? data.data : null
-  return { revision, data: payload }
-}
-
-/**
- * 本地 → 云端，整份覆盖，返回写入后的云端修订号。
- *
- * 修订号取自云端回写的 `updated_at`；若因 RLS 未返回行，则退回本机时钟——
- * 两侧都只是「用来比对是否变化」的标记，不参与业务判定。
- *
- * ⚠️ **本函数不做「空数据保护」**。之前想过在這一层拦「空覆盖非空」，但那条闸门
- * 与「用户真的把内容删光了，要同步这个删除」是同一件事的两面：拦了它，
- * 网页端（没有显式上传按钮）就再也删不掉自己的数据了。
- * 空数据保护改由**判断层**承担，且只拦真正危险的那一支：
- * `syncMeta.decideStartup` 的「本机没有同步记忆 ⇒ 采纳云端」与
- * `appStore` 的「首屏对账完成之前不许自动上传」。
- */
-export async function pushCloudData(data: AppData): Promise<{ revision: string }> {
-  const userId = await requireUserId()
-  const now = new Date().toISOString()
   const { data: row, error } = await supabase
     .from('user_data')
-    .upsert({ user_id: userId, data, updated_at: now })
-    .select('updated_at')
+    .select('data, revision, updated_at')
+    .eq('user_id', userId)
     .maybeSingle()
-  if (error) throw error
-  return { revision: typeof row?.updated_at === 'string' ? row.updated_at : now }
+  if (error) throw new Error(error.message)
+  if (!row) return { ownerId: userId, revision: null, data: null }
+  const decoded = decodeAppData(row.data)
+  return {
+    ownerId: userId,
+    revision: revisionOf(row),
+    updatedAt: typeof row.updated_at === 'string' ? row.updated_at : null,
+    data: decoded.kind === 'ready' ? decoded.data : null
+  }
+}
+
+class CloudRevisionConflict extends Error {
+  override name = 'CloudRevisionConflict'
+
+  constructor() {
+    super('云端已更新，请重新对账')
+  }
+}
+
+export async function pushCloudData(
+  data: AppData,
+  expectedRevision: string | null,
+  expectedOwner?: string
+): Promise<{ revision: string }> {
+  const ownerId = await requireUserId()
+  if (expectedOwner && ownerId !== expectedOwner) throw new Error('登录账号已改变，请重新对账')
+  if (!validAppData(data)) throw new Error('存档结构无效')
+  const { data: revision, error } = await supabase.rpc('commit_user_snapshot', {
+    expected_owner: ownerId,
+    expected_revision: expectedRevision,
+    snapshot: data
+  })
+  if (error) throw new Error(error.message)
+  if (revision === null) throw new CloudRevisionConflict()
+  return { revision: revisionOf({ revision }) }
 }
 
 // ------------------------------------------------------------ 变更广播（通知）

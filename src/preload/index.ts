@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 import type { AppData, QuadrantApi, SyncMeta } from '../shared/types'
 
 const api: QuadrantApi = {
+  loadSnapshot: () => ipcRenderer.invoke('data:snapshot'),
   loadData: (): Promise<AppData> => ipcRenderer.invoke('data:load'),
   saveData: (data: AppData): Promise<void> => ipcRenderer.invoke('data:save', data),
   loadSyncMeta: () => ipcRenderer.invoke('sync:load'),

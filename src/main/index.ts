@@ -1,7 +1,7 @@
 import { app, BrowserWindow, ipcMain, Menu } from 'electron'
 import path from 'node:path'
 import type { AppData, ReviewExport, SyncMeta } from '../shared/types'
-import { flushPendingWrites, loadData, saveData } from './dataStore'
+import { flushPendingWrites, loadData, loadSnapshot, saveData } from './dataStore'
 import { loadSyncMeta, saveSyncMeta } from './syncStore'
 import { listReviews, openReview, saveReview } from './review'
 import { deletePhoto, loadPhoto, savePhoto } from './photoStore'
@@ -33,6 +33,7 @@ function createWindow(): void {
 
 app.whenReady().then(() => {
   Menu.setApplicationMenu(null)
+  ipcMain.handle('data:snapshot', () => loadSnapshot())
   ipcMain.handle('data:load', () => loadData())
   ipcMain.handle('data:save', (_event, data: AppData) => saveData(data))
   ipcMain.handle('sync:load', () => loadSyncMeta())

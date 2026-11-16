@@ -322,10 +322,14 @@ export interface SyncMeta {
   cloudRevision: string | null
   /** 本地存在尚未成功上传的改动（离线编辑期间为 true）。 */
   dirty: boolean
+  /** Browser-local identity of the snapshot this acknowledgement belongs to. */
+  snapshotId?: string
+  ownerId?: string
 }
 
 /** 云端快照的元信息（不含整份数据，用于廉价地比对"云端是否变了"）。 */
 export interface CloudMeta {
+  ownerId?: string
   exists: boolean
   revision: string | null
 }
@@ -351,9 +355,18 @@ export interface ReviewRecord {
   modifiedAt: string
 }
 
+export interface LocalSnapshot {
+  kind: 'ready' | 'missing' | 'recovery'
+  data: AppData
+  syncMeta?: Partial<SyncMeta> | null
+}
+
 export interface QuadrantApi {
   loadData(): Promise<AppData>
+  loadSnapshot?(): Promise<LocalSnapshot>
   saveData(data: AppData): Promise<void>
+  /** localStorage commits synchronously together with this snapshot's sync metadata. */
+  commitWebSnapshot?(data: AppData, meta: SyncMeta, previousSnapshotId?: string): void
   saveReview(payload: ReviewExport): Promise<ReviewRecord>
   listReviews(): Promise<ReviewRecord[]>
   openReview(filePath: string): Promise<{ ok: boolean; error?: string }>

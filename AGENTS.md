@@ -159,31 +159,18 @@ node scripts/verify-integrity.mjs --appdata <dir>  # 覆盖数据目录（默认
 | 源码与配置 | 关键文件是否被误删或清空、package.json 元数据、tsconfig 可解析 |
 | 依赖 | 直接依赖是否落地、入口文件是否可达（抓"半棵树"那类问题） |
 | 构建产物 | `out/`、`dist-web/` 的 HTML/CSS/manifest **引用闭合**、bundle 体积健全、产物是否比 src 旧 |
-| 运行数据 | `plan.json` 是否通过 `validAppData` —— **不合规会被静默重置为默认数据**，本项目最严重的静默故障 |
+| 运行数据 | `plan.json` 是否能由共享解码器完整读取。不可完整读取时保留原件 |
 | 模型同步 | `types.ts` 的 `AppData` 字段与 `validAppData` 的检查字段是否一致（启发式，抓漏同步） |
 | 安装包 | `dist/*.exe` 的 PE 头、体积、是否含当前版本 |
 | 类型检查 | 可选，需 `--typecheck` |
 
 - **退出码**：有 FAIL → 1；`--strict` 下 WARN 也算失败，可直接接进 CI。
-- ⚠️ **维护点（2026-10-02 按实测订正）**：本项目的持久化字段有**多处副本**，漏改一处是**静默故障**。
-  - 第 4 组的 `validAppData` 是 `renderer/lib/platformApi.ts` 的 `validAppData` 的忠实复刻
-    （含 `isRecord` / `hasStringFields` 的精确语义）。
-  - ⭐ **但那份复刻不是「两份」**：脚本里 `validLedgerDay` / `validMoney` 等**各只有一份**，
-    被 `validAppData` 与 `firstViolation` **两条路径引用** —— 改一处即覆盖两条。脚本里真正成对的是
-    **外层**那两个函数。**别再去找「第二份」子校验器。**
-  - **完整同步清单是这 5 个文件**（早期文档只写了 3 个，漏了后两个）：
-    ① `shared/types.ts`；
-    ② `main/dataCodec.ts` 的 `normalizeXxx`（逐字段重建，**最容易漏**）；
-    ③ `renderer/lib/platformApi.ts` 的 `validAppData` 与各 `validXxx`；
-    ④ `shared/defaults.ts` 的 `isEmptyData` 判据；
-    ⑤ `scripts/verify-integrity.mjs` 第 4 组的两处外层复刻。
-  - `renderer/lib/cloudValidation.ts` 的 `validCloudData` **不需要改**：它只校验 `version === 2`
-    与四个数组，是**刻意宽松**的（文件头注释说明目的是形状容错、并切断与 `cloudSync2.ts` 的模块耦合）。
-- ⚠️ **`money` 子字段的额外风险**：网页端校验器拒绝畸形的 `money` 时，`loadData` 走**三档降级** ——
-  合法则原样返回；「除 `money` 外合法」则**只丢账本、保留目标与事件**；否则才回退 `defaultData()`。
-  **写 `money` 必须写完整的 `MoneyState`（四个顶层字段 + `config` 全键）**，否则用户整个账本被丢掉。
-- 自检方式：`--appdata` 指向临时目录，造一份不合规数据应报 FAIL 并指出具体实体下标
-  （已验证：合规数据 25 通过 / 1 警告 / 0 失败；不合规数据 → FAIL + 退出码 1）。
+- **快照读取（2026-11-16）**：桌面、Web、云端及完整性工具共用 src/shared/appDataCodec.ts。
+  已知历史字段的缺席可以迁移，保留旧结算值和启用日的缺席。损坏或超前版本保留原件，进入只读预览。
+- 脚本使用已有的 esbuild 在内存里加载共享解码器。缺少依赖时仍检查 JSON 与文件完整性，并显式报告跳过语义检查。
+- 更新持久化字段时，同步核对 src/shared/types.ts、src/shared/appDataCodec.ts 与 src/shared/defaults.ts 的空数据判据。
+  添加与历史载荷相关的变更时，通过桌面、Web、云端读取得到一致的可用快照。
+- 云端以服务端生成的 UUID 作为修订号，分阶段上线。顺序见 docs/superpowers/plans/2026-11-16-snapshot-sync-recovery.md。
 
 ## 界面交互探针（定位"只在真实事件时序下暴露"的缺陷）
 
@@ -204,7 +191,7 @@ node scripts/verify-integrity.mjs --appdata <dir>  # 覆盖数据目录（默认
 - **两次独立的 `page.mouse.click` 不会让浏览器合成 `dblclick`**（clickCount 各为 1）；鼠标双击用 `page.mouse.dblclick`，触摸双击用两次 `page.touchscreen.tap`。触摸长按/拖动需走 CDP `Input.dispatchTouchEvent`。
 - `addInitScript` 执行时 `document.documentElement` 可能尚未创建，MutationObserver 要轮询挂载，否则整段注入脚本会因抛错而失效。
 - **已知时序陷阱**：触屏轻触后浏览器会在 `pointerup` **之后**补发 `mousedown`（其默认动作会抢走焦点，曾导致"输入框闪现即消失"）。
-- ⭐ **播种数据必须逐字段满足 `platformApi.validAppData`，否则整份静默作废**（2026-09-27 第十六轮踩到，
+- ⭐ **播种数据必须逐字段满足 `shared/appDataCodec.validAppData`，否则整份静默作废**（2026-09-27 第十六轮踩到，
   探针表现为"页面上一个事件都没有"，白量一轮）。规则很碎，最容易漏的三条：
   `Goal` 必须带 `remark` / `order` / `groupTitles` / `subtasks`（四个都缺一不可），
   而 **`Goal` 根本没有 `quadrant` 字段**；`QuadrantEvent` 必须有 `x/y/width`；

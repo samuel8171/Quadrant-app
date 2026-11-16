@@ -22,6 +22,10 @@ SUPABASE_ANON_KEY = sb_publishable_...（publishable key，本来就是公开值
 
 ---
 
+## 同步修订的版本迁移
+
+新版先执行用户快照修订迁移，再更新客户端。旧写入口的收口顺序见 [上线顺序](../superpowers/plans/2026-11-16-snapshot-sync-recovery.md#上线顺序)。下方时间戳充当修订号的说明适用于旧版。新版读取服务端生成的 UUID 判定并发，时间戳供确认框显示。
+
 ## 1. 建表与策略（把 `supabase/schema.sql` 跑一遍）
 
 控制台 → **SQL Editor** → New query → 把仓库里 `supabase/schema.sql`

@@ -18,21 +18,20 @@
  *   [源码与配置]  必要文件、package.json 元数据、tsconfig 可解析
  *   [依赖]        dependencies/devDependencies 落地情况与入口文件可用性
  *   [构建产物]    out/ 与 dist-web/ 的 HTML/CSS/manifest 引用是否闭合
- *   [运行数据]    plan.json 是否通过 validAppData 规则（不合规会被静默重置）
- *   [模型同步]    types.ts 与 platformApi.validAppData 的字段集是否一致（启发式）
+ *   [运行数据]    plan.json 是否能由共享解码器完整读取
+ *   [模型同步]    types.ts 与共享解码器的字段集是否一致（启发式）
  *   [安装包]      dist/*.exe 的 PE 头与版本对应
  *   [类型检查]    可选，--typecheck 开启
  *
- * ⚠️ 维护提示：本脚本第 5 组是「第 4 处」字段校验副本。
- *    新增事件字段时，原三处为 shared/types.ts、main/dataCodec.normalizeEvent、
- *    renderer/lib/platformApi.validAppData；本脚本的 validAppData 复刻块也要同步。
- *    第 5 组会尽力发现这类漏同步，但它只是启发式，不能替代人工确认。
+ * 运行数据语义使用 shared/appDataCodec。缺少本地构建依赖时仍检查 JSON
+ * 与文件完整性，并明确报告语义检查跳过。
  */
 
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { execFileSync } from 'node:child_process'
+import { createRequire } from 'node:module'
 import process from 'node:process'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
@@ -387,149 +386,21 @@ function newestMtime(dir) {
 // ⚠️ 本块是 renderer/lib/platformApi.ts:28-68 的忠实复刻（含 isRecord / hasStringFields
 //    的精确语义）。规则改动时必须同步这里。
 
-function isRecord(v) {
-  return !!v && typeof v === 'object'
-}
-function hasStringFields(v, fields) {
-  return isRecord(v) && fields.every((f) => typeof v[f] === 'string')
-}
-function validPhotos(v) {
-  return v === undefined || (Array.isArray(v) && v.every((id) => typeof id === 'string'))
-}
-
-const MONEY_NUMERIC_KEYS = [
-  'weeklyTC', 'dailyCapTC', 'tcPerHour', 'nightStartMin', 'nightEndMin', 'nightMultiplier',
-  'minCapRatio', 'weeklyLT', 'rewardLT', 'penaltyLT', 'missPenaltyLT',
-  'videoLTPerHour', 'gameLTPerHour', 'restDayFactor', 'abandonedDayTC', 'latePhoneTC', 'latePhoneLT'
-]
-// 配置里唯一的非标量字段：四个键都必须存在且为有限数字，与 platformApi.validMoney 同口径。
-const QUADRANT_MULTIPLIER_KEYS = ['q1', 'q2', 'q3', 'q4']
-const WEEK_SETTLEMENT_NUMERIC_KEYS = [
-  'weekTC', 'spentTC', 'weekOver', 'plannedMin', 'actualMin', 'doneCount', 'missCount',
-  'unplannedCount', 'unplannedMin', 'nightMin', 'overLimitDays', 'nextWeekTC', 'nextWeekLT'
-]
-const isFiniteNum = (n) => typeof n === 'number' && Number.isFinite(n)
-const isDateKey = (v) => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v)
-
-function validLedgerEntry(v) {
-  if (!isRecord(v)) return false
-  if (typeof v.id !== 'string' || typeof v.title !== 'string') return false
-  if (v.kind !== 'planned' && v.kind !== 'unplanned') return false
-  if (typeof v.done !== 'boolean') return false
-  if (v.sourceId !== null && typeof v.sourceId !== 'string') return false
-  if (v.plannedMin !== null && !isFiniteNum(v.plannedMin)) return false
-  if (!isFiniteNum(v.actualMin) || !isFiniteNum(v.nightMin)) return false
-  if (!isFiniteNum(v.costTC) || !isFiniteNum(v.deltaLT)) return false
-  return v.quadrant === null || [1, 2, 3, 4].includes(v.quadrant)
-}
-
-// videoMin / gameMin 是后加的娱币纯消费字段：缺席放行、存在则必须是有限数字，
-// 与 platformApi.validLedgerDay 的 validOptionalMinutes 同口径（免得旧账本被判非法而丢整本账）。
-const validOptionalMinutes = (v) => v === undefined || isFiniteNum(v)
-
-// isRestDay（休息日申报）/ latePhone（昨夜是否刷手机）同样是后加的可选字段：缺席放行、
-// 存在则必须是布尔，与 platformApi.validLedgerDay 的 validOptionalBoolean 同口径。
-const validOptionalBoolean = (v) => v === undefined || typeof v === 'boolean'
-
-// enabledAt（最近一次「关 → 开」的生效日，挂在 MoneyState 上而非 LedgerDay）同样是后加的
-// 可选字段：缺席放行、存在则必须是日期键，与 platformApi.validMoney 的 validOptionalDateKey 同口径。
-const validOptionalDateKey = (v) => v === undefined || isDateKey(v)
-
-function validLedgerDay(v) {
-  if (!isRecord(v)) return false
-  if (!isDateKey(v.date)) return false
-  if (v.settledAt !== null && typeof v.settledAt !== 'string') return false
-  if (typeof v.nightPending !== 'boolean') return false
-  if (!validOptionalMinutes(v.videoMin) || !validOptionalMinutes(v.gameMin)) return false
-  if (!validOptionalBoolean(v.isRestDay) || !validOptionalBoolean(v.latePhone)) return false
-  if (!isFiniteNum(v.dayLimit) || !isFiniteNum(v.spentTC)) return false
-  if (!isFiniteNum(v.overdraft) || !isFiniteNum(v.deltaLT)) return false
-  return Array.isArray(v.entries) && v.entries.every(validLedgerEntry)
-}
-
-function validWeekSettlement(v) {
-  if (!isRecord(v)) return false
-  if (!isDateKey(v.weekStart) || !isDateKey(v.weekEnd)) return false
-  if (![0, 1, 2, 3].includes(v.penaltyTier)) return false
-  if (!Array.isArray(v.notes) || !v.notes.every((note) => typeof note === 'string')) return false
-  return WEEK_SETTLEMENT_NUMERIC_KEYS.every((k) => isFiniteNum(v[k]))
-}
-
-function validQuadrantMultiplier(v) {
-  return isRecord(v) && QUADRANT_MULTIPLIER_KEYS.every((k) => isFiniteNum(v[k]))
-}
-
-function validMoney(v) {
-  if (!isRecord(v)) return false
-  if (typeof v.enabled !== 'boolean') return false
-  if (!validOptionalDateKey(v.enabledAt)) return false
-  if (!isRecord(v.config) || !MONEY_NUMERIC_KEYS.every((k) => isFiniteNum(v.config[k]))) return false
-  if (!validQuadrantMultiplier(v.config.quadrantMultiplier)) return false
-  if (!Array.isArray(v.days) || !v.days.every(validLedgerDay)) return false
-  if (!Array.isArray(v.weeks) || !v.weeks.every(validWeekSettlement)) return false
-  return true
-}
-
-function validAppData(value) {
-  if (!isRecord(value)) return false
-  const d = value
-  if (d.version !== 2 || !Number.isFinite(d.weekCounterOffset) ||
-    !Array.isArray(d.goals) || !Array.isArray(d.events) ||
-    !Array.isArray(d.weekPresets) || !Array.isArray(d.weekEvents)) return false
-
-  const num = (n) => typeof n === 'number' && Number.isFinite(n)
-  const quad = (n) => [1, 2, 3, 4].includes(n)
-
-  return d.goals.every((g) => isRecord(g) && hasStringFields(g, ['id', 'title', 'type', 'remark', 'createdAt']) &&
-    (g.type === 'long' || g.type === 'short') && typeof g.done === 'boolean' && num(g.order) &&
-    Array.isArray(g.groupTitles) && g.groupTitles.every((v) => typeof v === 'string') &&
-    Array.isArray(g.subtasks) && g.subtasks.every((s) => isRecord(s) && hasStringFields(s, ['id', 'title', 'remark']) &&
-      typeof s.done === 'boolean' && num(s.group) && num(s.order))) &&
-    d.events.every((e) => isRecord(e) && hasStringFields(e, ['id', 'text', 'remark', 'createdAt']) &&
-      quad(e.quadrant) && validPhotos(e.photos) &&
-      ['x', 'y', 'width'].every((f) => num(e[f]))) &&
-    d.weekPresets.every((p) => isRecord(p) && hasStringFields(p, ['id', 'title', 'color', 'remark', 'createdAt']) &&
-      quad(p.quadrant) && num(p.durationMin)) &&
-    d.weekEvents.every((e) => isRecord(e) && hasStringFields(e, ['id', 'date', 'title', 'color', 'remark', 'createdAt']) &&
-      quad(e.quadrant) && num(e.startMin) && num(e.endMin) && typeof e.showInQuadrant === 'boolean') &&
-    (d.money === undefined || validMoney(d.money))
-}
-
-/** 定位不合规的具体实体，便于排查（仍不打印任何正文） */
-function firstViolation(value) {
-  if (!isRecord(value)) return '顶层不是对象'
-  const d = value
-  if (d.version !== 2) return `version=${JSON.stringify(d.version)}（期望 2）`
-  if (!Number.isFinite(d.weekCounterOffset)) return 'weekCounterOffset 不是有限数字'
-  for (const k of ['goals', 'events', 'weekPresets', 'weekEvents']) {
-    if (!Array.isArray(d[k])) return `${k} 不是数组`
-  }
-  const num = (n) => typeof n === 'number' && Number.isFinite(n)
-  const quad = (n) => [1, 2, 3, 4].includes(n)
-  const idx = (arr, fn) => arr.findIndex((x) => !fn(x))
-
-  let i = idx(d.goals, (g) => isRecord(g) && hasStringFields(g, ['id', 'title', 'type', 'remark', 'createdAt']) &&
-    (g.type === 'long' || g.type === 'short') && typeof g.done === 'boolean' && num(g.order) &&
-    Array.isArray(g.groupTitles) && g.groupTitles.every((v) => typeof v === 'string') &&
-    Array.isArray(g.subtasks) && g.subtasks.every((s) => isRecord(s) && hasStringFields(s, ['id', 'title', 'remark']) &&
-      typeof s.done === 'boolean' && num(s.group) && num(s.order)))
-  if (i >= 0) return `goals[${i}] 不合规（检查 id/title/type/remark/createdAt/done/order/groupTitles/subtasks）`
-
-  i = idx(d.events, (e) => isRecord(e) && hasStringFields(e, ['id', 'text', 'remark', 'createdAt']) &&
-    quad(e.quadrant) && validPhotos(e.photos) && ['x', 'y', 'width'].every((f) => num(e[f])))
-  if (i >= 0) return `events[${i}] 不合规（检查 id/text/remark/createdAt/quadrant/x/y/width/photos）`
-
-  i = idx(d.weekPresets, (p) => isRecord(p) && hasStringFields(p, ['id', 'title', 'color', 'remark', 'createdAt']) &&
-    quad(p.quadrant) && num(p.durationMin))
-  if (i >= 0) return `weekPresets[${i}] 不合规（检查 id/title/color/remark/createdAt/quadrant/durationMin）`
-
-  i = idx(d.weekEvents, (e) => isRecord(e) && hasStringFields(e, ['id', 'date', 'title', 'color', 'remark', 'createdAt']) &&
-    quad(e.quadrant) && num(e.startMin) && num(e.endMin) && typeof e.showInQuadrant === 'boolean')
-  if (i >= 0) return `weekEvents[${i}] 不合规（检查 id/date/title/color/remark/createdAt/quadrant/startMin/endMin/showInQuadrant）`
-
-  if (d.money !== undefined && !validMoney(d.money)) return 'money 不合规（检查 enabled/enabledAt/config/days/weeks）'
-
-  return '未知'
+function runtimeDecoder() {
+  const require = createRequire(import.meta.url)
+  const { buildSync } = require('esbuild')
+  const { outputFiles } = buildSync({
+    entryPoints: [abs('src/shared/appDataCodec.ts')],
+    bundle: true,
+    platform: 'node',
+    format: 'cjs',
+    write: false,
+    logLevel: 'silent'
+  })
+  const module = { exports: {} }
+  // Run the bundled local source in memory, including on the project's Node 20 target.
+  new Function('module', 'exports', 'require', outputFiles[0].text)(module, module.exports, require)
+  return module.exports.decodeAppData
 }
 
 function checkRuntimeData() {
@@ -553,14 +424,20 @@ function checkRuntimeData() {
     try {
       const raw = readText(planPath)
       const data = JSON.parse(raw)
-      if (validAppData(data)) {
-        add('运行数据', 'pass', `plan.json 通过 validAppData 规则（${human(sizeOf(planPath))}）`)
+      let decode
+      try {
+        decode = runtimeDecoder()
+      } catch {
+        add('运行数据', 'skip', '已解析 plan.json，构建依赖不可用，共享解码检查跳过')
+      }
+      const decoded = decode?.(data)
+      if (decoded?.kind === 'ready') {
+        const snapshot = decoded.data
+        add('运行数据', 'pass', `plan.json 可由共享解码器完整读取（${human(sizeOf(planPath))}）`)
         add('运行数据', 'info',
-          `实体计数：目标 ${data.goals.length} · 四象限事件 ${data.events.length} · 周预设 ${data.weekPresets.length} · 周事件 ${data.weekEvents.length}`)
-      } else {
-        add('运行数据', 'fail', 'plan.json 不通过 validAppData —— 启动时会被静默替换为默认数据！',
-          firstViolation(data))
-        add('运行数据', 'info', `文件保留在 ${planPath}，处理前请先复制一份`)
+          `实体计数：目标 ${snapshot.goals.length} · 四象限事件 ${snapshot.events.length} · 周预设 ${snapshot.weekPresets.length} · 周事件 ${snapshot.weekEvents.length}`)
+      } else if (decoded) {
+        add('运行数据', 'fail', 'plan.json 需恢复，应用保留原文件并暂停覆盖', planPath)
       }
     } catch (e) {
       add('运行数据', 'fail', 'plan.json 无法解析（JSON 损坏）',
@@ -620,9 +497,9 @@ function checkRuntimeData() {
 
 function checkModelSync() {
   const typesPath = abs('src/shared/types.ts')
-  const apiPath = abs('src/renderer/src/lib/platformApi.ts')
+  const apiPath = abs('src/shared/appDataCodec.ts')
   if (!isFile(typesPath) || !isFile(apiPath)) {
-    add('模型同步', 'skip', '缺少 types.ts 或 platformApi.ts，跳过')
+    add('模型同步', 'skip', '缺少 types.ts 或 appDataCodec.ts，跳过')
     return
   }
 
@@ -675,7 +552,6 @@ function checkModelSync() {
     }
   }
 
-  add('模型同步', 'info', '提示：实体级字段（Goal/QuadrantEvent/WeekEvent/WeekPreset）仍需人工核对三处同步')
 }
 
 // ============================================================================

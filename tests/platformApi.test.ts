@@ -231,85 +231,26 @@ describe('web platform API', () => {
     expect((await api.loadData()).money).toEqual(sampleDataWithMoney.money)
   })
 
-  it('money 的 config 缺新键时只丢账本：目标与事件原样保留', async () => {
-    // 这是本次改动的**核心对比**：money 是可选字段，它坏了只该赔上账本。
-    // 改动前 loadData 会因为 validAppData 为假而整份回退 defaultData ——
-    // 用户的每一个目标、事件、预设都会静默消失。
-    const event = {
-      id: 'e1',
-      text: '事件',
-      remark: '',
-      quadrant: 1,
-      x: 0,
-      y: 0,
-      width: 6,
-      createdAt: 'now'
-    }
-    const data = {
-      ...baseData,
-      goals: [validGoal],
-      events: [event],
-      // config 只给了 weeklyTC：R2 之前的键集，缺 dailyCapTC 等新键
-      money: { enabled: true, config: { weeklyTC: 560 }, days: [], weeks: [] }
-    }
-    const api = createWebPlatformApi(fakeStorage(JSON.stringify(data)))
-    const loaded = await api.loadData()
-    expect(loaded.goals).toHaveLength(1)
-    expect(loaded.goals[0]).toEqual(validGoal)
-    expect(loaded.events).toHaveLength(1)
-    expect(loaded.events[0]).toEqual(event)
-    expect(loaded.money).toBeUndefined()
+  it('旧账本缺配置键时完整迁移，保留目标与日结', async () => {
+    const money = sampleDataWithMoney.money!
+    const config = { ...money.config, latePhoneTC: undefined, quadrantMultiplier: { q1: 1.7 } }
+    const raw = JSON.stringify({ ...sampleDataWithMoney, goals: [validGoal], money: { ...money, config } })
+    const loaded = await createWebPlatformApi(fakeStorage(raw)).loadData()
+    expect(loaded.goals).toEqual([validGoal])
+    expect(loaded.money?.days).toEqual(money.days)
+    expect(loaded.money?.config).toMatchObject({ latePhoneTC: 40, quadrantMultiplier: { q1: 1.7, q4: 0.5 } })
   })
 
-  it('config 里任意一个新键不是有限数字时只丢账本（不逐键修复）', async () => {
-    // 逐一钉住每个新键：少一个（JSON.stringify 会丢掉 undefined 值）都必须判 money 非法。
-    // 结果是**账本被丢掉**而不是被修复成默认值 —— 断言 money === undefined 就是在证明这一点。
-    for (const key of ['dailyCapTC', 'videoLTPerHour', 'abandonedDayTC', 'latePhoneLT'] as const) {
-      const data = {
-        ...baseData,
-        goals: [validGoal],
-        money: {
-          enabled: true,
-          config: { ...validMoneyConfig, [key]: undefined },
-          days: [],
-          weeks: []
-        }
-      }
-      const api = createWebPlatformApi(fakeStorage(JSON.stringify(data)))
-      const loaded = await api.loadData()
-      expect(loaded.goals).toHaveLength(1)
-      expect(loaded.money).toBeUndefined()
-    }
+  it('损坏账本仅作恢复预览，保存不能覆盖原始载荷', async () => {
+    const raw = JSON.stringify({ ...baseData, goals: [validGoal], money: { enabled: 'invalid' } })
+    const storage = fakeStorage(raw)
+    const api = createWebPlatformApi(storage)
+    expect((await api.loadData()).goals).toEqual([validGoal])
+    await expect(api.saveData(baseData)).rejects.toThrow()
+    expect(storage.getItem('quadrant-web-data-v2')).toBe(raw)
   })
 
-  it('quadrantMultiplier 缺键、非数字或非对象时只丢账本（不逐键修复）', async () => {
-    const badValues: unknown[] = [
-      { q1: 1.5, q2: 1, q3: 1.2 }, // 缺 q4
-      { q1: 1.5, q2: 'x', q3: 1.2, q4: 0.5 }, // 某键不是数字
-      {}, // 空对象
-      42, // 不是对象
-      null
-    ]
-    for (const bad of badValues) {
-      const data = {
-        ...baseData,
-        goals: [validGoal],
-        money: {
-          enabled: true,
-          config: { ...validMoneyConfig, quadrantMultiplier: bad },
-          days: [],
-          weeks: []
-        }
-      }
-      const api = createWebPlatformApi(fakeStorage(JSON.stringify(data)))
-      const loaded = await api.loadData()
-      expect(loaded.goals).toHaveLength(1)
-      // 若 web 端改成「逐键修复」，money 就会留下一个被补全的对象 ⇒ 这条会失败
-      expect(loaded.money).toBeUndefined()
-    }
-  })
-
-  it('非 money 字段不合规时仍整份回退默认数据（不能借新分支夹带非法数据）', async () => {
+  it('损坏的目标不会进入恢复预览，其余可读内容和原档保留', async () => {
     const data = {
       ...baseData,
       // goal 缺 order ⇒ 无论 money 好坏都必须整份回退
@@ -328,7 +269,11 @@ describe('web platform API', () => {
       money: { enabled: true, config: { weeklyTC: 560 }, days: [], weeks: [] }
     }
     const api = createWebPlatformApi(fakeStorage(JSON.stringify(data)))
-    expect(await api.loadData()).toEqual(defaultData())
+    const loaded = await api.loadSnapshot!()
+    expect(loaded.kind).toBe('recovery')
+    expect(loaded.data.goals).toEqual([])
+    expect(loaded.data.money).toMatchObject(data.money)
+    await expect(api.saveData(defaultData())).rejects.toThrow()
   })
 
   it('老记录缺 videoMin / gameMin 时账本不被丢弃（它们是后加的可选字段）', async () => {
