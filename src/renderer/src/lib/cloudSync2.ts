@@ -1,12 +1,18 @@
+/// <reference types="vite/client" />
 import { createClient } from '@supabase/supabase-js'
 import { decodeAppData, validAppData } from '../../../shared/appDataCodec'
+import { resolveCloudEnvironment } from '../../../shared/cloudEnvironment'
 import type { CloudSnapshot } from './snapshotSync'
 import type { AppData, CloudMeta } from '../../../shared/types'
 import { validSyncNotice, type SyncNotice } from './cloudValidation'
 
 // Keep the serializable snapshot rules separate from the browser Supabase client.
-export const SUPABASE_URL = 'https://nktsnjbkvdyhxdjfbxkh.supabase.co'
-export const SUPABASE_ANON_KEY = 'sb_publishable_oPq0EiI_ofPDz2q0iy9EUQ_byXMWSk5'
+const environment = resolveCloudEnvironment(
+  import.meta.env.VITE_SUPABASE_URL,
+  import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY
+)
+export const SUPABASE_URL = environment.url
+export const SUPABASE_ANON_KEY = environment.publishableKey
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
 export const usernameToEmail = (username: string) => `${username.trim().toLowerCase()}@quadrant.app`
 export async function login(username: string, password: string): Promise<void> {

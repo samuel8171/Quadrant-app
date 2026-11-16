@@ -26,6 +26,12 @@ SUPABASE_ANON_KEY = sb_publishable_...（publishable key，本来就是公开值
 
 新版先执行用户快照修订迁移，再更新客户端。旧写入口的收口顺序见 [上线顺序](../superpowers/plans/2026-11-16-snapshot-sync-recovery.md#上线顺序)。下方时间戳充当修订号的说明适用于旧版。新版读取服务端生成的 UUID 判定并发，时间戳供确认框显示。
 
+### 使用独立项目验收
+
+设置 PowerShell 环境变量 VITE_SUPABASE_URL 和 VITE_SUPABASE_PUBLISHABLE_KEY，然后构建 Web 或 Electron。地址和公开密钥应取自同一个测试项目。Vite 会在构建前拒绝缺少另一项的隔离配置，以及服务端密钥。默认构建使用现有项目，兼容 Pages 当前的配置。
+
+Web 验收使用独立来源和浏览器配置文件。若要在另一套 Supabase 验收 Electron，则单独构建带测试配置的产物，并在独立 Windows 测试账户或虚拟机中使用测试存档。
+
 ## 1. 建表与策略（把 `supabase/schema.sql` 跑一遍）
 
 控制台 → **SQL Editor** → New query → 把仓库里 `supabase/schema.sql`
