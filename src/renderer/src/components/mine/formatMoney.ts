@@ -14,3 +14,8 @@ export function formatMoney(n: number): string {
   const rounded = Math.round(n * 10) / 10
   return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1)
 }
+
+export function formatSignedMoney(n: number): string {
+  const formatted = formatMoney(n)
+  return n > 0 && formatted !== '0' ? `+${formatted}` : formatted
+}

@@ -1,7 +1,7 @@
 import { FormEvent, useState } from 'react'
 import { useClosing } from '../hooks/useClosing'
 import { login } from '../lib/cloudSync2'
-import GlassModal from './glass/GlassModal'
+import GlassModal, { shouldAutoFocusModalInput } from './glass/GlassModal'
 
 interface Props {
   onCancel: () => void
@@ -46,7 +46,7 @@ export default function CloudLoginDialog({ onCancel, onLoggedIn }: Props): JSX.E
             value={username}
             onChange={(event) => setUsername(event.target.value)}
             autoComplete="username"
-            autoFocus
+            autoFocus={shouldAutoFocusModalInput()}
           />
         </label>
         <label className="modal-field">

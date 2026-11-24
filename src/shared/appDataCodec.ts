@@ -1,6 +1,6 @@
 import { defaultData } from './defaults'
 import { DEFAULT_MONEY_CONFIG } from './money'
-import type { AppData, LocalSnapshot } from './types'
+import type { AppData, CanvasBounds, EventGroup, LocalSnapshot } from './types'
 
 export const LOCAL_SNAPSHOT_META_KEY = '__quadrantLocalSnapshot'
 
@@ -144,7 +144,18 @@ function validEvent(value: unknown): value is AppData['events'][number] {
   return isRecord(value) && hasStringFields(value, ['id', 'text', 'remark', 'createdAt']) &&
     [1, 2, 3, 4].includes(value.quadrant as number) && validPhotos(value.photos) &&
     isFiniteNumber(value.x) && isFiniteNumber(value.y) && isFiniteNumber(value.width) &&
-    optionalString(value.deadline) && optionalString(value.escalateAt)
+    optionalString(value.deadline) && optionalString(value.escalateAt) && optionalString(value.groupId)
+}
+
+function validEventGroup(value: unknown): value is EventGroup {
+  return isRecord(value) && hasStringFields(value, ['id', 'name']) &&
+    [1, 2, 3, 4].includes(value.anchorQuadrant as number) &&
+    isFiniteNumber(value.anchorX) && isFiniteNumber(value.anchorY)
+}
+
+function validCanvasBounds(value: unknown): value is CanvasBounds {
+  return isRecord(value) && ['minX', 'minY', 'maxX', 'maxY'].every((key) => isFiniteNumber(value[key])) &&
+    (value.maxX as number) > (value.minX as number) && (value.maxY as number) > (value.minY as number)
 }
 
 function validPreset(value: unknown): value is AppData['weekPresets'][number] {
@@ -162,19 +173,38 @@ function validWeekEvent(value: unknown): value is AppData['weekEvents'][number] 
 export function validAppData(value: unknown): value is AppData {
   if (!isRecord(value)) return false
   const data = value
+  const groups = data.eventGroups
+  if (groups !== undefined && !(Array.isArray(groups) && groups.every(validEventGroup))) return false
+  const groupIds = new Set(groups?.map((group) => group.id))
   return data.version === 2 && isFiniteNumber(data.weekCounterOffset) &&
     Array.isArray(data.goals) && data.goals.every(validGoal) &&
     Array.isArray(data.events) && data.events.every(validEvent) &&
+    (groups === undefined || groupIds.size === groups.length) &&
+    data.events.every((event) => event.groupId === undefined || groupIds.has(event.groupId)) &&
+    (data.canvasBounds === undefined || validCanvasBounds(data.canvasBounds)) &&
     Array.isArray(data.weekPresets) && data.weekPresets.every(validPreset) &&
     Array.isArray(data.weekEvents) && data.weekEvents.every(validWeekEvent) &&
     (data.money === undefined || validMoney(data.money))
 }
 
 function previewOf(value: Record<string, unknown>): AppData {
+  const groups = new Map<string, EventGroup>()
+  if (Array.isArray(value.eventGroups)) {
+    for (const group of value.eventGroups) {
+      if (validEventGroup(group) && !groups.has(group.id)) groups.set(group.id, group)
+    }
+  }
   const preview = {
     ...defaultData(),
     goals: Array.isArray(value.goals) ? value.goals.filter(validGoal) : [],
-    events: Array.isArray(value.events) ? value.events.filter(validEvent) : [],
+    eventGroups: [...groups.values()],
+    events: Array.isArray(value.events) ? value.events.map((event: unknown) => {
+      if (!isRecord(event) || event.groupId === undefined ||
+          (typeof event.groupId === 'string' && groups.has(event.groupId))) return event
+      const { groupId: _missingGroup, ...ungrouped } = event
+      return ungrouped
+    }).filter(validEvent) : [],
+    ...(validCanvasBounds(value.canvasBounds) ? { canvasBounds: value.canvasBounds } : {}),
     weekPresets: Array.isArray(value.weekPresets) ? value.weekPresets.filter(validPreset) : [],
     weekEvents: Array.isArray(value.weekEvents) ? value.weekEvents.filter(validWeekEvent) : [],
     weekCounterOffset: isFiniteNumber(value.weekCounterOffset) ? value.weekCounterOffset : 0,

@@ -5,6 +5,7 @@ export function defaultData(): AppData {
     version: 2,
     goals: [],
     events: [],
+    eventGroups: [],
     weekPresets: [],
     weekEvents: [],
     weekCounterOffset: 0
@@ -27,7 +28,8 @@ export function defaultSyncMeta(deviceId: string): SyncMeta {
  * 用途是同步层的**空数据写入保护**：新设备、清过浏览器缓存的设备读不到本地
  * 数据时会退化为空数据，此时若照常自动上传，就会把云端的真实数据整份覆盖。
  *
- * 只数实体与金钱账本，不看 `weekCounterOffset`——一个滚动位置不构成「用户数据」。
+ * 只数实体与金钱账本。`weekCounterOffset` 和 `canvasBounds` 只记录布局；
+ * 卡组的实际内容由 `events` 计入。
  * **金钱账本也算用户数据**：一个只用了金钱系统、没建过目标与事件的用户，
  * 其账本不该被判「空数据」，否则云端数据既不会被上传、也可能被覆盖保护误判。
  */

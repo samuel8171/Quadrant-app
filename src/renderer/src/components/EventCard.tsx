@@ -20,6 +20,14 @@ interface Props {
   dragging: boolean
   /** 缩略图条是否展开（由父级持有，短按切换）。 */
   photosOpen: boolean
+  groupCount?: number
+  groupDropTarget?: boolean
+  groupLabel?: string
+  groupActionLabel?: string
+  stacked?: boolean
+  overview?: boolean
+  onOpenGroup?: (trigger: HTMLButtonElement) => void
+  onActivate?: (trigger: HTMLDivElement) => void
   onSelect: () => void
   /** 短按缩略图 → 打开大图查看器，参数为该图在本事件照片里的下标。 */
   onOpenPhoto: (index: number) => void
@@ -51,6 +59,14 @@ export default function EventCard({
   armed,
   dragging,
   photosOpen,
+  groupCount = 0,
+  groupDropTarget = false,
+  groupLabel,
+  groupActionLabel,
+  stacked = false,
+  overview = false,
+  onOpenGroup,
+  onActivate,
   onSelect,
   onOpenPhoto,
   onDeletePhoto,
@@ -105,13 +121,21 @@ export default function EventCard({
   return (
     <div
       data-event-id={event.id}
+      data-group-id={event.groupId}
+      tabIndex={overview ? -1 : 0}
       className={`event-card q${event.quadrant}${armed ? ' armed' : ''}${
         dragging ? ' dragging' : ''
       }${overdue ? ' overdue' : ''}${selected ? ' selected' : ''}${
         photosOpen ? ' photos-open' : ''
-      }`}
+      }${stacked ? ' stacked' : ''}${groupDropTarget ? ' group-drop-target' : ''}`}
       style={{ left: event.x * UNIT, top: -event.y * UNIT, width: event.width * UNIT }}
       onPointerDown={onSelect}
+      onFocus={onSelect}
+      onKeyDown={(e) => {
+        if (e.key !== 'Enter' || e.target !== e.currentTarget) return
+        e.preventDefault()
+        onActivate?.(e.currentTarget)
+      }}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       onContextMenu={(e) => {
@@ -122,6 +146,15 @@ export default function EventCard({
     >
       {(hover || selected) && <span className="event-handle" />}
       <span className="event-text">{event.text}</span>
+      {event.groupId && <button
+        type="button"
+        className="event-group-badge"
+        tabIndex={overview ? -1 : 0}
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={(e) => { e.stopPropagation(); onOpenGroup?.(e.currentTarget) }}
+        aria-label={groupActionLabel ?? `打开卡组，共 ${groupCount} 张卡`}
+        title={groupLabel}
+      >{groupLabel}</button>}
       {event.deadline && (
         <span className="event-deadline">截止：{formatDeadline(event.deadline)}</span>
       )}

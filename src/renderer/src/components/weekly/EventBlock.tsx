@@ -26,8 +26,8 @@ interface Props {
    * 「被裁掉的信息等于没有」（同 theme.css 里 `day-event-head` 的注释）。
    */
   costTC?: number | null
-  /** 正在拖动：块体留在原位并转半透明，落点由幽灵预览表示。 */
-  dragging?: boolean
+  /** 拖动期间离开原位的像素偏移，落点由幽灵预览表示。 */
+  dragOffset?: number
   /** 长按已就绪（视觉抬起），抬起手指即打开菜单。 */
   armed?: boolean
   onContextMenu?: (e: React.MouseEvent, event: WeekEvent) => void
@@ -57,7 +57,7 @@ export default function EventBlock({
   interactive,
   overview,
   costTC,
-  dragging,
+  dragOffset,
   armed,
   onContextMenu,
   onEdit
@@ -75,12 +75,13 @@ export default function EventBlock({
   return (
     <div
       data-event-id={event.id}
-      className={`day-event${compact ? ' compact' : ''}${dragging ? ' dragging' : ''}${
+      className={`day-event${compact ? ' compact' : ''}${dragOffset !== undefined ? ' dragging' : ''}${
         armed ? ' armed' : ''
       }${interactive ? '' : ' read-only'}${overview ? ' overview' : ''}`}
       style={{
         top,
         height,
+        transform: dragOffset === undefined ? undefined : `translateY(${dragOffset}px)`,
         background: withAlpha(event.color, overview ? 0.3 : 0.18),
         borderColor: withAlpha(event.color, 0.55),
         boxShadow: `inset 3px 0 0 0 ${event.color}`

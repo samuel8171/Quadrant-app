@@ -1,11 +1,12 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useLayoutEffect, useRef, useState } from 'react'
 import { ArrowLeft, BookMarked, FileDown, FolderOpen } from 'lucide-react'
 import AlertDialog from '../components/AlertDialog'
 import ReviewRecords from '../components/review/ReviewRecords'
 import SegmentedSlider from '../components/review/SegmentedSlider'
 import WeekLedger from '../components/money/WeekLedger'
 import { REVIEW_GREEN_RED, REVIEW_RED_GREEN } from '../lib/reviewRules'
-import { getPlatformApi } from '../lib/platformApi'
+import { getPlatformApi, isDesktopRuntime } from '../lib/platformApi'
+import './review-editor.css'
 import { composeReviewText, latestSettledWeek } from '../../../shared/money'
 import { useAppStore } from '../state/appStore'
 
@@ -27,7 +28,9 @@ export default function ReviewPage(): JSX.Element {
   const taRef = useRef<HTMLTextAreaElement>(null)
   const [view, setView] = useState<ReviewView>('compose')
   const [navDir, setNavDir] = useState<'none' | 'forward' | 'back'>('none')
-  const [minH, setMinH] = useState(180)
+  const readingPosition = useRef({
+    page: 0, editor: 0, start: 0, end: 0, direction: 'none' as HTMLTextAreaElement['selectionDirection']
+  })
   const [toast, setToast] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -36,35 +39,40 @@ export default function ReviewPage(): JSX.Element {
     window.setTimeout(() => setToast((cur) => (cur === msg ? null : cur)), 2200)
   }
 
-  const resizeTextarea = (): void => {
-    const ta = taRef.current
-    if (!ta) return
-    ta.style.height = 'auto'
-    ta.style.height = `${Math.max(minH, ta.scrollHeight)}px`
-  }
-
   useLayoutEffect(() => {
     const page = pageRef.current
     const ta = taRef.current
-    if (!page || !ta) return
-    const measure = (): void => {
-      const pageRect = page.getBoundingClientRect()
-      const taRect = ta.getBoundingClientRect()
-      setMinH(Math.max(120, pageRect.bottom - 20 - taRect.top))
-    }
-    measure()
-    const ro = new ResizeObserver(measure)
-    ro.observe(page)
-    window.addEventListener('resize', measure)
-    return () => {
-      ro.disconnect()
-      window.removeEventListener('resize', measure)
-    }
+    if (!page) return
+    if (!ta) { page.scrollTop = 0; return }
+    const position = readingPosition.current
+    ta.setSelectionRange(position.start, position.end, position.direction ?? undefined)
+    ta.scrollTop = position.editor
+    page.scrollTop = position.page
   }, [view])
 
   useLayoutEffect(() => {
-    resizeTextarea()
-  }, [reviewEdit.text, minH])
+    const viewport = window.visualViewport
+    const page = pageRef.current
+    const editor = taRef.current
+    if (!page || !editor || !viewport || view !== 'compose') return
+    const update = (): void => {
+      const hidden = document.activeElement === editor
+        ? page.getBoundingClientRect().bottom - viewport.offsetTop - viewport.height
+        : 0
+      page.style.setProperty('--review-keyboard-inset', `${Math.max(0, hidden)}px`)
+    }
+    viewport.addEventListener('resize', update)
+    viewport.addEventListener('scroll', update)
+    editor.addEventListener('focus', update)
+    editor.addEventListener('blur', update)
+    return () => {
+      viewport.removeEventListener('resize', update)
+      viewport.removeEventListener('scroll', update)
+      editor.removeEventListener('focus', update)
+      editor.removeEventListener('blur', update)
+      page.style.removeProperty('--review-keyboard-inset')
+    }
+  }, [view])
 
   const saveWord = async (): Promise<void> => {
     try {
@@ -83,6 +91,11 @@ export default function ReviewPage(): JSX.Element {
   }
 
   const goRecords = (): void => {
+    const ta = taRef.current
+    if (ta) readingPosition.current = {
+      page: pageRef.current?.scrollTop ?? 0, editor: ta.scrollTop,
+      start: ta.selectionStart, end: ta.selectionEnd, direction: ta.selectionDirection
+    }
     setNavDir('forward')
     setView('records')
   }
@@ -123,7 +136,7 @@ export default function ReviewPage(): JSX.Element {
             </button>
             <button className="review-btn primary" onClick={() => void saveWord()}>
               <FileDown size={15} />
-              保存
+              {isDesktopRuntime() ? '保存为 Word' : '保存记录'}
             </button>
             <button className="review-btn ghost" onClick={goRecords}>
               <FolderOpen size={15} />
@@ -155,13 +168,17 @@ export default function ReviewPage(): JSX.Element {
           />
         </div>
 
-        <textarea
-          ref={taRef}
-          className="review-textarea"
-          value={reviewEdit.text}
-          placeholder="写下本周的复盘…"
-          onChange={(e) => setReviewEdit({ text: e.target.value })}
-        />
+        <div className="review-writing-area">
+          <div aria-hidden="true" className="review-text-mirror">{reviewEdit.text + '\u200b'}</div>
+          <textarea
+            ref={taRef}
+            className="review-textarea"
+            value={reviewEdit.text}
+            placeholder="写下本周的复盘…"
+            aria-label="本周复盘正文"
+            onChange={(e) => setReviewEdit({ text: e.target.value })}
+          />
+        </div>
       </div>
 
       {toast && <div className="review-toast">{toast}</div>}

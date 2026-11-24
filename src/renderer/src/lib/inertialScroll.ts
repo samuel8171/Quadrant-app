@@ -20,8 +20,14 @@ function findScrollable(el: HTMLElement | null): HTMLElement | null {
 export function installInertialScroll(): () => void {
   const velocity = new WeakMap<HTMLElement, number>()
   const raf = new WeakMap<HTMLElement, number>()
+  const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)')
 
   const step = (el: HTMLElement): void => {
+    if (reducedMotion.matches || !el.isConnected) {
+      velocity.delete(el)
+      raf.delete(el)
+      return
+    }
     const max = el.scrollHeight - el.clientHeight
     let v = velocity.get(el) ?? 0
     el.scrollTop = Math.max(0, Math.min(max, el.scrollTop + v * VELOCITY_SCALE))
@@ -39,7 +45,7 @@ export function installInertialScroll(): () => void {
   const onWheel = (e: WheelEvent): void => {
     const target = e.target as HTMLElement | null
     if (!target) return
-    if (target.closest('.quadrant-viewport, input, select')) return
+    if (reducedMotion.matches || target.closest('.quadrant-viewport, input, textarea, select')) return
     if (Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return
     const el = findScrollable(target)
     if (!el) return

@@ -64,8 +64,8 @@ describe('responsive layout metrics', () => {
     expect(mobileCss).toMatch(
       /\.page,[\s\S]*?\.day-page\s*\{[\s\S]*padding:\s*calc\(24px \+ var\(--safe-top\)\)/
     )
-    // 四象限悬浮页头是绝对定位，不随容器 padding 走，必须同样多留 12px。
-    expect(mobileCss).toMatch(/\.quadrant-header\s*\{[\s\S]*top:\s*calc\(24px \+ var\(--safe-top\)\)/)
+    // 四象限工具栏跟随安全区内边距，并在画布之外留出真实的可点区域。
+    expect(mobileCss).toMatch(/\.quadrant-header\s*\{\s*flex:\s*none;\s*margin-bottom:\s*10px/)
   })
 
   it('aligns the accent bar with the page title on every header variant', () => {
@@ -85,11 +85,11 @@ describe('responsive layout metrics', () => {
     expect(source).toMatch(/stopPropagation\(\)/)
   })
 
-  it('keeps the mobile quadrant gesture hint aligned with the gesture vocabulary', () => {
+  it('exposes quadrant creation, full overview, and list view as explicit controls', () => {
     const source = readFileSync(resolve(process.cwd(), 'src/renderer/src/pages/QuadrantPage.tsx'), 'utf8')
-    // 手机端提示必须同时覆盖三件事，它们分别由位移阈值、长按阈值与自研双击判定实现：
-    expect(source).toContain('拖动移动 · 长按菜单 · 双击新建')
-    expect(source).toContain('mobile-only')
+    expect(source).toMatch(/<button[^>]*onClick=\{openCreate\}[^>]*>[^<]*添加/)
+    expect(source).toMatch(/<button[^>]*onClick=\{fitAll\}[^>]*>全览/)
+    expect(source).toMatch(/aria-pressed=\{viewMode === 'list'\}/)
   })
 
   it('routes quadrant and day-view gestures through the shared kernel', () => {

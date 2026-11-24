@@ -1,0 +1,357 @@
+/* Dashboard grid, cards and chart palette follow the open-source Vision UI Dashboard React. */
+.page.mine-page {
+  --mine-gap: 24px;
+  --mine-card-padding: 22px;
+  --mine-card-radius: 20px;
+  --mine-border: color-mix(in srgb, var(--border) 94%, var(--accent));
+  --mine-time: var(--accent);
+  --mine-leisure: #68d1de;
+  --mine-icon: color-mix(in srgb, var(--accent) 22%, var(--card));
+  --mine-inset: color-mix(in srgb, var(--card) 66%, transparent);
+  --mine-plot-height: clamp(270px, 24vw, 310px);
+  color: var(--text);
+  padding-bottom: max(32px, var(--safe-bottom));
+  overflow-y: auto;
+}
+
+.mine-content {
+  display: grid;
+  gap: var(--mine-gap);
+  width: 100%;
+  max-width: 1420px;
+  margin-inline: auto;
+}
+
+.mine-page .mine-page-header { margin: 0; }
+.mine-page .mine-page-header h1 { font-size: 28px; letter-spacing: -.02em; }
+.mine-overview-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.mine-overview-heading h2,
+.mine-overview-heading span { margin: 0; font-size: 13px; }
+.mine-overview-heading h2 { color: var(--text); font-weight: 600; }
+.mine-overview-heading span { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+
+.mine-page .mine-dashboard-grid {
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  align-items: stretch;
+  gap: var(--mine-gap);
+}
+
+.mine-page :is(.money-widget, .mine-utility-card) {
+  position: relative;
+  min-width: 0;
+  color: var(--text);
+  background: color-mix(in srgb, var(--card) 28%, transparent);
+  border: 1px solid var(--mine-border);
+  border-top-color: color-mix(in srgb, var(--border) 84%, var(--accent));
+  border-radius: var(--mine-card-radius);
+  box-shadow: 0 10px 28px rgb(0 0 0 / .16);
+}
+
+.mine-page :is(.money-widget, .mine-utility-card) > :not(.mine-card-glass) { position: relative; }
+
+.mine-card-glass {
+  --mine-glass-sheen: linear-gradient(135deg, color-mix(in srgb, var(--accent) 8%, transparent), transparent 66%);
+  --gs-tint: var(--mine-glass-sheen), color-mix(in srgb, var(--panel) 46%, transparent);
+  --gs-tint-opaque: var(--mine-glass-sheen), color-mix(in srgb, var(--panel) 66%, transparent);
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  overflow: clip;
+}
+
+.mine-page .mine-card-glass,
+.mine-page .mine-card-glass * { pointer-events: none; }
+
+/* The library measures its rim on window resize. Use the current panel geometry for the static cards. */
+.mine-card-glass .gs-anim > span {
+  width: var(--gs-panel-w) !important;
+  height: var(--gs-panel-h) !important;
+}
+
+.mine-card-glass .gs-panel .glass,
+.mine-card-glass .gs-fallback { box-shadow: none !important; }
+
+.mine-page .money-widget {
+  padding: var(--mine-card-padding);
+  gap: 14px;
+}
+.mine-page .money-widget-head {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.mine-page .money-widget-title { font-size: 16px; font-weight: 650; }
+.mine-page .money-widget-subtitle { margin-top: 4px; }
+.mine-page .money-widget-body { flex: 1; gap: 12px; }
+.mine-page :is(.money-widget-subtitle, .money-widget-foot) { color: var(--text-secondary); font-size: 12px; line-height: 1.45; }
+
+.mine-page .money-metric {
+  grid-column: span 3;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 17px;
+}
+.money-metric-copy { display: grid; gap: 5px; min-width: 0; }
+.money-metric-copy :is(h3, p) { margin: 0; color: var(--text-secondary); font-size: 12px; line-height: 1.4; font-weight: 500; }
+.money-metric-copy p { overflow-wrap: anywhere; }
+.money-metric-value { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 4px; color: var(--text); font-variant-numeric: tabular-nums; }
+.money-metric-value strong { font-size: clamp(24px, 2.5vw, 31px); line-height: 1.1; font-weight: 650; overflow-wrap: anywhere; }
+.money-metric-value span { font-size: 11px; color: var(--text-secondary); }
+.money-metric-value.is-negative { color: color-mix(in srgb, var(--danger) 74%, white); }
+.money-metric-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 48px;
+  width: 48px;
+  height: 48px;
+  border-radius: 15px;
+  background: var(--mine-icon);
+  color: var(--accent);
+}
+.money-metric-icon svg { color: inherit; }
+
+.mine-page .money-widget--trend { grid-column: span 7; }
+.mine-insights { grid-column: span 5; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: repeat(2, minmax(min-content, 1fr)); gap: var(--mine-gap); min-width: 0; }
+.mine-insights > .money-widget { grid-column: auto; }
+.mine-insights .money-widget-body { justify-content: center; }
+
+.money-trend-controls, .money-trend-navigation, .money-period-picker {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.money-trend-controls { gap: 10px; }
+.money-trend-navigation button,
+.money-period-picker button {
+  display: grid;
+  place-items: center;
+  flex: none;
+  min-width: 32px;
+  min-height: 32px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 7px;
+  color: var(--text-secondary);
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.money-trend-navigation button:hover:not(:disabled), .money-period-picker button:hover { color: var(--text); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.money-trend-navigation button:disabled { opacity: .36; cursor: default; }
+.money-trend-range { font-size: 12px; text-align: center; color: var(--text-secondary); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.money-period-picker { padding: 2px; border: 1px solid var(--mine-border); border-radius: 9px; background: color-mix(in srgb, var(--bg) 52%, transparent); }
+.money-period-picker button[aria-pressed="true"] { color: var(--text); background: color-mix(in srgb, var(--accent) 18%, var(--card)); }
+
+.money-trend-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 18px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.money-trend-legend span { display: inline-flex; align-items: baseline; gap: 5px; }
+.money-trend-legend i { align-self: center; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+.money-trend-legend strong, .money-trend-readout b { font-size: 13px; color: var(--text); font-variant-numeric: tabular-nums; }
+.money-legend-time i, .money-trend-time, .money-series--time { color: var(--mine-time); }
+.money-legend-leisure i, .money-trend-leisure, .money-series--leisure { color: var(--mine-leisure); }
+
+.money-chart {
+  --money-track-heading: 18px;
+  --money-track-gap: 6px;
+  display: grid;
+  position: relative;
+  grid-template-columns: 34px minmax(0, 1fr) 32px;
+  grid-template-rows: var(--money-track-heading) var(--mine-plot-height) 17px;
+  column-gap: 7px;
+  row-gap: var(--money-track-gap);
+}
+.money-chart--week {
+  --money-track-height: calc(var(--mine-plot-height) - var(--money-track-heading) - 2 * var(--money-track-gap));
+  grid-template-rows: var(--money-track-heading) calc(var(--money-track-height) * .60)
+    var(--money-track-heading) calc(var(--money-track-height) * .40) 17px;
+}
+.money-chart-track-heading {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.money-chart-track-heading h4 {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+}
+.money-chart-cumulative-values {
+  display: flex;
+  gap: 12px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.money-chart-plot { position: relative; min-width: 0; }
+.mine-page .money-chart-svg { display: block; width: 100%; height: 100%; animation: none; }
+.money-chart-scale { position: relative; color: var(--text-secondary); font-size: 11px; font-variant-numeric: tabular-nums; }
+.money-chart-scale--time { color: color-mix(in srgb, var(--mine-time) 66%, var(--text)); }
+.money-chart-scale--leisure { color: color-mix(in srgb, var(--mine-leisure) 72%, var(--text)); }
+.money-chart-scale span { position: absolute; transform: translateY(-50%); white-space: nowrap; }
+.money-chart-scale--time span { right: 0; }
+.money-chart-rule, .money-chart-zero, .money-chart-cap, .money-bar-zero, .money-series-line {
+  fill: none;
+  vector-effect: non-scaling-stroke;
+}
+.money-chart-rule { stroke: color-mix(in srgb, var(--text-secondary) 23%, transparent); stroke-dasharray: 4 5; }
+.money-chart-zero { stroke: color-mix(in srgb, var(--text-secondary) 38%, transparent); }
+.money-chart-cap { stroke: color-mix(in srgb, var(--text-secondary) 50%, transparent); stroke-dasharray: 2 4; }
+.money-chart-selection { fill: color-mix(in srgb, var(--accent) 10%, transparent); }
+.money-bar { fill: currentColor; opacity: .81; }
+.money-bar.is-current { opacity: 1; }
+.money-bar-zero { stroke: currentColor; stroke-width: 2; opacity: .78; }
+.money-series-line { stroke: currentColor; stroke-width: 2.2px; stroke-linecap: round; }
+.money-series-line.is-interpolated { stroke-dasharray: 4 5; stroke-opacity: .76; }
+.money-series-point { fill: currentColor; }
+.money-chart-cap-label { position: absolute; right: 4px; transform: translateY(-110%); color: var(--text-secondary); font-size: 10px; pointer-events: none; }
+.money-chart-dot {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  border: 1px solid #fff;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  background: currentColor;
+  pointer-events: none;
+}
+.money-chart-picker {
+  position: absolute;
+  grid-area: 2 / 2 / -2 / 3;
+  inset: 0;
+  cursor: crosshair;
+  touch-action: pan-y;
+}
+.money-chart-axis { grid-column: 2; position: relative; min-height: 17px; font-size: 11px; color: var(--text-secondary); }
+.money-chart-axis span { position: absolute; transform: translateX(-50%); font-variant-numeric: tabular-nums; }
+.money-chart-axis .is-current { color: var(--text); font-weight: 650; }
+.money-chart-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  pointer-events: none;
+}
+.money-trend-readout {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 5px 16px;
+  min-height: 34px;
+  padding: 8px 10px;
+  border-radius: 9px;
+  background: var(--mine-inset);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.money-trend-readout .money-trend-time { color: var(--mine-time); }
+.money-trend-readout .money-trend-leisure { color: var(--mine-leisure); }
+
+.money-forecast-status { color: color-mix(in srgb, var(--success) 88%, white); font-size: 12px; }
+.money-forecast-status.is-penalized { color: color-mix(in srgb, var(--danger) 74%, white); }
+.money-forecast-amounts, .money-quality-counts {
+  margin: 0;
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.money-forecast-amounts div {
+  min-width: 0;
+  padding: 9px 10px;
+  border-radius: 9px;
+  background: var(--mine-inset);
+}
+.money-forecast-amounts dt, .money-quality-counts dt { color: var(--text-secondary); font-size: 12px; }
+.money-forecast-amounts dd, .money-quality-counts dd { margin: 3px 0 0; font-weight: 650; font-variant-numeric: tabular-nums; }
+.money-forecast-amounts dd { font-size: 19px; overflow-wrap: anywhere; }
+.money-quality-track { display: flex; overflow: hidden; gap: 2px; height: 6px; border-radius: 999px; }
+.money-quality-track span { background: var(--seg); }
+.money-quality-counts { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.money-quality-counts dt { display: flex; align-items: center; gap: 4px; }
+.money-quality-counts dt::before { content: ''; width: 5px; height: 5px; border-radius: 50%; flex: none; background: var(--seg); }
+.money-quality-empty { margin: 0; color: var(--text-secondary); font-size: 13px; }
+
+.mine-utility-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--mine-gap); align-items: stretch; }
+.mine-utility-card h2 { font-size: 14px; margin: 0; padding: 16px var(--mine-card-padding) 5px; }
+.mine-page .mine-utility-card > .mine-row { min-height: 48px; padding-inline: var(--mine-card-padding); }
+.mine-page .mine-row-value { display: flex; align-items: center; gap: 5px; text-align: right; }
+.mine-page .mine-card > .mine-row + .mine-row { border-color: var(--mine-border); }
+.mine-page .mine-row-action { border-radius: 0 0 calc(var(--mine-card-radius) - 1px) calc(var(--mine-card-radius) - 1px); }
+.mine-page :is(button, .money-chart-picker):focus-visible { outline: 2px solid var(--mine-time); outline-offset: 2px; }
+.money-visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+@media (max-width: 1119px) {
+  .mine-page .money-widget--trend, .mine-insights { grid-column: 1 / -1; }
+  .mine-insights { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: auto; }
+}
+
+@media (max-width: 1023px) {
+  .mine-page .money-metric { grid-column: span 6; }
+}
+
+@media (max-width: 767px) {
+  .page.mine-page {
+    --mine-gap: 12px;
+    --mine-card-padding: 15px;
+    --mine-card-radius: 16px;
+    --mine-plot-height: clamp(218px, 61vw, 254px);
+    padding: calc(24px + var(--safe-top)) 12px calc(var(--mobile-nav-height) + var(--safe-bottom) + 24px);
+  }
+  .mine-page .mine-page-header h1 { font-size: 22px; }
+  .mine-overview-heading { margin-bottom: 9px; }
+  .mine-overview-heading :is(h2, span) { font-size: 12px; }
+  .mine-page .mine-dashboard-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .mine-page .money-metric { grid-column: span 1; padding: 12px; gap: 5px; align-items: flex-start; }
+  .money-metric-copy { gap: 4px; }
+  .money-metric-copy :is(h3, p) { font-size: 11px; }
+  .money-metric-value strong { font-size: clamp(22px, 6vw, 27px); }
+  .money-metric-icon { flex-basis: 30px; width: 30px; height: 30px; border-radius: 9px; }
+  .money-metric-icon svg { width: 17px; height: 17px; }
+  .mine-page .money-widget--trend { gap: 10px; }
+  .mine-page .money-widget--trend .money-widget-head { flex-wrap: wrap; gap: 4px; }
+  .money-trend-controls { width: 100%; justify-content: space-between; }
+  .money-trend-navigation button, .money-period-picker button { min-width: 40px; min-height: 44px; }
+  .money-trend-navigation button { padding-inline: 5px; }
+  .money-trend-range { font-size: 11px; }
+  .money-trend-legend { gap: 5px 12px; font-size: 11px; }
+  .money-chart { grid-template-columns: 25px minmax(0, 1fr) 25px; column-gap: 5px; }
+  .money-chart-scale, .money-chart-axis { font-size: 10px; }
+  .money-chart-cap-label { display: none; }
+  .money-trend-readout { padding: 6px 8px; min-height: 30px; gap: 5px 10px; }
+  .mine-insights, .mine-utility-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* Shared navigation styles from the earlier frontend pass. */
+.sidebar .nav-indicator { background: rgba(77,163,255,.10); background-image: none; border-color: rgba(77,163,255,.28); box-shadow: none; }
+.sidebar .nav-item.active { font-weight: 500; }
+.sidebar .nav-item:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.sidebar .tagline { background: transparent; border: 0; padding-inline: 8px; }
+.sidebar .tagline span:first-child { font-weight: 500; }
+
+@media (max-width: 767px) {
+  .sidebar .nav-indicator { background: rgba(77,163,255,.08); border-color: transparent; }
+}

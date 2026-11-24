@@ -1,0 +1,128 @@
+.quadrant-list-view {
+  /* A long section must grow the scroll area without clipping its neighbors. */
+  grid-auto-rows: max-content;
+}
+
+.quadrant-list-column[data-drop-active] {
+  border-color: rgba(169, 210, 255, 0.55);
+}
+
+.quadrant-list-view .quadrant-list-items {
+  gap: 11px;
+  padding-bottom: 12px;
+}
+
+.quadrant-list-event {
+  position: relative;
+  isolation: isolate;
+}
+
+.quadrant-list-actions {
+  display: none;
+}
+
+.quadrant-list-event[data-stacked]::after,
+.quadrant-list-event.group-drop-target::after {
+  position: absolute;
+  right: 8px;
+  bottom: -5px;
+  left: 8px;
+  height: 4px;
+  border: 1px solid rgba(180, 205, 240, 0.36);
+  border-top: 0;
+  border-radius: 0 0 8px 8px;
+  content: '';
+  pointer-events: none;
+}
+
+.quadrant-list-event.group-drop-target::after {
+  border-color: #a9d2ff;
+}
+
+.quadrant-list-title > span {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.quadrant-list-title > .quadrant-list-group {
+  display: block;
+  margin-top: 4px;
+}
+
+.quadrant-list-anchor {
+  display: grid;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+}
+
+.quadrant-list-anchor small {
+  color: var(--text-secondary);
+}
+
+.quadrant-list-drag-preview[aria-hidden] {
+  max-width: min(240px, 65vw);
+}
+
+.quadrant-list-drag-preview > span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.quadrant-list-drag-preview small {
+  display: block;
+  margin-top: 3px;
+  color: #c4e7b8;
+}
+
+@media (pointer: coarse) {
+  .quadrant-list-event .quadrant-list-drag,
+  .quadrant-list-event select {
+    min-height: 44px;
+  }
+
+  .quadrant-list-event .quadrant-list-drag {
+    flex-basis: 44px;
+  }
+}
+
+@media (max-width: 767px) {
+  .quadrant-list-view .quadrant-list-items { gap: 8px; }
+  .quadrant-list-view .quadrant-list-event { padding: 3px 6px; gap: 5px; }
+  .quadrant-list-event .quadrant-list-drag {
+    flex: 0 0 44px;
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+  }
+  .quadrant-list-event .quadrant-list-move { display: none; }
+  .quadrant-list-actions { display: flex; flex: none; }
+  .quadrant-list-actions button {
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+  }
+  .quadrant-list-actions button:active { background: rgba(255, 255, 255, .07); }
+  .quadrant-list-actions button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .quadrant-list-drag-preview {
+    transition: none !important;
+  }
+}

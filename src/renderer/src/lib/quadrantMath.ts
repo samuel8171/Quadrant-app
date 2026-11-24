@@ -6,9 +6,17 @@ export interface ViewState {
   panY: number
 }
 
+export interface WorldBounds {
+  minX: number
+  minY: number
+  maxX: number
+  maxY: number
+}
+
 export const UNIT = 20
-export const MIN_ZOOM = 0.5
+export const MIN_ZOOM = 0.001
 export const MAX_ZOOM = 2.5
+export const DEFAULT_WORLD_BOUNDS: WorldBounds = { minX: -120, minY: -100, maxX: 120, maxY: 100 }
 /** 轴距（屏幕像素），仅用于画布绘制与旧测试基准。 */
 export const AXIS_GAP_PX = 10
 /**
@@ -22,6 +30,8 @@ export const MAX_EVENT_WIDTH_UNITS = 20
 export const MIN_EVENT_WIDTH_UNITS = 6
 export const EVENT_HEIGHT_UNITS = 1.6
 
+export const QUADRANT_ORDER = [2, 1, 3, 4] as const
+
 export const QUADRANT_META: Record<
   Quadrant,
   { label: string; color: string; corner: 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right' }
@@ -32,8 +42,8 @@ export const QUADRANT_META: Record<
   4: { label: '不重要紧急', color: '#483D8B', corner: 'bottom-right' }
 }
 
-export function clampZoom(zoom: number): number {
-  return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, zoom))
+export function clampZoom(zoom: number, minimum = MIN_ZOOM): number {
+  return Math.min(MAX_ZOOM, Math.max(minimum, zoom))
 }
 
 export function worldToScreenX(wx: number, view: ViewState): number {
@@ -64,21 +74,63 @@ export function shouldClearDragOnPointerLeave(pointerType: string): boolean {
   return pointerType !== 'touch' && pointerType !== 'pen'
 }
 
-export function clampOrigin(view: ViewState, width: number, height: number): ViewState {
+export function clampOrigin(
+  view: ViewState,
+  width: number,
+  height: number,
+  bounds: WorldBounds = DEFAULT_WORLD_BOUNDS
+): ViewState {
+  const scale = UNIT * view.zoom
+  const margin = EDGE_MARGIN_PX
   return {
     zoom: view.zoom,
-    panX: Math.min(width - EDGE_MARGIN_PX, Math.max(EDGE_MARGIN_PX, view.panX)),
-    panY: Math.min(height - EDGE_MARGIN_PX, Math.max(EDGE_MARGIN_PX, view.panY))
+    panX: Math.min(width - margin - bounds.minX * scale, Math.max(margin - bounds.maxX * scale, view.panX)),
+    panY: Math.min(height - margin + bounds.maxY * scale, Math.max(margin + bounds.minY * scale, view.panY))
   }
+}
+
+/** Fit the complete world bounds in the viewport while preserving room for card edges. */
+export function fitBounds(
+  bounds: WorldBounds,
+  width: number,
+  height: number,
+  padding = 40
+): ViewState {
+  if (width <= 0 || height <= 0) return { zoom: MIN_ZOOM, panX: width / 2, panY: height / 2 }
+  const inset = Math.min(padding, width / 4, height / 4)
+  const worldWidth = Math.max(1, bounds.maxX - bounds.minX) * UNIT
+  const worldHeight = Math.max(1, bounds.maxY - bounds.minY) * UNIT
+  const zoom = Math.min(MAX_ZOOM, (width - inset * 2) / worldWidth, (height - inset * 2) / worldHeight)
+  return {
+    zoom,
+    panX: (width - (bounds.minX + bounds.maxX) * UNIT * zoom) / 2,
+    panY: (height + (bounds.minY + bounds.maxY) * UNIT * zoom) / 2
+  }
+}
+
+export function boundsForEvents(
+  events: readonly Pick<QuadrantEvent, 'x' | 'y' | 'width'>[],
+  initial: WorldBounds = DEFAULT_WORLD_BOUNDS
+): WorldBounds {
+  const pad = 4
+  const bounds = { ...initial }
+  for (const { x, y, width } of events) {
+    bounds.minX = Math.min(bounds.minX, x - pad)
+    bounds.maxX = Math.max(bounds.maxX, x + width + pad)
+    bounds.minY = Math.min(bounds.minY, y - EVENT_HEIGHT_UNITS - pad)
+    bounds.maxY = Math.max(bounds.maxY, y + pad)
+  }
+  return bounds
 }
 
 export function zoomAt(
   viewportX: number,
   viewportY: number,
   nextZoom: number,
-  view: ViewState
+  view: ViewState,
+  minimum = Math.min(MIN_ZOOM, view.zoom)
 ): ViewState {
-  const zoom = clampZoom(nextZoom)
+  const zoom = clampZoom(nextZoom, minimum)
   const wx = screenToWorldX(viewportX, view)
   const wy = screenToWorldY(viewportY, view)
   return {

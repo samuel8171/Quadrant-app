@@ -2,6 +2,8 @@ import {
   MAX_EVENT_PHOTOS,
   WEEK_COLORS,
   type AppData,
+  type CanvasBounds,
+  type EventGroup,
   type Goal,
   type LedgerDay,
   type LedgerEntry,
@@ -44,16 +46,39 @@ export function parseData(raw: string): AppData {
       )
     : []
   const money = normalizeMoney(parsed.money)
+  const eventGroups = Array.isArray(parsed.eventGroups)
+    ? parsed.eventGroups.map((group) => normalizeEventGroup(group)).filter((group): group is EventGroup => group !== null)
+    : []
+  const canvasBounds = normalizeCanvasBounds(parsed.canvasBounds)
+  const groupIds = new Set(eventGroups.map((group) => group.id))
+  const linkedEvents: QuadrantEvent[] = events.map((event) => event.groupId && !groupIds.has(event.groupId)
+    ? (({ groupId: _groupId, ...rest }) => rest)(event)
+    : event)
   return {
     version: 2,
     goals,
-    events,
+    events: linkedEvents,
+    eventGroups,
+    ...(canvasBounds ? { canvasBounds } : {}),
     weekPresets,
     weekEvents,
     weekCounterOffset:
       typeof parsed.weekCounterOffset === 'number' ? parsed.weekCounterOffset : 0,
     ...(money ? { money } : {})
   }
+}
+
+function normalizeEventGroup(raw: unknown): EventGroup | null {
+  if (!isRecord(raw) || typeof raw.id !== 'string' || !isQuadrant(raw.anchorQuadrant) ||
+      !isFiniteNumber(raw.anchorX) || !isFiniteNumber(raw.anchorY)) return null
+  return { id: raw.id, name: typeof raw.name === 'string' ? raw.name : '',
+    anchorQuadrant: raw.anchorQuadrant, anchorX: raw.anchorX, anchorY: raw.anchorY }
+}
+
+function normalizeCanvasBounds(raw: unknown): CanvasBounds | undefined {
+  if (!isRecord(raw) || !isFiniteNumber(raw.minX) || !isFiniteNumber(raw.minY) ||
+      !isFiniteNumber(raw.maxX) || !isFiniteNumber(raw.maxY) || raw.maxX <= raw.minX || raw.maxY <= raw.minY) return undefined
+  return { minX: raw.minX, minY: raw.minY, maxX: raw.maxX, maxY: raw.maxY }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -378,6 +403,7 @@ function normalizeEvent(raw: Record<string, unknown>): QuadrantEvent {
     deadline: typeof raw.deadline === 'string' ? raw.deadline : undefined,
     escalateAt: typeof raw.escalateAt === 'string' ? raw.escalateAt : undefined,
     createdAt: typeof raw.createdAt === 'string' ? raw.createdAt : new Date().toISOString(),
-    photos: photos && photos.length > 0 ? photos : undefined
+    photos: photos && photos.length > 0 ? photos : undefined,
+    ...(typeof raw.groupId === 'string' ? { groupId: raw.groupId } : {})
   }
 }

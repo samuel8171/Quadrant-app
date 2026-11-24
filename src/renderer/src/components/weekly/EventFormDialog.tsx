@@ -18,7 +18,7 @@ import {
 } from '../../lib/weekRules'
 import { useAppStore } from '../../state/appStore'
 import ConfirmDialog from '../ConfirmDialog'
-import GlassModal from '../glass/GlassModal'
+import GlassModal, { shouldAutoFocusModalInput } from '../glass/GlassModal'
 import { useClosing } from '../../hooks/useClosing'
 
 export type WeeklyFormState =
@@ -343,7 +343,7 @@ export default function EventFormDialog({ form, onClose }: Props): JSX.Element {
           标题
           <input
             value={fields.title}
-            autoFocus
+            autoFocus={shouldAutoFocusModalInput()}
             placeholder="输入事件标题"
             onChange={(e) => setFields((f) => ({ ...f, title: e.target.value, error: '' }))}
             onKeyDown={(e) => {

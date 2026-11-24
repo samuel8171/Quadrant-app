@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { ArrowLeft, Check, ChevronLeft, ChevronRight, Plus } from 'lucide-react'
 import type { MoneyConfig, WeekEvent } from '../../../../shared/types'
 import { costOfEntry, nightMinutesOf } from '../../../../shared/money'
@@ -30,6 +30,7 @@ import { shouldCreateOnCanvasClick } from '../../lib/weeklyMobileLayout'
 import { PRESET_DRAG_MIME, carriesPresetDrag, endPresetDrag, getDraggingPresetId } from '../../lib/presetDrag'
 import { useCanvasGestures } from '../../hooks/useCanvasGestures'
 import { useEventBlockScroll } from '../../hooks/useEventBlockScroll'
+import { MOTION_EASE, MOTION_SETTLE_MS } from '../../lib/motion'
 
 interface Props {
   date: Date
@@ -59,6 +60,7 @@ interface DragState {
   duration: number
   /** 拖动开始时的开始分钟，用于判断"是否真的会移动"。 */
   originStart: number
+  floatingTop: number
   /** 吸附后的开始分钟；null 表示当日已无空位（不提交）。 */
   snapStart: number | null
   hint: SnapHint
@@ -122,6 +124,7 @@ export default function DayView({
   const [menuClosing, setMenuClosing] = useState(false)
   const [drag, setDrag] = useState<DragState | null>(null)
   const dragRef = useRef<DragState | null>(null)
+  const settleRef = useRef<{ id: string; top: number } | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null)
   /** 预设拖入时的落点预览（桌面端 HTML5 DnD）。 */
   const [dropPreview, setDropPreview] = useState<{ startMin: number; presetId: string } | null>(null)
@@ -139,6 +142,21 @@ export default function DayView({
     dragRef.current = next
     setDrag(next)
   }, [])
+
+  useLayoutEffect(() => {
+    const settle = settleRef.current
+    if (drag || !settle) return
+    settleRef.current = null
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
+    const event = weekEvents.find((item) => item.id === settle.id)
+    if (!event) return
+    const offset = settle.top - DAY_PAD_PX - eventTopPx(event.startMin, DAY_HOUR_PX)
+    if (Math.abs(offset) < 1) return
+    const block = canvasRef.current?.querySelector(`.day-event[data-event-id="${CSS.escape(event.id)}"]`)
+    block?.animate([{ transform: `translateY(${offset}px)` }, { transform: 'none' }], {
+      duration: MOTION_SETTLE_MS, easing: MOTION_EASE
+    })
+  }, [drag, weekEvents])
 
   const contentY = (clientY: number): number => {
     const scroller = scrollRef.current
@@ -183,9 +201,19 @@ export default function DayView({
     setForm({ kind: 'event-create', date: dayKey, startMin, presetId })
   }
 
+  const dragAt = (current: DragState, clientY: number): DragState => {
+    const floatingTop = contentY(clientY) - current.grabOffset
+    const desired = minuteFromOffsetY(floatingTop - DAY_PAD_PX, DAY_HOUR_PX)
+    const hint: SnapHint =
+      desired > current.lastDesired ? 'later' : desired < current.lastDesired ? 'earlier' : current.hint
+    const others = dayEvents.filter((event) => event.id !== current.id)
+    const snapStart = snapEventStart(others, current.duration, desired, hint)
+    return { ...current, floatingTop, hint, lastDesired: desired, snapStart }
+  }
+
   /**
    * 时间轴拖动：位移 > 8px 即起拖（不再等 550ms 静止），落点以 5 分钟网格吸附并
-   * 滑向最近空位，拖动期间只渲染幽灵预览、抬起时才提交。
+   * 滑向最近空位，拖动中的块体跟随手指，松手才提交幽灵落点。
    * 取消（`pointercancel` / Esc / 双指）一律不提交。
    */
   const gestures = useCanvasGestures({
@@ -203,35 +231,25 @@ export default function DayView({
       suppressCanvasClickUntilRef.current = performance.now() + CLICK_SUPPRESS_MS
       const pointerY = contentY(ctx.start.y)
       const top = DAY_PAD_PX + eventTopPx(event.startMin, DAY_HOUR_PX)
-      updateDrag({
+      updateDrag(dragAt({
         id: event.id,
         grabOffset: pointerY - top,
         height: eventHeightPx(event.startMin, event.endMin, DAY_HOUR_PX),
+        floatingTop: top,
         duration: event.endMin - event.startMin,
         originStart: event.startMin,
         snapStart: event.startMin,
         hint: 'later',
         lastDesired: event.startMin
-      })
+      }, ctx.current.y))
     },
     onDragMove: (ctx) => {
       const current = dragRef.current
-      if (!current) return
-      const pointerY = contentY(ctx.current.y)
-      const desired = minuteFromOffsetY(pointerY - current.grabOffset - DAY_PAD_PX, DAY_HOUR_PX)
-      const hint: SnapHint =
-        desired > current.lastDesired ? 'later' : desired < current.lastDesired ? 'earlier' : current.hint
-      const others = dayEvents.filter((ev) => ev.id !== current.id)
-      const snapStart = snapEventStart(others, current.duration, desired, hint)
-      if (snapStart === current.snapStart && hint === current.hint) {
-        // 落点未变：只更新方向基准，不触发重渲染。
-        dragRef.current = { ...current, lastDesired: desired }
-        return
-      }
-      updateDrag({ ...current, hint, lastDesired: desired, snapStart })
+      if (current) updateDrag(dragAt(current, ctx.current.y))
     },
     onDragEnd: (ctx) => {
-      const current = dragRef.current
+      const current = dragRef.current && dragAt(dragRef.current, ctx.current.y)
+      settleRef.current = current && { id: current.id, top: current.floatingTop }
       updateDrag(null)
       // 指针抬起后浏览器还会补一个 click：用短时间窗拦掉，避免它被当成"点击空白新建"。
       suppressCanvasClickUntilRef.current = performance.now() + CLICK_SUPPRESS_MS
@@ -488,15 +506,17 @@ export default function DayView({
             )}
             {dayEvents.map((event) => {
               const height = eventHeightPx(event.startMin, event.endMin, DAY_HOUR_PX)
+              const top = DAY_PAD_PX + eventTopPx(event.startMin, DAY_HOUR_PX)
+              const floatingTop = drag?.id === event.id ? drag.floatingTop : undefined
               return (
                 <EventBlock
                   key={event.id}
                   event={event}
                   interactive
                   costTC={moneyConfig ? estimateCostTC(event, moneyConfig) : null}
-                  dragging={drag?.id === event.id}
+                  dragOffset={floatingTop === undefined ? undefined : floatingTop - top}
                   armed={gestures.armedId === event.id}
-                  top={DAY_PAD_PX + eventTopPx(event.startMin, DAY_HOUR_PX)}
+                  top={top}
                   height={height}
                   onContextMenu={onEventContextMenu}
                   onEdit={(ev) => setForm({ kind: 'event-edit', event: ev })}

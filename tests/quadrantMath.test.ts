@@ -3,16 +3,19 @@ import type { QuadrantEvent } from '../src/shared/types'
 import {
   AXIS_GAP_PX,
   AXIS_GAP_UNITS,
+  DEFAULT_WORLD_BOUNDS,
   EVENT_HEIGHT_UNITS,
   QUADRANT_META,
   MAX_EVENT_WIDTH_UNITS,
   MIN_EVENT_WIDTH_UNITS,
   autoEventWidth,
+  boundsForEvents,
   clampEventToQuadrant,
   clampOrigin,
   clampZoom,
   escalateEvent,
   eventScreenRect,
+  fitBounds,
   quadrantOfEventCenter,
   quadrantOfWorldPoint,
   shouldClearDragOnPointerLeave,
@@ -42,7 +45,8 @@ function event(overrides: Partial<QuadrantEvent>): QuadrantEvent {
 
 describe('quadrantMath', () => {
   it('clamps zoom range', () => {
-    expect(clampZoom(0.1)).toBe(0.5)
+    expect(clampZoom(0.1)).toBe(0.1)
+    expect(clampZoom(0)).toBeGreaterThan(0)
     expect(clampZoom(3)).toBe(2.5)
     expect(clampZoom(1)).toBe(1)
   })
@@ -94,10 +98,37 @@ describe('quadrantMath', () => {
     expect(shouldClearDragOnPointerLeave('mouse')).toBe(true)
   })
 
-  it('clamps origin 10px from every viewport edge', () => {
-    const clamped = clampOrigin({ zoom: 1, panX: -50, panY: 9999 }, 800, 600)
-    expect(clamped.panX).toBe(10)
-    expect(clamped.panY).toBe(590)
+  it('allows the axes offscreen and keeps part of the workspace in view', () => {
+    const awayFromOrigin = { zoom: 1, panX: -300, panY: 850 }
+    expect(clampOrigin(awayFromOrigin, 800, 600)).toEqual(awayFromOrigin)
+    const clamped = clampOrigin({ zoom: 1, panX: -9999, panY: 9999 }, 800, 600)
+    expect(worldToScreenX(DEFAULT_WORLD_BOUNDS.maxX, clamped)).toBe(10)
+    expect(worldToScreenY(DEFAULT_WORLD_BOUNDS.maxY, clamped)).toBe(590)
+  })
+
+  it('fits the upper and lower edges plus horizontally offset cards in the available rectangle', () => {
+    const top = event({ x: -220, y: 190, width: 20 })
+    const bottom = event({ x: 230, y: -260, width: 20 })
+    const bounds = boundsForEvents([top, bottom])
+    const { width, height, padding } = { width: 375, height: 491, padding: 20 }
+    const fit = fitBounds(bounds, width, height, padding)
+    expect(fit.zoom).toBeLessThan(0.1)
+    expect(worldToScreenY(bounds.maxY, fit)).toBeGreaterThanOrEqual(padding - 0.001)
+    expect(worldToScreenY(bounds.minY, fit)).toBeLessThanOrEqual(height - padding + 0.001)
+    for (const card of [top, bottom]) {
+      const rect = eventScreenRect(card, fit)
+      expect(rect.left).toBeGreaterThan(padding)
+      expect(rect.left + rect.width).toBeLessThan(width - padding)
+      expect(rect.top + rect.height).toBeLessThan(height - padding)
+    }
+  })
+
+  it('fits unusually large persisted boards below the normal manual zoom range', () => {
+    const bounds = { ...DEFAULT_WORLD_BOUNDS, maxY: 40_000 }
+    const fit = fitBounds(bounds, 375, 450)
+    expect(fit.zoom).toBeLessThan(clampZoom(0))
+    expect(worldToScreenY(bounds.maxY, fit)).toBeCloseTo(40)
+    expect(worldToScreenY(bounds.minY, fit)).toBeCloseTo(410)
   })
 
   it('zoomAt keeps the cursor world point fixed', () => {

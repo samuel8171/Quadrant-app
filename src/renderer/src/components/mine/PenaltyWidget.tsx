@@ -1,75 +1,23 @@
 import type { MoneyStats } from '../../../../shared/money'
-import { formatMoney as fmt } from './formatMoney'
+import { formatMoney } from './formatMoney'
 import WidgetShell from './WidgetShell'
 
-interface Props {
-  stats: MoneyStats
-}
+const TIER_LABELS = ['无扣减', '轻度扣减', '中度扣减', '重度扣减'] as const
 
-/** 与 `PenaltyTier` 的下标一一对应。 */
-const TIER_LABELS = ['无惩罚', '轻度', '中度', '重度'] as const
-
-/**
- * 组件 6（hero）：惩罚预告。
- *
- * `penaltyTier` / `nextWeekTC` / `nextWeekLT` 是**实时预演**（本周若此刻结束会怎样），
- * 不是任何已存的结算值 —— 所以这张卡片在下周一到来的那一刻会自己回到「无惩罚」，
- * 不需要有人去改它。
- *
- * 两个百分比分别是 `nextWeekTC / weekTC` 与 `nextWeekLT / weekLT`。按 spec 6.5，
- * 档位系数乘的是**配置的基础额度**，而 `weekTC` / `weekLT` 是本周实发额度
- * （已含上周惩罚），所以受罚周里的这两个比值可能不是 100% / 85% / 70% / 50% 那张表
- * 里的数 —— 这是语义正确的：它回答的是「比本周少发多少」，不是「档位系数是多少」。
- *
- * 额度为 0 时不给百分比（0 / 0 会得到 NaN），直接按「无折扣」显示 100%。
- */
-export default function PenaltyWidget({ stats }: Props): JSX.Element {
+export default function PenaltyWidget({ stats }: { stats: MoneyStats }): JSX.Element {
   const tier = stats.penaltyTier
-  const tcPercent = stats.weekTC > 0 ? Math.round((stats.nextWeekTC / stats.weekTC) * 100) : 100
-  const ltPercent = stats.weekLT > 0 ? Math.round((stats.nextWeekLT / stats.weekLT) * 100) : 100
-  const weekOver = Math.max(0, stats.spentTC - stats.weekTC)
-
+  const over = Math.max(0, stats.spentTC - stats.weekTC)
   return (
     <WidgetShell
-      title="惩罚预告"
-      subtitle={`本周若此刻结束：已花 ${fmt(stats.spentTC)} / ${fmt(stats.weekTC)} 币`}
-      span={6}
+      title="下周额度预估"
+      className="money-widget--forecast"
+      action={<span className={`money-forecast-status${tier > 0 ? ' is-penalized' : ''}`}>{TIER_LABELS[tier]}</span>}
     >
-      <div className="money-penalty">
-        <svg
-          className="money-tier-badge"
-          viewBox="0 0 56 56"
-          role="img"
-          aria-label={`惩罚档位 ${tier}，${TIER_LABELS[tier]}`}
-        >
-          <circle cx="28" cy="28" r="25" className={`money-tier-${tier}`} />
-          <text x="28" y="28" dy="0.36em" textAnchor="middle" className="money-tier-num">
-            {tier}
-          </text>
-        </svg>
-
-        <div className="money-penalty-body">
-          <p className="money-penalty-head">
-            档位 {tier} · {TIER_LABELS[tier]}
-          </p>
-          <ul className="money-penalty-rates">
-            <li>
-              <span className="money-rate-label">下周时币</span>
-              <b className="money-rate-value">{tcPercent}%</b>
-              <span className="money-rate-quota">{fmt(stats.nextWeekTC)} 币</span>
-            </li>
-            <li>
-              <span className="money-rate-label">下周娱币</span>
-              <b className="money-rate-value">{ltPercent}%</b>
-              <span className="money-rate-quota">{fmt(stats.nextWeekLT)} 币</span>
-            </li>
-          </ul>
-        </div>
-      </div>
-
-      <p className="money-widget-foot">
-        {weekOver > 0 ? `本周已超支 ${fmt(weekOver)} 币` : '本周尚未超支'}
-      </p>
+      <dl className="money-forecast-amounts">
+        <div><dt>时币</dt><dd>{formatMoney(stats.nextWeekTC)}</dd></div>
+        <div><dt>娱币</dt><dd>{formatMoney(stats.nextWeekLT)}</dd></div>
+      </dl>
+      <p className="money-widget-foot">{over > 0 ? `本周已超支 ${formatMoney(over)} 时币` : '按当前账目推算'}</p>
     </WidgetShell>
   )
 }

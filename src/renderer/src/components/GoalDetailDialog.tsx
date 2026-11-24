@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useClosing } from '../hooks/useClosing'
-import GlassModal from './glass/GlassModal'
+import GlassModal, { shouldAutoFocusModalInput } from './glass/GlassModal'
 
 interface Props {
   title: string
@@ -27,7 +27,7 @@ export default function GoalDetailDialog({ title, remark, onSave, onClose }: Pro
           onChange={(e) => setDraft(e.target.value)}
           rows={5}
           placeholder="添加备注…"
-          autoFocus
+          autoFocus={shouldAutoFocusModalInput()}
         />
       </label>
       <div className="modal-actions">

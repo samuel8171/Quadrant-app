@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import type { Quadrant, QuadrantEvent } from '../../../shared/types'
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import type { EventGroup, Quadrant, QuadrantEvent } from '../../../shared/types'
 import { MAX_EVENT_PHOTOS } from '../../../shared/types'
 import { DEFAULT_MONEY_CONFIG, isEventBilledOn } from '../../../shared/money'
 import { dateKey } from '../../../shared/dateKey'
@@ -7,28 +7,64 @@ import ConfirmDialog from '../components/ConfirmDialog'
 import ContextMenu, { type ContextMenuState } from '../components/ContextMenu'
 import EventCard from '../components/EventCard'
 import EventDetailDialog from '../components/EventDetailDialog'
+import QuadrantGroupDialog, { QuadrantChoices, QuadrantDialog } from '../components/QuadrantGroupDialog'
+import QuadrantList from '../components/QuadrantList'
 import ImageViewer from '../components/ImageViewer'
 import QuadrantCostBubble from '../components/money/QuadrantCostBubble'
 import { previewMove } from '../lib/eventRules'
+import { quadrantEventRect, rectsOverlap } from '../lib/quadrantSync'
 import { compressPhoto } from '../lib/photoCompress'
 import { forgetPhotoUrl, newPhotoId, putPhoto, removePhoto } from '../lib/photoStore'
 import { DOUBLE_TAP_MS } from '../lib/gestures'
+import { MOTION_EASE, MOTION_SETTLE_MS } from '../lib/motion'
 import {
   AXIS_GAP_PX,
+  DEFAULT_WORLD_BOUNDS,
+  EVENT_HEIGHT_UNITS,
+  MAX_ZOOM,
+  MIN_ZOOM,
   QUADRANT_META,
+  QUADRANT_ORDER,
   UNIT,
   autoEventWidth,
   clampZoom,
   clampOrigin,
+  clampEventToQuadrant,
+  boundsForEvents,
+  fitBounds,
   quadrantOfWorldPoint,
   shouldClearDragOnPointerLeave,
   screenToWorldX,
   screenToWorldY,
+  worldToScreenX,
+  worldToScreenY,
   zoomAt,
   type ViewState
 } from '../lib/quadrantMath'
 import { useCanvasGestures, type GestureContext } from '../hooks/useCanvasGestures'
 import { hasClipboardEvent, useAppStore } from '../state/appStore'
+
+const CANVAS_COLORS = {
+  '--quadrant-one': QUADRANT_META[1].color,
+  '--quadrant-two': QUADRANT_META[2].color,
+  '--quadrant-three': QUADRANT_META[3].color,
+  '--quadrant-four': QUADRANT_META[4].color
+} as CSSProperties
+
+const LIST_COLORS = {
+  '--quadrant-one': '#F6A16B',
+  '--quadrant-two': '#E7C875',
+  '--quadrant-three': '#67CABE',
+  '--quadrant-four': '#ADA0F5'
+} as CSSProperties
+
+const INNER_CORNER_RADIUS = 12
+const CANVAS_RADII = {
+  1: [0, 0, 0, INNER_CORNER_RADIUS],
+  2: [0, 0, INNER_CORNER_RADIUS, 0],
+  3: [0, INNER_CORNER_RADIUS, 0, 0],
+  4: [INNER_CORNER_RADIUS, 0, 0, 0]
+}
 
 interface EditingState {
   mode: 'create' | 'edit'
@@ -40,7 +76,7 @@ interface EditingState {
 }
 
 interface DragState {
-  id: string
+  card: BoardCard
   /** 指针世界坐标 - 卡片左上角世界坐标：拖动时卡片不再跳位。 */
   grabOffsetX: number
   grabOffsetY: number
@@ -51,12 +87,129 @@ interface PreviewState {
   x: number
   y: number
   quadrant: Quadrant
+  floatingX: number
+  floatingY: number
 }
 
-const RADIUS = 12
+interface ViewportSize {
+  width: number
+  height: number
+}
+
+interface Camera {
+  x: number
+  y: number
+  zoom: number
+}
+
+interface BoardCard {
+  event: QuadrantEvent
+  display: QuadrantEvent
+  group?: EventGroup
+  total: number
+  local: number
+}
+
+interface GroupDrop {
+  eventId: string
+  targetId?: string
+  targetGroupId?: string
+  sourceQuadrant: Quadrant
+  targetQuadrant: Quadrant
+}
+
+const CAMERA_STORAGE_KEY = 'quadrant-local-camera-v1'
+const EMPTY_GROUPS: EventGroup[] = []
+const GROUP_DWELL_MS = 400
+const OVERVIEW_MARKER_ZOOM = 0.24
+
+function directionToAnchor(card: QuadrantEvent, group: EventGroup): string {
+  const dx = group.anchorX - card.x
+  const dy = group.anchorY - card.y
+  if (Math.abs(dx) > Math.abs(dy) * 2) return dx > 0 ? '→' : '←'
+  if (Math.abs(dy) > Math.abs(dx) * 2) return dy > 0 ? '↑' : '↓'
+  if (dy > 0) return dx > 0 ? '↗' : '↖'
+  return dx > 0 ? '↘' : '↙'
+}
+
+function connectorPath(from: Pick<QuadrantEvent, 'x' | 'y' | 'width'>, to: Pick<QuadrantEvent, 'x' | 'y' | 'width'>): string | null {
+  const start = { x: from.x + from.width / 2, y: from.y - EVENT_HEIGHT_UNITS / 2 }
+  const end = { x: to.x + to.width / 2, y: to.y - EVENT_HEIGHT_UNITS / 2 }
+  const dx = end.x - start.x
+  const dy = end.y - start.y
+  const edge = (width: number): number => Math.min(
+    (width / 2 + 0.15) / Math.abs(dx),
+    (EVENT_HEIGHT_UNITS / 2 + 0.15) / Math.abs(dy)
+  )
+  const outset = edge(from.width)
+  const inset = edge(to.width)
+  if (outset + inset >= 1) return null
+  return `M ${(start.x + dx * outset) * UNIT} ${-(start.y + dy * outset) * UNIT} L ${(end.x - dx * inset) * UNIT} ${-(end.y - dy * inset) * UNIT}`
+}
+
+function groupCards(events: QuadrantEvent[], groups: EventGroup[], revealedId: string | null): BoardCard[] {
+  const groupsById = new Map(groups.map((group) => [group.id, group]))
+  const members = new Map<string, QuadrantEvent[]>()
+  const cards: BoardCard[] = []
+  for (const event of events) {
+    if (!event.groupId || !groupsById.has(event.groupId)) {
+      cards.push({ event, display: event, total: 1, local: 1 })
+      continue
+    }
+    const existing = members.get(event.groupId) ?? []
+    existing.push(event)
+    members.set(event.groupId, existing)
+  }
+  for (const [id, all] of members) {
+    const group = groupsById.get(id)!
+    for (const quadrant of QUADRANT_ORDER) {
+      const local = all.filter((event) => event.quadrant === quadrant)
+      if (local.length === 0) continue
+      const main = quadrant === group.anchorQuadrant
+      const distance = (event: QuadrantEvent): number => Math.hypot(event.x - group.anchorX, event.y - group.anchorY)
+      const representative = main
+        ? local.reduce((closest, candidate) => distance(candidate) < distance(closest) ? candidate : closest)
+        : local[0]
+      const event = local.find((member) => member.id === revealedId) ?? representative
+      const x = main ? group.anchorX : representative.x
+      const y = main ? group.anchorY : representative.y
+      const display = clampEventToQuadrant({ ...event, x, y }, { zoom: 1, panX: 0, panY: 0 })
+      cards.push({ event, display, group, total: all.length, local: local.length })
+    }
+  }
+  return cards
+}
+
+function worldCamera(view: ViewState, { width, height }: ViewportSize): Camera {
+  return { x: screenToWorldX(width / 2, view), y: screenToWorldY(height / 2, view), zoom: view.zoom }
+}
+
+function centeredOn({ x, y, zoom }: Camera, { width, height }: ViewportSize): ViewState {
+  return { zoom, panX: width / 2 - x * UNIT * zoom, panY: height / 2 + y * UNIT * zoom }
+}
+
+function readCamera(): Camera {
+  try {
+    const raw = window.localStorage.getItem(CAMERA_STORAGE_KEY)
+    const saved: Partial<Camera> | null = raw ? JSON.parse(raw) : null
+    if (saved && typeof saved.x === 'number' && typeof saved.y === 'number' && typeof saved.zoom === 'number' &&
+        Number.isFinite(saved.x) && Number.isFinite(saved.y) && saved.zoom > 0 && saved.zoom <= MAX_ZOOM) {
+      return { x: saved.x, y: saved.y, zoom: saved.zoom }
+    }
+  } catch { /* Browser storage can be unavailable. */ }
+  return { x: 0, y: 0, zoom: 1 }
+}
 
 export default function QuadrantPage(): JSX.Element {
   const events = useAppStore((s) => s.data.events)
+  const groups = useAppStore((s) => s.data.eventGroups ?? EMPTY_GROUPS)
+  const savedBounds = useAppStore((s) => s.data.canvasBounds)
+  const createEventGroupWithEvents = useAppStore((s) => s.createEventGroupWithEvents)
+  const assignEventToGroup = useAppStore((s) => s.assignEventToGroup)
+  const moveEventGroup = useAppStore((s) => s.moveEventGroup)
+  const moveEventGroupAnchor = useAppStore((s) => s.moveEventGroupAnchor)
+  const moveEventToQuadrant = useAppStore((s) => s.moveEventToQuadrant)
+  const renameEventGroup = useAppStore((s) => s.renameEventGroup)
   const addEvent = useAppStore((s) => s.addEvent)
   const updateEvent = useAppStore((s) => s.updateEvent)
   const deleteEvent = useAppStore((s) => s.deleteEvent)
@@ -75,7 +228,6 @@ export default function QuadrantPage(): JSX.Element {
   const panRef = useRef<{ startX: number; startY: number; startView: ViewState } | null>(null)
   const dragRef = useRef<DragState | null>(null)
   const dragPreviewRef = useRef<PreviewState | null>(null)
-  const centeredRef = useRef(false)
   const hoverRef = useRef<{ clientX: number; clientY: number } | null>(null)
   const viewRef = useRef<ViewState>({ zoom: 1, panX: 0, panY: 0 })
   const targetZoomRef = useRef(1)
@@ -85,16 +237,39 @@ export default function QuadrantPage(): JSX.Element {
   const panLastRef = useRef<{ x: number; y: number; t: number } | null>(null)
   const panVelRef = useRef({ x: 0, y: 0 })
   const touchPointsRef = useRef(new Map<number, { x: number; y: number }>())
-  const pinchRef = useRef<{ distance: number; zoom: number; view: ViewState } | null>(null)
+  const pinchRef = useRef<{ distance: number; x: number; y: number; view: ViewState } | null>(null)
   const lastPointerTypeRef = useRef<string>('mouse')
   const eventsRef = useRef<QuadrantEvent[]>(events)
   eventsRef.current = events
+  const anchorPositions = useMemo(() => groups.map((group) => ({
+    x: group.anchorX, y: group.anchorY, width: 8
+  })), [groups])
+  const bounds = useMemo(() => boundsForEvents([...events, ...anchorPositions], savedBounds
+    ? {
+        minX: Math.min(DEFAULT_WORLD_BOUNDS.minX, savedBounds.minX),
+        maxX: Math.max(DEFAULT_WORLD_BOUNDS.maxX, savedBounds.maxX),
+        minY: Math.min(DEFAULT_WORLD_BOUNDS.minY, savedBounds.minY),
+        maxY: Math.max(DEFAULT_WORLD_BOUNDS.maxY, savedBounds.maxY)
+      }
+    : DEFAULT_WORLD_BOUNDS), [events, anchorPositions, savedBounds])
+  const overviewBounds = useMemo(() => {
+    const items = [...events, ...anchorPositions]
+    if (items.length === 0) return bounds
+    const x = items[0].x
+    return boundsForEvents(items, { ...bounds, minX: x, maxX: x })
+  }, [events, anchorPositions, bounds])
 
   const [view, setView] = useState<ViewState>({ zoom: 1, panX: 0, panY: 0 })
+  const [viewMode, setViewMode] = useState<'canvas' | 'list'>('canvas')
+  const [hasPreviousView, setHasPreviousView] = useState(false)
+  const [isOverview, setIsOverview] = useState(false)
+  const [groupDialogId, setGroupDialogId] = useState<string | null>(null)
+  const [revealedMemberId, setRevealedMemberId] = useState<string | null>(null)
+  const [groupDropTargetId, setGroupDropTargetId] = useState<string | null>(null)
+  const [crossGroup, setCrossGroup] = useState<GroupDrop | null>(null)
   const [size, setSize] = useState({ width: 0, height: 0 })
-  const [hoverQuadrant, setHoverQuadrant] = useState<Quadrant | null>(null)
-  const [labelVisible, setLabelVisible] = useState(false)
   const [editing, setEditing] = useState<EditingState | null>(null)
+  const [createDraft, setCreateDraft] = useState<{ quadrant: Quadrant; x: number; y: number; fromToolbar?: boolean } | null>(null)
   const [menu, setMenu] = useState<ContextMenuState | null>(null)
   const [detailId, setDetailId] = useState<string | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -108,6 +283,8 @@ export default function QuadrantPage(): JSX.Element {
   /** 图片查看器：{ 事件 id, 初始下标 }。 */
   const [viewer, setViewer] = useState<{ eventId: string; index: number } | null>(null)
   const [photoBusy, setPhotoBusy] = useState(false)
+  const [photoFailedId, setPhotoFailedId] = useState<string | null>(null)
+  const photoProcessingRef = useRef(false)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   /** 正在为哪个事件加照片（文件选择器是异步的，须记住发起方）。 */
   const photoTargetRef = useRef<string | null>(null)
@@ -117,55 +294,95 @@ export default function QuadrantPage(): JSX.Element {
    * 见 `onViewportClick` 的注释：必须等过双击窗口才能确认这次点击不是双击的开头。
    */
   const clickTimerRef = useRef<number | null>(null)
+  const previousViewsRef = useRef<Array<{ camera: Camera; overview: boolean }>>([])
+  const groupHoverTimerRef = useRef<number | null>(null)
+  const groupCandidateRef = useRef<{ id: string; x: number; y: number } | null>(null)
+  const groupDropTargetRef = useRef<string | null>(null)
+  const edgeFrameRef = useRef<number | null>(null)
+  const dragPointerRef = useRef<{ x: number; y: number } | null>(null)
+  const groupTriggerRef = useRef<HTMLElement | null>(null)
+  const crossTriggerRef = useRef<HTMLElement | null>(null)
+  const addButtonRef = useRef<HTMLButtonElement>(null)
+  const sizeRef = useRef<ViewportSize>({ width: 0, height: 0 })
+  const localCameraRef = useRef<Camera | null>(null)
+  const lastDragEnd = useRef(0)
+  const boardCards = useMemo(() => groupCards(events, groups, revealedMemberId), [events, groups, revealedMemberId])
 
-  viewRef.current = view
+  const applyView = useCallback((next: ViewState): void => {
+    viewRef.current = next
+    setView(next)
+  }, [])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const el = viewportRef.current
     if (!el) return
     const update = (): void => {
-      const rect = el.getBoundingClientRect()
-      setSize({ width: rect.width, height: rect.height })
-      setView((v) => clampOrigin(v, rect.width, rect.height))
+      const nextSize = { width: el.clientWidth, height: el.clientHeight }
+      const oldSize = sizeRef.current
+      const firstLayout = !localCameraRef.current
+      if (firstLayout) localCameraRef.current = readCamera()
+      sizeRef.current = nextSize
+      setSize((current) => current.width === nextSize.width && current.height === nextSize.height ? current : nextSize)
+      const proposed = isOverview
+        ? fitBounds(overviewBounds, nextSize.width, nextSize.height, 26)
+        : centeredOn(firstLayout ? localCameraRef.current! : worldCamera(viewRef.current, oldSize), nextSize)
+      const next = clampOrigin(proposed, nextSize.width, nextSize.height, bounds)
+      if (firstLayout || isOverview) targetZoomRef.current = next.zoom
+      applyView(next)
     }
     update()
     const ro = new ResizeObserver(update)
     ro.observe(el)
     return () => ro.disconnect()
-  }, [])
+  }, [viewMode, isOverview, bounds, overviewBounds, applyView])
 
-  // 每次打开页面时把原点放到视口中央。
   useEffect(() => {
-    if (!centeredRef.current && size.width > 0 && size.height > 0) {
-      centeredRef.current = true
-      targetZoomRef.current = 1
-      setView({ zoom: 1, panX: size.width / 2, panY: size.height / 2 })
-    }
-  }, [size])
+    if (size.width <= 0 || viewMode !== 'canvas') return
+    localCameraRef.current = worldCamera(view, size)
+    const timer = window.setTimeout(() => {
+      try { window.localStorage.setItem(CAMERA_STORAGE_KEY, JSON.stringify(localCameraRef.current)) } catch { /* Storage unavailable. */ }
+    }, 350)
+    return () => window.clearTimeout(timer)
+  }, [view, size, viewMode])
+
+  const stopCameraMotion = useCallback((): void => {
+    if (zoomAnimRef.current !== null) cancelAnimationFrame(zoomAnimRef.current)
+    if (panAnimRef.current !== null) cancelAnimationFrame(panAnimRef.current)
+    zoomAnimRef.current = null
+    panAnimRef.current = null
+    targetZoomRef.current = viewRef.current.zoom
+  }, [])
 
   const startZoomAnim = useCallback(() => {
     if (zoomAnimRef.current !== null) return
-    const step = (): void => {
+    const zoomFrame = (nextZoom: number): void => {
       const current = viewRef.current
-      const target = targetZoomRef.current
       const anchor = zoomAnchorRef.current
-      const nextZoom = clampZoom(current.zoom + (target - current.zoom) * 0.22)
-      const next = anchor
-        ? zoomAt(anchor.x, anchor.y, nextZoom, current)
-        : { ...current, zoom: nextZoom }
-      viewRef.current = next
-      setView(next)
-      if (Math.abs(target - nextZoom) > 0.0005) {
+      const next = anchor ? zoomAt(anchor.x, anchor.y, nextZoom, current) : { ...current, zoom: nextZoom }
+      const { width, height } = sizeRef.current
+      applyView(clampOrigin(next, width, height, bounds))
+    }
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      zoomFrame(targetZoomRef.current)
+      return
+    }
+    const step = (): void => {
+      const target = targetZoomRef.current
+      const difference = target - viewRef.current.zoom
+      const settled = Math.abs(difference) < target * 0.001
+      zoomFrame(settled ? target : viewRef.current.zoom + difference * 0.22)
+      if (!settled) {
         zoomAnimRef.current = requestAnimationFrame(step)
       } else {
         zoomAnimRef.current = null
       }
     }
     zoomAnimRef.current = requestAnimationFrame(step)
-  }, [setView])
+  }, [applyView, bounds])
 
   const startPanInertia = useCallback(() => {
     if (panAnimRef.current !== null) return
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
     let last = performance.now()
     const step = (now: number): void => {
       const dt = Math.min(64, now - last)
@@ -173,15 +390,14 @@ export default function QuadrantPage(): JSX.Element {
       const el = viewportRef.current
       const current = viewRef.current
       if (el && dt > 0) {
-        const rect = el.getBoundingClientRect()
         const v = panVelRef.current
         const next = clampOrigin(
           { ...current, panX: current.panX + v.x * dt, panY: current.panY + v.y * dt },
-          rect.width,
-          rect.height
+          el.clientWidth,
+          el.clientHeight,
+          bounds
         )
-        viewRef.current = next
-        setView(next)
+        applyView(next)
         const damping = Math.exp(-dt / 140)
         v.x *= damping
         v.y *= damping
@@ -193,43 +409,42 @@ export default function QuadrantPage(): JSX.Element {
       panAnimRef.current = requestAnimationFrame(step)
     }
     panAnimRef.current = requestAnimationFrame(step)
-  }, [setView])
+  }, [applyView, bounds])
 
   useEffect(() => {
     const el = viewportRef.current
     if (!el) return
     const onWheel = (e: WheelEvent): void => {
       e.preventDefault()
+      if (dragRef.current) return
       const rect = el.getBoundingClientRect()
-      const x = e.clientX - rect.left
-      const y = e.clientY - rect.top
+      const x = e.clientX - rect.left - el.clientLeft
+      const y = e.clientY - rect.top - el.clientTop
       const delta = Math.abs(e.deltaY)
       const steps = Math.min(4, Math.max(0.25, delta / 100))
       const factor = e.deltaY < 0 ? Math.pow(1.12, steps) : Math.pow(1 / 1.12, steps)
-      targetZoomRef.current = clampZoom(targetZoomRef.current * factor)
+      if (panAnimRef.current !== null) stopCameraMotion()
+      setIsOverview(false)
+      const minimum = Math.min(MIN_ZOOM, viewRef.current.zoom, fitBounds(overviewBounds, el.clientWidth, el.clientHeight, 26).zoom)
+      targetZoomRef.current = clampZoom(targetZoomRef.current * factor, minimum)
       zoomAnchorRef.current = { x, y }
       startZoomAnim()
     }
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => el.removeEventListener('wheel', onWheel)
-  }, [startZoomAnim])
+  }, [viewMode, overviewBounds, startZoomAnim, stopCameraMotion])
 
   useEffect(() => {
     return () => {
-      if (zoomAnimRef.current !== null) cancelAnimationFrame(zoomAnimRef.current)
-      if (panAnimRef.current !== null) cancelAnimationFrame(panAnimRef.current)
+      stopCameraMotion()
+      if (groupHoverTimerRef.current !== null) window.clearTimeout(groupHoverTimerRef.current)
+      if (edgeFrameRef.current !== null) cancelAnimationFrame(edgeFrameRef.current)
       if (clickTimerRef.current !== null) window.clearTimeout(clickTimerRef.current)
+      if (localCameraRef.current) {
+        try { window.localStorage.setItem(CAMERA_STORAGE_KEY, JSON.stringify(localCameraRef.current)) } catch { /* Storage unavailable. */ }
+      }
     }
-  }, [])
-
-  useEffect(() => {
-    if (!hoverQuadrant) {
-      setLabelVisible(false)
-      return
-    }
-    const timer = window.setTimeout(() => setLabelVisible(true), 1000)
-    return () => window.clearTimeout(timer)
-  }, [hoverQuadrant])
+  }, [stopCameraMotion])
 
   useEffect(() => {
     const timer = window.setInterval(() => setTick((t) => t + 1), 60_000)
@@ -256,12 +471,24 @@ export default function QuadrantPage(): JSX.Element {
     return () => window.removeEventListener('pointerdown', onDown)
   }, [menu])
 
+  const clearGroupTarget = useCallback((): void => {
+    if (groupHoverTimerRef.current !== null) window.clearTimeout(groupHoverTimerRef.current)
+    groupHoverTimerRef.current = null
+    groupCandidateRef.current = null
+    groupDropTargetRef.current = null
+    setGroupDropTargetId(null)
+  }, [])
+
   const clearDragState = useCallback((): void => {
+    clearGroupTarget()
+    if (edgeFrameRef.current !== null) cancelAnimationFrame(edgeFrameRef.current)
+    edgeFrameRef.current = null
+    dragPointerRef.current = null
     panRef.current = null
     dragRef.current = null
     dragPreviewRef.current = null
     setDragPreview(null)
-  }, [])
+  }, [clearGroupTarget])
 
   const openEditById = useCallback((id: string): void => {
     const ev = eventsRef.current.find((e) => e.id === id)
@@ -319,104 +546,90 @@ export default function QuadrantPage(): JSX.Element {
     const canvas = canvasRef.current
     if (!canvas || size.width === 0) return
     const dpr = window.devicePixelRatio || 1
-    canvas.width = Math.round(size.width * dpr)
-    canvas.height = Math.round(size.height * dpr)
+    const pixelWidth = Math.round(size.width * dpr)
+    const pixelHeight = Math.round(size.height * dpr)
+    if (canvas.width !== pixelWidth) canvas.width = pixelWidth
+    if (canvas.height !== pixelHeight) canvas.height = pixelHeight
     const ctx = canvas.getContext('2d')
     if (!ctx) return
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
     ctx.clearRect(0, 0, size.width, size.height)
 
-    const regions: Record<
-      Quadrant,
-      { x: number; y: number; w: number; h: number; radii: number[] }
-    > = {
-      1: {
-        x: view.panX + AXIS_GAP_PX,
-        y: 0,
-        w: size.width - view.panX - AXIS_GAP_PX,
-        h: view.panY - AXIS_GAP_PX,
-        radii: [0, 0, 0, RADIUS]
-      },
-      2: {
-        x: 0,
-        y: 0,
-        w: view.panX - AXIS_GAP_PX,
-        h: view.panY - AXIS_GAP_PX,
-        radii: [0, 0, RADIUS, 0]
-      },
-      3: {
-        x: 0,
-        y: view.panY + AXIS_GAP_PX,
-        w: view.panX - AXIS_GAP_PX,
-        h: size.height - view.panY - AXIS_GAP_PX,
-        radii: [0, RADIUS, 0, 0]
-      },
-      4: {
-        x: view.panX + AXIS_GAP_PX,
-        y: view.panY + AXIS_GAP_PX,
-        w: size.width - view.panX - AXIS_GAP_PX,
-        h: size.height - view.panY - AXIS_GAP_PX,
-        radii: [RADIUS, 0, 0, 0]
-      }
-    }
-
-    ;([1, 2, 3, 4] as Quadrant[]).forEach((q) => {
-      const r = regions[q]
-      if (r.w <= 0 || r.h <= 0) return
-      const color = QUADRANT_META[q].color
+    const drawingBounds = dragPreview ? boundsForEvents([
+      { x: dragPreview.x, y: dragPreview.y, width: dragRef.current?.card.display.width ?? 6 }
+    ], bounds) : bounds
+    const left = worldToScreenX(drawingBounds.minX, view)
+    const right = worldToScreenX(drawingBounds.maxX, view)
+    const top = worldToScreenY(drawingBounds.maxY, view)
+    const bottom = worldToScreenY(drawingBounds.minY, view)
+    const gap = Math.min(AXIS_GAP_PX * view.zoom, AXIS_GAP_PX)
+    ctx.lineWidth = 1.5
+    for (const q of QUADRANT_ORDER) {
+      const { color, corner } = QUADRANT_META[q]
+      const west = corner.endsWith('left')
+      const north = corner.startsWith('top')
+      const x0 = Math.max(0, west ? left : view.panX + gap)
+      const x1 = Math.min(size.width, west ? view.panX - gap : right)
+      const y0 = Math.max(0, north ? top : view.panY + gap)
+      const y1 = Math.min(size.height, north ? view.panY - gap : bottom)
+      if (x1 <= x0 || y1 <= y0) continue
+      const innerCornerVisible = (west ? x1 < size.width : x0 > 0) && (north ? y1 < size.height : y0 > 0)
       ctx.beginPath()
-      ctx.roundRect(r.x, r.y, r.w, r.h, r.radii)
+      ctx.roundRect(x0, y0, x1 - x0, y1 - y0, innerCornerVisible ? CANVAS_RADII[q] : 0)
       ctx.fillStyle = color + '2B'
       ctx.fill()
       ctx.strokeStyle = color + 'E6'
-      ctx.lineWidth = 1.5
       ctx.stroke()
-    })
+    }
 
+    const { panX, panY } = view
+    const east = Math.min(right, size.width)
+    const north = Math.max(top, 0)
     ctx.strokeStyle = '#555555'
     ctx.lineWidth = 1
     ctx.beginPath()
-    ctx.moveTo(0, view.panY)
-    ctx.lineTo(size.width, view.panY)
-    ctx.moveTo(view.panX, 0)
-    ctx.lineTo(view.panX, size.height)
+    ctx.moveTo(left, panY)
+    ctx.lineTo(east, panY)
+    ctx.moveTo(panX, north)
+    ctx.lineTo(panX, bottom)
     ctx.stroke()
 
-    ctx.fillStyle = '#555555'
+    ctx.fillStyle = ctx.strokeStyle
     ctx.beginPath()
-    ctx.moveTo(size.width - 8, view.panY - 4)
-    ctx.lineTo(size.width - 8, view.panY + 4)
-    ctx.lineTo(size.width - 1, view.panY)
+    ctx.moveTo(east - 8, panY - 4)
+    ctx.lineTo(east - 1, panY)
+    ctx.lineTo(east - 8, panY + 4)
+    ctx.closePath()
+    ctx.moveTo(panX - 4, north + 8)
+    ctx.lineTo(panX, north + 1)
+    ctx.lineTo(panX + 4, north + 8)
     ctx.closePath()
     ctx.fill()
-    ctx.beginPath()
-    ctx.moveTo(view.panX - 4, 8)
-    ctx.lineTo(view.panX + 4, 8)
-    ctx.lineTo(view.panX, 1)
-    ctx.closePath()
-    ctx.fill()
-  }, [view, size])
+  }, [view, size, bounds, dragPreview])
 
   useEffect(() => {
     draw()
   }, [draw])
 
   const clientToViewport = (clientX: number, clientY: number): { x: number; y: number } => {
-    const rect = viewportRef.current?.getBoundingClientRect()
-    if (!rect) return { x: 0, y: 0 }
-    return { x: clientX - rect.left, y: clientY - rect.top }
+    const el = viewportRef.current
+    if (!el) return { x: 0, y: 0 }
+    const rect = el.getBoundingClientRect()
+    return { x: clientX - rect.left - el.clientLeft, y: clientY - rect.top - el.clientTop }
   }
 
-  const beginPinch = useCallback((): void => {
+  const beginPinch = (): void => {
     const [a, b] = [...touchPointsRef.current.values()]
     if (!a || !b) return
+    const midpoint = clientToViewport((a.x + b.x) / 2, (a.y + b.y) / 2)
+    setIsOverview(false)
     panRef.current = null
     pinchRef.current = {
+      ...midpoint,
       distance: Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)),
-      zoom: viewRef.current.zoom,
       view: viewRef.current
     }
-  }, [])
+  }
 
   /** 平移画布：手势内核与"双指抬起一指后剩余手指继续平移"共用同一实现。 */
   const applyPan = useCallback(
@@ -431,10 +644,10 @@ export default function QuadrantPage(): JSX.Element {
           panY: pan.startView.panY + (clientY - pan.startY)
         },
         rect.width,
-        rect.height
+        rect.height,
+        bounds
       )
-      viewRef.current = next
-      setView(next)
+      applyView(next)
       const now = performance.now()
       const last = panLastRef.current
       if (last && now > last.t) {
@@ -445,8 +658,89 @@ export default function QuadrantPage(): JSX.Element {
       }
       panLastRef.current = { x: clientX, y: clientY, t: now }
     },
-    [setView]
+    [applyView, bounds]
   )
+
+  const dragTargetAt = (x: number, y: number, source: BoardCard): string | null => {
+    const target = document.elementFromPoint(x, y)?.closest<HTMLElement>('.event-card[data-event-id]')
+    const id = target?.dataset.eventId
+    if (!target || !id || id === source.event.id || (source.group && target.dataset.groupId === source.group.id)) return null
+    const box = target.getBoundingClientRect()
+    if (Math.abs(x - (box.left + box.right) / 2) > box.width * 0.3 ||
+        Math.abs(y - (box.top + box.bottom) / 2) > box.height * 0.32) return null
+    return id
+  }
+
+  const settleGroupTarget = (id: string | null, x: number, y: number): void => {
+    const candidate = groupCandidateRef.current
+    if (id && candidate?.id === id && (groupDropTargetRef.current === id || Math.hypot(x - candidate.x, y - candidate.y) < 8)) return
+    if (candidate) clearGroupTarget()
+    if (!id) return
+    groupCandidateRef.current = { id, x, y }
+    groupHoverTimerRef.current = window.setTimeout(() => {
+      groupHoverTimerRef.current = null
+      groupDropTargetRef.current = id
+      setGroupDropTargetId(id)
+    }, GROUP_DWELL_MS)
+  }
+
+  const updateDragAt = (drag: DragState, clientX: number, clientY: number): void => {
+    const local = clientToViewport(clientX, clientY)
+    const currentView = viewRef.current
+    const x = screenToWorldX(local.x, currentView)
+    const y = screenToWorldY(local.y, currentView)
+    const next = previewMove(drag.card.display, x, y, drag.grabOffsetX, drag.grabOffsetY, currentView)
+    const preview = {
+      id: next.id, quadrant: next.quadrant, x: next.x, y: next.y,
+      floatingX: x - drag.grabOffsetX, floatingY: y - drag.grabOffsetY
+    }
+    dragPreviewRef.current = preview
+    setDragPreview(preview)
+    const { group, event } = drag.card
+    if (group?.anchorQuadrant === event.quadrant) return
+    settleGroupTarget(dragTargetAt(clientX, clientY, drag.card), clientX, clientY)
+  }
+
+  // While a card is held at the visible edge, pan the camera and extend the drop preview.
+  const queueEdgePan = (): void => {
+    if (edgeFrameRef.current !== null) return
+    let lastTime = performance.now()
+    const step = (now: number): void => {
+      edgeFrameRef.current = null
+      const drag = dragRef.current
+      const pointer = dragPointerRef.current
+      if (!drag || !pointer || document.hidden) return
+      const { x, y } = clientToViewport(pointer.x, pointer.y)
+      const { width, height } = sizeRef.current
+      if (x < 0 || y < 0 || x > width || y > height) return
+      const edge = 28
+      const speed = (position: number, span: number): number =>
+        (Math.max(0, edge - position) - Math.max(0, edge - (span - position))) * 0.38
+      const vx = speed(x, width)
+      const vy = speed(y, height)
+      if (vx === 0 && vy === 0) return
+      const frames = Math.min(32, Math.max(0, now - lastTime)) / (1000 / 60)
+      lastTime = now
+      const current = viewRef.current
+      applyView({ ...current, panX: current.panX + vx * frames, panY: current.panY + vy * frames })
+      updateDragAt(drag, pointer.x, pointer.y)
+      edgeFrameRef.current = requestAnimationFrame(step)
+    }
+    edgeFrameRef.current = requestAnimationFrame(step)
+  }
+
+  const animatePlacement = (preview: PreviewState): void => {
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
+    const dx = (preview.floatingX - preview.x) * UNIT
+    const dy = (preview.y - preview.floatingY) * UNIT
+    if (Math.abs(dx) + Math.abs(dy) < 1) return
+    requestAnimationFrame(() => {
+      const card = viewportRef.current?.querySelector(`.event-card[data-event-id="${CSS.escape(preview.id)}"]`)
+      card?.animate([{ transform: `translate(${dx}px, ${dy}px)` }, { transform: 'none' }], {
+        duration: MOTION_SETTLE_MS, easing: MOTION_EASE
+      })
+    })
+  }
 
   // 手势内核：位移 > 8px 才算拖动，长按满阈值抬起手指才开菜单，
   // 双击由自研判定给出（原生 dblclick 在触屏上不可靠）。
@@ -465,83 +759,74 @@ export default function QuadrantPage(): JSX.Element {
       const card = target?.closest('.event-card') as HTMLElement | null
       const id = card?.dataset.eventId
       if (!card || !id) return { kind: 'canvas' }
-      // 鼠标沿用"把手拖动"，避免左键在卡面上误拖；触屏/笔整卡可拖（把手在触屏下隐藏）。
-      if (e.pointerType === 'mouse' && !target?.closest('.event-handle')) return { kind: 'canvas' }
       return { kind: 'item', id }
     },
     onDragStart: (ctx: GestureContext) => {
       if (ctx.hit.kind === 'item') {
-        const ev = eventsRef.current.find((e) => e.id === ctx.hit.id)
-        const rect = viewportRef.current?.getBoundingClientRect()
-        if (!ev || !rect) return
-        const worldX = screenToWorldX(ctx.start.x - rect.left, viewRef.current)
-        const worldY = screenToWorldY(ctx.start.y - rect.top, viewRef.current)
-        dragRef.current = {
-          id: ev.id,
-          grabOffsetX: worldX - ev.x,
-          grabOffsetY: worldY - ev.y
+        const card = boardCards.find((item) => item.event.id === ctx.hit.id)
+        if (!card) return
+        const start = clientToViewport(ctx.start.x, ctx.start.y)
+        const worldX = screenToWorldX(start.x, viewRef.current)
+        const worldY = screenToWorldY(start.y, viewRef.current)
+        const drag = {
+          card,
+          grabOffsetX: worldX - card.display.x,
+          grabOffsetY: worldY - card.display.y
         }
-        dragPreviewRef.current = { id: ev.id, x: ev.x, y: ev.y, quadrant: ev.quadrant }
-        setDragPreview(dragPreviewRef.current)
-        setSelectedId(ev.id)
+        dragRef.current = drag
+        dragPointerRef.current = ctx.current
+        setIsOverview(false)
+        setSelectedId(card.event.id)
+        updateDragAt(drag, ctx.current.x, ctx.current.y)
+        queueEdgePan()
         return
       }
       // 画布平移：触屏单指／笔直接平移；鼠标需中键或 Ctrl+左键（与既有桌面习惯一致）。
       const mousePan = ctx.pointerType === 'mouse' && (ctx.button === 1 || ctx.ctrlKey)
       if (ctx.pointerType === 'mouse' && !mousePan) return
-      if (panAnimRef.current !== null) {
-        cancelAnimationFrame(panAnimRef.current)
-        panAnimRef.current = null
-      }
+      setIsOverview(false)
+      stopCameraMotion()
       panRef.current = { startX: ctx.start.x, startY: ctx.start.y, startView: viewRef.current }
       panLastRef.current = { x: ctx.start.x, y: ctx.start.y, t: performance.now() }
       panVelRef.current = { x: 0, y: 0 }
     },
     onDragMove: (ctx: GestureContext) => {
-      const rect = viewportRef.current?.getBoundingClientRect()
-      if (!rect) return
       if (panRef.current) applyPan(ctx.current.x, ctx.current.y)
       const drag = dragRef.current
-      if (drag) {
-        const ev = eventsRef.current.find((e) => e.id === drag.id)
-        if (ev) {
-          // 拖动期间只更新预览，不写库；抓取偏移与中心判象限在 previewMove 内完成。
-          const next = previewMove(
-            ev,
-            screenToWorldX(ctx.current.x - rect.left, viewRef.current),
-            screenToWorldY(ctx.current.y - rect.top, viewRef.current),
-            drag.grabOffsetX,
-            drag.grabOffsetY,
-            viewRef.current
-          )
-          const preview: PreviewState = {
-            id: next.id,
-            x: next.x,
-            y: next.y,
-            quadrant: next.quadrant
-          }
-          dragPreviewRef.current = preview
-          setDragPreview(preview)
-        }
-      }
+      if (!drag) return
+      dragPointerRef.current = ctx.current
+      updateDragAt(drag, ctx.current.x, ctx.current.y)
+      queueEdgePan()
     },
-    onDragEnd: () => {
+    onDragEnd: (ctx: GestureContext) => {
       const wasPanning = panRef.current !== null
-      panRef.current = null
       const drag = dragRef.current
+      if (drag) updateDragAt(drag, ctx.current.x, ctx.current.y)
       const preview = dragPreviewRef.current
-      dragRef.current = null
-      dragPreviewRef.current = null
-      setDragPreview(null)
-      if (drag && preview && preview.id === drag.id) {
-        const ev = eventsRef.current.find((e) => e.id === drag.id)
-        if (ev && (ev.x !== preview.x || ev.y !== preview.y || ev.quadrant !== preview.quadrant)) {
-          // 只在抬起时提交一次，减少 95% 以上写入，并避免拖动过程中被实时同步回滚。
-          moveEvent(drag.id, preview.x, preview.y, viewRef.current)
-        }
-      }
+      const targetId = groupDropTargetRef.current
+      clearDragState()
+      lastDragEnd.current = performance.now()
       if (wasPanning && Math.hypot(panVelRef.current.x, panVelRef.current.y) > 0.05) {
         startPanInertia()
+      }
+      if (!drag || !preview) return
+      const { event, group, display } = drag.card
+      const current = eventsRef.current.find((item) => item.id === event.id)
+      if (!current || current.groupId !== event.groupId || current.quadrant !== event.quadrant) return
+      const targetCard = boardCards.find((item) => item.event.id === targetId)
+      if (targetCard) {
+        handleGroupDrop(current, targetCard.display)
+      } else if (group && group.anchorQuadrant === event.quadrant) {
+        if (preview.quadrant === event.quadrant) {
+          moveEventGroupAnchor(group.id, preview.x, preview.y)
+        } else {
+          moveEventGroup(event.id, preview.quadrant, preview.x - display.x, preview.y - display.y, preview)
+        }
+        animatePlacement(preview)
+      } else if (preview.x !== display.x || preview.y !== display.y || preview.quadrant !== event.quadrant) {
+        moveEvent(event.id, preview.x, preview.y, viewRef.current)
+        setRevealedMemberId(event.id)
+        animatePlacement(preview)
       }
     },
     onLongPress: (ctx: GestureContext) => {
@@ -567,8 +852,13 @@ export default function QuadrantPage(): JSX.Element {
        */
       if (ctx.pointerType === 'mouse') return
       if (ctx.hit.kind === 'item') {
-        if (isDouble && ctx.hit.id) {
-          openEditById(ctx.hit.id)
+        const card = boardCards.find((item) => item.event.id === ctx.hit.id)
+        if (card?.group) {
+          openGroup(card.group.id, canvasCardElement(card.event.id))
+          return
+        }
+        if (isDouble && card) {
+          openEditById(card.event.id)
           return
         }
         // 短按**带照片**的事件块 → 展开/收起缩略图；无照片时保持原语义（仅选中）。
@@ -587,18 +877,16 @@ export default function QuadrantPage(): JSX.Element {
         setMenu(null)
         return
       }
-      const { x, y } = clientToViewport(ctx.current.x, ctx.current.y)
-      const wx = screenToWorldX(x, viewRef.current)
-      const wy = screenToWorldY(y, viewRef.current)
-      setEditing({
-        mode: 'create',
-        text: '',
-        quadrant: quadrantOfWorldPoint(wx, wy),
-        x: wx,
-        y: wy
-      })
+      openInlineCreate(ctx.current.x, ctx.current.y)
     },
-    onCancel: clearDragState
+    onCancel: () => {
+      if (dragRef.current) {
+        const { width, height } = sizeRef.current
+        applyView(clampOrigin(viewRef.current, width, height, bounds))
+        lastDragEnd.current = performance.now()
+      }
+      clearDragState()
+    }
   })
 
   const gesturesRef = useRef(gestures)
@@ -616,6 +904,9 @@ export default function QuadrantPage(): JSX.Element {
 
   const onPointerDown = (e: React.PointerEvent): void => {
     lastPointerTypeRef.current = e.pointerType
+    if ((e.target as Element).closest('input, button, .event-photos')) return
+    lastDragEnd.current = 0
+    stopCameraMotion()
     if (e.pointerType === 'touch' || e.pointerType === 'pen') {
       const points = touchPointsRef.current
       points.set(e.pointerId, { x: e.clientX, y: e.clientY })
@@ -630,24 +921,23 @@ export default function QuadrantPage(): JSX.Element {
   }
 
   const onPointerMove = (e: React.PointerEvent): void => {
-    const rect = viewportRef.current?.getBoundingClientRect()
-    if (!rect) return
+    if (!viewportRef.current) return
     hoverRef.current = { clientX: e.clientX, clientY: e.clientY }
 
     if (e.pointerType !== 'mouse') {
       const points = touchPointsRef.current
       if (points.has(e.pointerId)) points.set(e.pointerId, { x: e.clientX, y: e.clientY })
-      if (points.size >= 2 && pinchRef.current) {
+      const pinch = pinchRef.current
+      if (points.size >= 2 && pinch) {
         const [a, b] = [...points.values()]
         const dist = Math.max(1, Math.hypot(a.x - b.x, a.y - b.y))
-        const next = zoomAt(
-          (a.x + b.x) / 2 - rect.left,
-          (a.y + b.y) / 2 - rect.top,
-          pinchRef.current.zoom * (dist / pinchRef.current.distance),
-          pinchRef.current.view
-        )
-        viewRef.current = next
-        setView(next)
+        const midpoint = clientToViewport((a.x + b.x) / 2, (a.y + b.y) / 2)
+        const zoomed = zoomAt(pinch.x, pinch.y, pinch.view.zoom * dist / pinch.distance, pinch.view)
+        const { width, height } = sizeRef.current
+        applyView(clampOrigin({
+          ...zoomed, panX: zoomed.panX + midpoint.x - pinch.x, panY: zoomed.panY + midpoint.y - pinch.y
+        }, width, height, bounds))
+        targetZoomRef.current = viewRef.current.zoom
         return
       }
     }
@@ -656,9 +946,6 @@ export default function QuadrantPage(): JSX.Element {
     // 双指缩放后只剩一指：手势内核里已无活动指针，由页面继续平移。
     if (!gestures.isActive() && panRef.current) applyPan(e.clientX, e.clientY)
 
-    const x = e.clientX - rect.left
-    const y = e.clientY - rect.top
-    setHoverQuadrant(quadrantOfWorldPoint(screenToWorldX(x, viewRef.current), screenToWorldY(y, viewRef.current)))
   }
 
   const onPointerUp = (e: React.PointerEvent): void => {
@@ -667,7 +954,7 @@ export default function QuadrantPage(): JSX.Element {
       points.delete(e.pointerId)
       if (points.size === 0) {
         pinchRef.current = null
-        panRef.current = null
+        if (!gestures.isActive()) panRef.current = null
       } else if (points.size === 1) {
         // 双指抬起一指后，由剩下那一指重新开始平移。
         pinchRef.current = null
@@ -683,6 +970,7 @@ export default function QuadrantPage(): JSX.Element {
   const onPointerCancel = (e: React.PointerEvent): void => {
     touchPointsRef.current.delete(e.pointerId)
     pinchRef.current = null
+    if (!gestures.isActive()) clearDragState()
     gestures.onPointerCancel(e)
   }
 
@@ -698,6 +986,7 @@ export default function QuadrantPage(): JSX.Element {
    */
   const onViewportClick = (e: React.MouseEvent): void => {
     if (lastPointerTypeRef.current !== 'mouse') return
+    if (lastDragEnd.current && performance.now() - lastDragEnd.current < 250) return
     const target = e.target as Element | null
     const card = target?.closest('.event-card') as HTMLElement | null
     const id = card?.dataset.eventId
@@ -705,6 +994,10 @@ export default function QuadrantPage(): JSX.Element {
     // 缩略图条里点单张图是"打开大图"，不是"开合缩略图条"。
     if (target?.closest('.event-photos')) return
     const ev = eventsRef.current.find((item) => item.id === id)
+    if (ev?.groupId) {
+      openGroup(ev.groupId, card)
+      return
+    }
     if (!ev || (ev.photos?.length ?? 0) === 0) return
     /*
      * **延迟到双击窗口之后再执行**。
@@ -731,21 +1024,14 @@ export default function QuadrantPage(): JSX.Element {
       clickTimerRef.current = null
     }
     const target = e.target as Element | null
+    if (target?.closest('button, input, .event-photos')) return
     const cardId = (target?.closest('.event-card') as HTMLElement | null)?.dataset.eventId
     if (cardId) {
+      if (eventsRef.current.find((event) => event.id === cardId)?.groupId) return
       openEditById(cardId)
       return
     }
-    const { x, y } = clientToViewport(e.clientX, e.clientY)
-    const wx = screenToWorldX(x, viewRef.current)
-    const wy = screenToWorldY(y, viewRef.current)
-    setEditing({
-      mode: 'create',
-      text: '',
-      quadrant: quadrantOfWorldPoint(wx, wy),
-      x: wx,
-      y: wy
-    })
+    openInlineCreate(e.clientX, e.clientY)
   }
 
   const onViewportContextMenu = (e: React.MouseEvent): void => {
@@ -768,9 +1054,10 @@ export default function QuadrantPage(): JSX.Element {
    * 用户的照片既可能来自相册也可能来自当场拍摄，交给系统选择器决定。
    */
   const startAddPhoto = (eventId: string): void => {
-    photoTargetRef.current = eventId
     const input = fileInputRef.current
-    if (!input) return
+    if (!input || photoProcessingRef.current) return
+    photoTargetRef.current = eventId
+    setPhotoFailedId(null)
     input.value = ''
     input.click()
   }
@@ -784,7 +1071,7 @@ export default function QuadrantPage(): JSX.Element {
   const onPickPhotos = async (fileList: FileList | null): Promise<void> => {
     const eventId = photoTargetRef.current
     photoTargetRef.current = null
-    if (!eventId || !fileList || fileList.length === 0) return
+    if (!eventId || !fileList || fileList.length === 0 || photoProcessingRef.current) return
 
     const event = eventsRef.current.find((e) => e.id === eventId)
     if (!event) return
@@ -792,6 +1079,7 @@ export default function QuadrantPage(): JSX.Element {
     const room = MAX_EVENT_PHOTOS - existing.length
     if (room <= 0) return
 
+    photoProcessingRef.current = true
     setPhotoBusy(true)
     const added: string[] = []
     try {
@@ -803,27 +1091,37 @@ export default function QuadrantPage(): JSX.Element {
         await putPhoto(id, blob)
         added.push(id)
       }
-      if (added.length === 0) return
-      const target = eventsRef.current.find((e) => e.id === eventId)
+      if (added.length === 0) {
+        setPhotoFailedId(eventId)
+        return
+      }
+      const target = useAppStore.getState().data.events.find((e) => e.id === eventId)
       if (!target) {
         // 压缩期间事件被删了：把刚存进去的实体回收掉，别留孤儿。
         await Promise.all(added.map((id) => removePhoto(id)))
         return
       }
-      updateEvent(eventId, { photos: [...(target.photos ?? []), ...added] }, viewRef.current)
-      // 加完直接展开，否则用户看不到刚加的照片，会以为没成功。
-      setPhotosOpen((prev) => new Set(prev).add(eventId))
-      setSelectedId(eventId)
+      const latest = target.photos ?? []
+      const available = Math.max(0, MAX_EVENT_PHOTOS - latest.length)
+      const accepted = added.slice(0, available)
+      if (accepted.length > 0) {
+        updateEvent(eventId, { photos: [...latest, ...accepted] }, viewRef.current)
+        setPhotosOpen((prev) => new Set(prev).add(eventId))
+        setSelectedId(eventId)
+      }
+      await Promise.all(added.slice(available).map((id) => removePhoto(id)))
     } catch {
       // 压缩/落盘失败时清掉半成品，保持"要么成功要么无事发生"。
       await Promise.all(added.map((id) => removePhoto(id)))
+      setPhotoFailedId(eventId)
     } finally {
+      photoProcessingRef.current = false
       setPhotoBusy(false)
     }
   }
 
   /**
-   * 删除事件上的第 `index` 张照片。
+   * 删除事件上指定的照片。
    *
    * 三件事必须一起做，漏一件就出问题：
    * ① 事件上的 id 摘掉（并触发同步）；
@@ -832,12 +1130,11 @@ export default function QuadrantPage(): JSX.Element {
    *    组件已经 unmount，缓存里那条 URL 仍指向已删掉的 blob；更糟的是若用户
    *    正好开着大图查看器看的就是这张，`viewer.index` 会越界指向空槽。
    */
-  const removeEventPhoto = async (eventId: string, index: number): Promise<void> => {
-    const event = eventsRef.current.find((e) => e.id === eventId)
+  const removeEventPhoto = async (eventId: string, id: string): Promise<void> => {
+    const event = useAppStore.getState().data.events.find((e) => e.id === eventId)
     const photos = event?.photos ?? []
-    const id = photos[index]
-    if (!id) return
-    const remaining = photos.filter((_, i) => i !== index)
+    if (!photos.includes(id)) return
+    const remaining = photos.filter((photoId) => photoId !== id)
     updateEvent(eventId, { photos: remaining.length > 0 ? remaining : undefined }, viewRef.current)
     forgetPhotoUrl(id)
     await removePhoto(id)
@@ -860,12 +1157,12 @@ export default function QuadrantPage(): JSX.Element {
     })
   }
 
-  const commitEditing = (): void => {
+  const commitEditing = (value: string): void => {
     if (!editing) return
+    const text = value.trim()
     if (editing.mode === 'create') {
-      if (editing.text.trim()) addEvent(editing.text, editing.quadrant, editing.x, editing.y, view)
-    } else if (editing.id && editing.text.trim()) {
-      const text = editing.text.trim()
+      if (text) addEvent(text, editing.quadrant, editing.x, editing.y, view)
+    } else if (editing.id && text) {
       updateEvent(editing.id, { text, width: autoEventWidth(text) }, view)
     }
     setEditing(null)
@@ -889,21 +1186,222 @@ export default function QuadrantPage(): JSX.Element {
 
   /** 该事件是否还能再加照片。未达上限才在菜单里显示「添加照片」。 */
   const canAddPhotoTo = (eventId?: string): boolean => {
-    if (!eventId) return false
+    if (!eventId || photoBusy) return false
     const target = events.find((e) => e.id === eventId)
     if (!target) return false
     return (target.photos?.length ?? 0) < MAX_EVENT_PHOTOS
   }
 
+  const fitAll = (): void => {
+    if (!viewportRef.current || isOverview) return
+    rememberView()
+    stopCameraMotion()
+    setIsOverview(true)
+  }
+
+  const rememberView = (): void => {
+    if (sizeRef.current.width <= 0) return
+    previousViewsRef.current = [...previousViewsRef.current.slice(-7), {
+      camera: worldCamera(viewRef.current, sizeRef.current), overview: isOverview
+    }]
+    setHasPreviousView(true)
+  }
+
+  const setCamera = (camera: Camera): void => {
+    stopCameraMotion()
+    const rect = sizeRef.current
+    const next = clampOrigin(centeredOn(camera, rect), rect.width, rect.height, bounds)
+    targetZoomRef.current = next.zoom
+    applyView(next)
+    setViewMode('canvas')
+  }
+
+  const returnToPreviousView = (): void => {
+    const previous = previousViewsRef.current.pop()
+    if (!previous) return
+    setHasPreviousView(previousViewsRef.current.length > 0)
+    setCamera(previous.camera)
+    setIsOverview(previous.overview)
+  }
+
+  const locateEvent = (event: QuadrantEvent): void => {
+    const position = boardCards.find((card) => card.event.id === event.id ||
+      (event.groupId && card.event.groupId === event.groupId && card.event.quadrant === event.quadrant))?.display ?? event
+    rememberView()
+    setIsOverview(false)
+    setCamera({
+      x: position.x + position.width / 2,
+      y: position.y - EVENT_HEIGHT_UNITS / 2,
+      zoom: Math.max(viewRef.current.zoom, 0.8)
+    })
+    setRevealedMemberId(event.id)
+    setSelectedId(event.id)
+    requestAnimationFrame(() => canvasCardElement(event.id)?.focus({ preventScroll: true }))
+  }
+
+  const openCreate = (): void => {
+    const { x, y } = worldCamera(viewRef.current, sizeRef.current)
+    setCreateDraft({ quadrant: quadrantOfWorldPoint(x, y), x, y, fromToolbar: true })
+  }
+
+  const saveCreate = (text: string, quadrant: Quadrant): void => {
+    if (!createDraft) return
+    const { x, y } = createDraft
+    if (!createDraft.fromToolbar) {
+      addEvent(text, quadrant, x, y, viewRef.current)
+      return
+    }
+    const width = autoEventWidth(text)
+    const proposed = clampEventToQuadrant({
+      id: '', text, quadrant, x: x - width / 2, y, width, createdAt: '', remark: ''
+    }, viewRef.current)
+    const occupied = boardCards.filter((card) => card.event.quadrant === quadrant).map((card) => quadrantEventRect(card.display))
+    const dy = quadrant === 1 || quadrant === 2 ? 2.3 : -2.3
+    for (let step = 0; occupied.some((rect) => rectsOverlap(rect, quadrantEventRect(proposed))) && step <= occupied.length; step++) {
+      proposed.y += dy
+    }
+    addEvent(text, quadrant, proposed.x, proposed.y, viewRef.current)
+  }
+
+  const closeCreate = (): void => {
+    setCreateDraft(null)
+    requestAnimationFrame(() => addButtonRef.current?.focus({ preventScroll: true }))
+  }
+
+  const openInlineCreate = (clientX: number, clientY: number): void => {
+    const local = clientToViewport(clientX, clientY)
+    const x = screenToWorldX(local.x, viewRef.current)
+    const y = screenToWorldY(local.y, viewRef.current)
+    const draft = { x, y, quadrant: quadrantOfWorldPoint(x, y) }
+    if (viewRef.current.zoom < 0.45) setCreateDraft(draft)
+    else setEditing({ mode: 'create', text: '', ...draft })
+  }
+
+  const groupMembers = (groupId: string): QuadrantEvent[] => events.filter((e) => e.groupId === groupId)
+  const canvasCardElement = (id: string): HTMLElement | null =>
+    viewportRef.current?.querySelector(`.event-card[data-event-id="${CSS.escape(id)}"]`) ?? null
+
+  const openGroup = (groupId: string, target?: HTMLElement | null): void => {
+    groupTriggerRef.current = target ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null)
+    setGroupDialogId(groupId)
+  }
+
+  const vacantAnchors = groups.filter((group) => !boardCards.some((card) =>
+    card.group?.id === group.id && card.event.quadrant === group.anchorQuadrant))
+  const selectedGroup = groups.find((group) => group.id === events.find((event) => event.id === selectedId)?.groupId)
+  const openedGroup = groups.find((group) => group.id === groupDialogId)
+  const openedMembers = openedGroup ? groupMembers(openedGroup.id) : []
+  const pendingEvent = events.find((event) => event.id === crossGroup?.eventId)
+  const pendingTarget = events.find((event) => event.id === crossGroup?.targetId)
+  const pendingGroup = groups.find((group) => group.id === crossGroup?.targetGroupId)
+
+  const closeGroupDialog = (): void => {
+    setGroupDialogId(null)
+    const groupId = groupDialogId
+    requestAnimationFrame(() => {
+      const previous = groupTriggerRef.current
+      const fallback = groupId && document.querySelector<HTMLElement>(
+        `[data-group-id="${CSS.escape(groupId)}"] button, button[data-group-id="${CSS.escape(groupId)}"]`
+      )
+      const trigger = previous?.isConnected ? previous : fallback || addButtonRef.current
+      trigger?.focus({ preventScroll: true })
+    })
+  }
+
+  const closeCrossGroup = (): void => {
+    setCrossGroup(null)
+    if (openedGroup) return
+    const trigger = crossTriggerRef.current
+    requestAnimationFrame(() => {
+      if (trigger?.isConnected) trigger.focus({ preventScroll: true })
+      else addButtonRef.current?.focus({ preventScroll: true })
+    })
+  }
+
+  const finishCrossGroup = (moveToGroupQuadrant: boolean): void => {
+    if (!crossGroup || !pendingEvent) return closeCrossGroup()
+    // A sync update can move either card while confirmation is open.
+    const validTarget = crossGroup.targetId
+      ? pendingTarget?.quadrant === crossGroup.targetQuadrant && pendingTarget.groupId === crossGroup.targetGroupId
+      : pendingGroup?.anchorQuadrant === crossGroup.targetQuadrant
+    if (!validTarget || pendingEvent.quadrant !== crossGroup.sourceQuadrant) return closeCrossGroup()
+    const destination = moveToGroupQuadrant ? crossGroup.targetQuadrant : undefined
+    if (pendingGroup) {
+      const point = pendingGroup.anchorQuadrant === crossGroup.targetQuadrant
+        ? { x: pendingGroup.anchorX, y: pendingGroup.anchorY }
+        : pendingTarget
+      assignEventToGroup(pendingEvent.id, pendingGroup.id, destination, point)
+    } else if (pendingTarget) {
+      createEventGroupWithEvents({
+        name: pendingTarget.text, anchorQuadrant: pendingTarget.quadrant,
+        anchorX: pendingTarget.x, anchorY: pendingTarget.y
+      }, [pendingTarget.id, pendingEvent.id], destination ? pendingEvent.id : undefined, destination)
+    }
+    closeCrossGroup()
+  }
+
+  const handleGroupDrop = (event: QuadrantEvent, target: QuadrantEvent): void => {
+    if (event.groupId && event.groupId === target.groupId) return
+    if (event.quadrant !== target.quadrant) {
+      crossTriggerRef.current = canvasCardElement(event.id) ?? document.activeElement as HTMLElement | null
+      setCrossGroup({
+        eventId: event.id, targetId: target.id, targetGroupId: target.groupId,
+        sourceQuadrant: event.quadrant, targetQuadrant: target.quadrant
+      })
+      return
+    }
+    if (target.groupId) assignEventToGroup(event.id, target.groupId)
+    else createEventGroupWithEvents({
+      name: target.text, anchorQuadrant: target.quadrant, anchorX: target.x, anchorY: target.y
+    }, [target.id, event.id])
+  }
+
+  const addToOpenedGroup = (eventId: string): void => {
+    const event = events.find((item) => item.id === eventId)
+    if (!event || !openedGroup || event.groupId === openedGroup.id) return
+    if (event.quadrant === openedGroup.anchorQuadrant) assignEventToGroup(event.id, openedGroup.id)
+    else setCrossGroup({
+      eventId: event.id, targetGroupId: openedGroup.id,
+      sourceQuadrant: event.quadrant, targetQuadrant: openedGroup.anchorQuadrant
+    })
+  }
+
+  const locateAnchor = (group: EventGroup): void => {
+    const card = boardCards.find((item) => item.group?.id === group.id && item.event.quadrant === group.anchorQuadrant)
+    if (card) {
+      locateEvent(card.event)
+      return
+    }
+    rememberView()
+    setIsOverview(false)
+    setCamera({ x: group.anchorX, y: group.anchorY, zoom: Math.max(viewRef.current.zoom, 0.8) })
+    requestAnimationFrame(() => viewportRef.current?.querySelector<HTMLElement>(
+      `.quadrant-group-anchor[data-group-id="${CSS.escape(group.id)}"]`
+    )?.focus({ preventScroll: true }))
+  }
+
+  const overviewMarkers = view.zoom < OVERVIEW_MARKER_ZOOM
+  const selectedCard = boardCards.find((card) => card.event.id === selectedId)
+  const armedDrop = boardCards.find(({ event }) => event.id === groupDropTargetId)
+  const anchorCard = selectedGroup && boardCards.find((card) =>
+    card.group?.id === selectedGroup.id && card.event.quadrant === selectedGroup.anchorQuadrant)?.display
+  const compass = { 1: '↗', 2: '↖', 3: '↙', 4: '↘' } as const
+
   return (
-    <div className="quadrant-page">
+    <div className="quadrant-page" style={viewMode === 'canvas' ? CANVAS_COLORS : LIST_COLORS}>
       <header className="page-header quadrant-header">
         <h1>四象限</h1>
-        <span className="title-underline" />
-        <span className="hint-pill desktop-only">🖱️ Ctrl+拖拽 平移 / 滚轮 缩放 / 双击新建</span>
-        <span className="hint-pill mobile-only">👆 拖动移动 · 长按菜单 · 双击新建</span>
+        <div className="quadrant-toolbar" aria-label="画布工具">
+          <div className="quadrant-view-toggle" role="group" aria-label="视图模式">
+            <button type="button" aria-pressed={viewMode === 'canvas'} onClick={() => setViewMode('canvas')}>画布</button>
+            <button type="button" aria-pressed={viewMode === 'list'} onClick={() => setViewMode('list')}>列表</button>
+          </div>
+          <button ref={addButtonRef} type="button" className="quadrant-tool-primary" onClick={openCreate}>＋ 添加</button>
+          {viewMode === 'canvas' && <button type="button" aria-pressed={isOverview} onClick={fitAll}>全览</button>}
+          {hasPreviousView && viewMode === 'canvas' && <button type="button" onClick={returnToPreviousView}>返回刚才位置</button>}
+        </div>
       </header>
-      <div
+      {viewMode === 'canvas' ? <div
         ref={viewportRef}
         className="quadrant-viewport"
         onPointerDown={onPointerDown}
@@ -912,7 +1410,6 @@ export default function QuadrantPage(): JSX.Element {
         onPointerCancel={onPointerCancel}
         onPointerLeave={(e) => {
           hoverRef.current = null
-          setHoverQuadrant(null)
           if (shouldClearDragOnPointerLeave(e.pointerType)) gestures.cancel()
         }}
         onDoubleClick={onDoubleClick}
@@ -920,33 +1417,80 @@ export default function QuadrantPage(): JSX.Element {
         onContextMenu={onViewportContextMenu}
       >
         <canvas ref={canvasRef} className="quadrant-canvas" />
+        {QUADRANT_ORDER.map((q) => {
+          const { corner, label } = QUADRANT_META[q]
+          const horizontal = corner.endsWith('left') ? view.panX : size.width - view.panX
+          const vertical = corner.startsWith('top') ? view.panY : size.height - view.panY
+          return horizontal > 100 && vertical > 30 && <div key={q} className={`quadrant-compass q${q}`}>{compass[q]} {label}</div>
+        })}
         <div
           className="event-layer"
           style={{ transform: `translate(${view.panX}px, ${view.panY}px) scale(${view.zoom})` }}
         >
-          {events.map((e) => {
-            if (editing?.id === e.id) return null
-            const preview = dragPreview?.id === e.id ? dragPreview : null
-            const shown = preview ? { ...e, x: preview.x, y: preview.y, quadrant: preview.quadrant } : e
+          {selectedGroup && (
+            <svg className="quadrant-group-connectors" aria-hidden="true">
+              {boardCards.filter(({ event }) => event.groupId === selectedGroup.id && event.quadrant !== selectedGroup.anchorQuadrant).map(({ display }) => {
+                const path = connectorPath(display, anchorCard ?? { x: selectedGroup.anchorX, y: selectedGroup.anchorY, width: 8 })
+                return path && <path key={display.id} d={path} />
+              })}
+            </svg>
+          )}
+          {boardCards.map(({ event, display, group, total, local }) => {
+            if (editing?.id === event.id) return null
+            const preview = dragPreview?.id === event.id ? dragPreview : null
+            const shown = preview
+              ? { ...display, x: preview.floatingX, y: preview.floatingY, quadrant: preview.quadrant }
+              : display
+            const isRemote = group && event.quadrant !== group.anchorQuadrant
             return (
-              <EventCard
-                key={e.id}
-                event={shown}
-                overdue={overdue(e)}
-                selected={selectedId === e.id}
-                armed={gestures.armedId === e.id}
-                dragging={dragPreview?.id === e.id}
-                photosOpen={photosOpen.has(e.id)}
-                onSelect={() => setSelectedId(e.id)}
-                onOpenPhoto={(index) => setViewer({ eventId: e.id, index })}
-                onDeletePhoto={(index) => void removeEventPhoto(e.id, index)}
-                onContextMenu={onEventContextMenu}
-              />
+              <Fragment key={event.id}>
+                {preview && <div aria-hidden="true" className={`quadrant-drop-ghost q${preview.quadrant}`} style={{ left: preview.x * UNIT, top: -preview.y * UNIT, width: display.width * UNIT }} />}
+                <EventCard
+                  event={shown}
+                  overdue={overdue(event)}
+                  selected={selectedId === event.id}
+                  armed={gestures.armedId === event.id}
+                  dragging={!!preview}
+                  photosOpen={photosOpen.has(event.id)}
+                  groupCount={total}
+                  stacked={local > 1}
+                  overview={overviewMarkers}
+                  groupLabel={group && (isRemote ? `${directionToAnchor(display, group)} ${group.name}` : `${group.name} · ${local}/${total}`)}
+                  groupActionLabel={isRemote ? `定位卡组「${group.name}」` : undefined}
+                  groupDropTarget={groupDropTargetId === event.id}
+                  onOpenGroup={(trigger) => {
+                    if (!group) return
+                    if (isRemote) locateAnchor(group)
+                    else openGroup(group.id, trigger)
+                  }}
+                  onActivate={(trigger) => {
+                    if (group) openGroup(group.id, trigger)
+                    else setDetailId(event.id)
+                  }}
+                  onSelect={() => setSelectedId(event.id)}
+                  onOpenPhoto={(index) => setViewer({ eventId: event.id, index })}
+                  onDeletePhoto={(index) => {
+                    const id = event.photos?.[index]
+                    if (id) void removeEventPhoto(event.id, id)
+                  }}
+                  onContextMenu={onEventContextMenu}
+                />
+              </Fragment>
             )
           })}
+          {vacantAnchors.map((group) => (
+            <button key={group.id} type="button" data-group-id={group.id} className={`quadrant-group-anchor q${group.anchorQuadrant}`}
+              tabIndex={overviewMarkers ? -1 : 0}
+              style={{ left: group.anchorX * UNIT, top: -group.anchorY * UNIT }}
+              onFocus={() => setSelectedId(groupMembers(group.id)[0]?.id ?? null)}
+              onClick={(e) => openGroup(group.id, e.currentTarget)}>
+              {group.name}
+            </button>
+          ))}
           {editing && (
             <input
               className="event-input"
+              enterKeyHint="done"
               autoFocus
               value={editing.text}
               placeholder="输入事件，回车保存"
@@ -957,16 +1501,52 @@ export default function QuadrantPage(): JSX.Element {
               }}
               onChange={(e) => setEditing({ ...editing, text: e.target.value })}
               onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  e.preventDefault()
-                  commitEditing()
-                }
-                if (e.key === 'Escape') setEditing(null)
+                if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return
+                if (e.key !== 'Enter' && e.key !== 'Escape') return
+                e.preventDefault()
+                e.currentTarget.dataset.finish = e.key === 'Enter' ? 'save' : 'cancel'
+                e.currentTarget.blur()
               }}
-              onBlur={() => setEditing(null)}
+              onBlur={(e) => {
+                const { finish } = e.currentTarget.dataset
+                const touch = lastPointerTypeRef.current === 'touch' || window.matchMedia('(pointer: coarse)').matches
+                if (finish === 'save' || (touch && finish !== 'cancel')) commitEditing(e.currentTarget.value)
+                else setEditing(null)
+              }}
             />
           )}
         </div>
+        {armedDrop && (
+          <output className="quadrant-drop-instruction">
+            {armedDrop.event.quadrant !== dragRef.current?.card.event.quadrant
+              ? '松手后确认归属'
+              : armedDrop.group ? '松手加入卡组' : '松手叠成卡组'}
+          </output>
+        )}
+        {overviewMarkers && (
+          <>
+            {boardCards.map(({ display, event }) => <button
+              key={event.id}
+              type="button"
+              className={`quadrant-overview-marker q${event.quadrant}${event.id === selectedId ? ' selected' : ''}`}
+              style={{ left: worldToScreenX(display.x + display.width / 2, view), top: worldToScreenY(display.y - EVENT_HEIGHT_UNITS / 2, view) }}
+              title={event.text}
+              aria-label={`定位「${event.text}」`}
+              onFocus={() => setSelectedId(event.id)}
+              onClick={() => locateEvent(event)}
+            />)}
+            {vacantAnchors.map((group) => <button
+              key={group.id}
+              type="button"
+              className={`quadrant-overview-marker group-anchor q${group.anchorQuadrant}`}
+              style={{ left: worldToScreenX(group.anchorX + 4, view), top: worldToScreenY(group.anchorY - EVENT_HEIGHT_UNITS / 2, view) }}
+              aria-label={`定位主卡组「${group.name}」`}
+              title={group.name}
+              onClick={() => locateAnchor(group)}
+            />)}
+            {selectedCard && <output className="quadrant-overview-title">{selectedCard.group?.name ?? selectedCard.event.text}</output>}
+          </>
+        )}
         {/*
           计费气泡：非模态内联（spec 7.4）。
 
@@ -1018,12 +1598,18 @@ export default function QuadrantPage(): JSX.Element {
             onCancel={() => setBillingId(null)}
           />
         )}
-        {labelVisible && hoverQuadrant && (
-          <div className={`quadrant-label q${hoverQuadrant}`}>
-            {QUADRANT_META[hoverQuadrant].label}
-          </div>
-        )}
-      </div>
+      </div> : (
+        <QuadrantList
+          events={events}
+          groups={groups}
+          onEdit={(event) => { setSelectedId(event.id); setDetailId(event.id) }}
+          onDelete={(event) => setDeletePendingId(event.id)}
+          onMove={(event, quadrant) => moveEventToQuadrant(event.id, quadrant)}
+          onMoveGroup={(event, quadrant) => moveEventGroup(event.id, quadrant)}
+          onOpenGroup={openGroup}
+          onGroupDrop={handleGroupDrop}
+        />
+      )}
       {menu && (
         <ContextMenu
           menu={menu}
@@ -1057,19 +1643,77 @@ export default function QuadrantPage(): JSX.Element {
       )}
       {detailEvent && (
         <EventDetailDialog
+          key={detailEvent.id}
           event={detailEvent}
           onSave={(patch) => updateEvent(detailEvent.id, patch, view)}
           onClose={() => setDetailId(null)}
+          onAddPhotos={() => startAddPhoto(detailEvent.id)}
+          onDeletePhoto={(id) => void removeEventPhoto(detailEvent.id, id)}
+          photoBusy={photoBusy}
+          photoFailed={photoFailedId === detailEvent.id}
         />
+      )}
+      {createDraft && (
+        <QuadrantDialog title="添加事件" width={380} onClose={closeCreate}>
+          <form className="quadrant-create-form" onSubmit={(e) => {
+            e.preventDefault()
+            const form = new FormData(e.currentTarget)
+            const text = String(form.get('title') ?? '').trim()
+            if (!text) return
+            saveCreate(text, Number(form.get('quadrant')) as Quadrant)
+            closeCreate()
+          }}>
+            <label className="modal-field">名称<input name="title" enterKeyHint="done" required /></label>
+            <label className="modal-field">所属象限
+              <select name="quadrant" defaultValue={createDraft.quadrant}><QuadrantChoices /></select>
+            </label>
+            <div className="modal-actions">
+              <button type="button" className="modal-btn" onClick={closeCreate}>取消</button>
+              <button type="submit" className="modal-btn primary">添加</button>
+            </div>
+          </form>
+        </QuadrantDialog>
+      )}
+      {openedGroup && openedMembers.length > 0 && !crossGroup && !detailEvent && (
+        <QuadrantGroupDialog
+          group={openedGroup}
+          members={openedMembers}
+          candidates={events.filter((event) => event.groupId !== openedGroup.id)}
+          onClose={closeGroupDialog}
+          onRename={(name) => renameEventGroup(openedGroup.id, name)}
+          onMoveGroup={(quadrant) => moveEventGroup(openedMembers[0].id, quadrant)}
+          onMoveMember={(event, quadrant) => moveEventToQuadrant(event.id, quadrant)}
+          onLocate={(event) => { setGroupDialogId(null); locateEvent(event) }}
+          onEdit={(event) => setDetailId(event.id)}
+          onRemove={(id) => {
+            if (openedMembers.length === 1) closeGroupDialog()
+            assignEventToGroup(id, undefined)
+          }}
+          onAdd={addToOpenedGroup}
+        />
+      )}
+      {crossGroup && pendingEvent && (pendingGroup || pendingTarget) && (
+        <QuadrantDialog title="加入卡组？" width={480} onClose={closeCrossGroup}>
+          <p className="quadrant-cross-description">
+            加入「{pendingGroup?.name ?? pendingTarget?.text}」时，要把「{pendingEvent.text}」
+            从「{QUADRANT_META[crossGroup.sourceQuadrant].label}」移到「{QUADRANT_META[crossGroup.targetQuadrant].label}」吗？
+          </p>
+          <div className="quadrant-cross-actions">
+            <button className="modal-btn" type="button" onClick={() => finishCrossGroup(false)}>保留原象限并加入</button>
+            <button className="modal-btn primary" type="button" onClick={() => finishCrossGroup(true)}>移到目标象限并加入</button>
+            <button className="modal-btn" type="button" onClick={closeCrossGroup}>取消</button>
+          </div>
+        </QuadrantDialog>
       )}
       {deletePendingId && (
         <ConfirmDialog
-          message="确定删除该事件？"
+          message={`确定删除事件「${events.find((event) => event.id === deletePendingId)?.text ?? '已选事件'}」？`}
           onConfirm={() => {
             // 事件连同照片一起删：先摘实体再删事件，避免照片文件成为孤儿。
             const target = events.find((e) => e.id === deletePendingId)
             const ids = target?.photos ?? []
             deleteEvent(deletePendingId)
+            for (const id of ids) forgetPhotoUrl(id)
             void Promise.all(ids.map((id) => removePhoto(id)))
             if (selectedId === deletePendingId) setSelectedId(null)
           }}

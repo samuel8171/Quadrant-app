@@ -128,6 +128,9 @@ body {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  background:
+    radial-gradient(ellipse at 95% 0%, color-mix(in srgb, var(--bg) 84%, var(--accent)), transparent 62%),
+    var(--bg);
 }
 
 .sidebar-bottom { margin-top: auto; }
@@ -833,8 +836,10 @@ body {
   flex-direction: column;
   gap: 2px;
   padding: 6px 14px;
+  border: 1px solid var(--quadrant-ink, var(--border));
   border-radius: var(--radius-sm);
   background: rgba(0, 0, 0, 0.4);
+  color: var(--quadrant-text, var(--text));
   font-size: 13px;
   line-height: 1.35;
   cursor: default;
@@ -847,26 +852,6 @@ body {
   user-select: none;
   -webkit-user-select: none;
   -webkit-touch-callout: none;
-}
-
-.event-card.q1 {
-  border: 1px solid #ff8c00;
-  color: #ffd9ad;
-}
-
-.event-card.q2 {
-  border: 1px solid #ffa500;
-  color: #ffe2ad;
-}
-
-.event-card.q3 {
-  border: 1px solid #008b8b;
-  color: #a9e2e2;
-}
-
-.event-card.q4 {
-  border: 1px solid #483d8b;
-  color: #c7c0ea;
 }
 
 .event-card.overdue {
@@ -1264,6 +1249,141 @@ body {
   }
 }
 
+/* Four-quadrant workspace controls and group actions. */
+.quadrant-header { display: flex; align-items: center; gap: 14px; }
+.quadrant-toolbar { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.quadrant-toolbar > button,
+.quadrant-view-toggle button {
+  min-height: 40px; padding: 0 14px; border-radius: 10px; border: 1px solid var(--border);
+  color: var(--text-secondary); background: rgba(255,255,255,.045); font: inherit; cursor: pointer;
+}
+.quadrant-toolbar > .quadrant-tool-primary { color: #eaf2ff; background: #243553; border-color: #395477; }
+.quadrant-toolbar button:hover { color: var(--text-primary); border-color: rgba(138,180,248,.65); }
+.quadrant-view-toggle { display: flex; gap: 3px; padding: 3px; border: 1px solid var(--border); border-radius: 12px; background: rgba(0,0,0,.18); }
+.quadrant-view-toggle button { min-height: 32px; border: 0; padding-inline: 12px; background: transparent; }
+.quadrant-view-toggle button[aria-pressed="true"] { background: rgba(138,180,248,.2); color: #dceaff; }
+.event-card.group-drop-target,
+.quadrant-list-event.group-drop-target { outline: 2px solid #a9d2ff; outline-offset: 3px; }
+.event-group-badge {
+  position: absolute; z-index: 4; right: -2px; bottom: calc(100% - 3px);
+  max-width: min(100%, 190px); min-height: 21px; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; padding: 2px 7px;
+  border: 1px solid #516883; border-radius: 5px;
+  color: #ebf2ff; background: #243143; font: inherit; font-size: 11px; cursor: pointer;
+}
+.event-card.stacked::before,
+.event-card.group-drop-target::before {
+  content: '';
+  position: absolute;
+  inset: 4px 4px -5px;
+  border: 1px solid currentColor;
+  border-radius: 6px;
+  opacity: .45;
+  pointer-events: none;
+}
+.quadrant-group-connectors { position: absolute; left: 0; top: 0; width: 1px; height: 1px; overflow: visible; pointer-events: none; z-index: 0; }
+.quadrant-group-connectors path { fill: none; stroke: #a0aec2; stroke-width: 1.25px; stroke-dasharray: 4 4; vector-effect: non-scaling-stroke; }
+.event-layer > .event-card { z-index: 1; }
+.event-layer > .event-card:focus-within, .event-layer > .event-card.selected { z-index: 2; }
+.event-layer > .event-card.dragging { z-index: 6; transform: none; pointer-events: none; }
+.event-layer > .event-card.dragging * { pointer-events: none; }
+.event-layer > .event-input { z-index: 5; }
+.quadrant-page .q1 { --quadrant-ink: var(--quadrant-one); --quadrant-text: #ffd9ad; }
+.quadrant-page .q2 { --quadrant-ink: var(--quadrant-two); --quadrant-text: #ffe2ad; }
+.quadrant-page .q3 { --quadrant-ink: var(--quadrant-three); --quadrant-text: #a9e2e2; }
+.quadrant-page .q4 { --quadrant-ink: var(--quadrant-four); --quadrant-text: #c7c0ea; }
+.quadrant-compass { position: absolute; color: var(--quadrant-text); font-size: 12px; font-weight: 600; pointer-events: none; padding: 4px 6px; }
+.quadrant-compass.q1 { top: 8px; right: 8px; }
+.quadrant-compass.q2 { top: 8px; left: 8px; }
+.quadrant-compass.q3 { bottom: 8px; left: 8px; }
+.quadrant-compass.q4 { bottom: 8px; right: 8px; }
+.quadrant-drop-ghost { position: absolute; height: 32px; border: 1px dashed var(--quadrant-ink); border-radius: 7px; pointer-events: none; }
+.quadrant-group-anchor {
+  position: absolute; width: 160px; min-height: 32px; padding: 4px 8px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  border: 1px dashed var(--quadrant-ink); border-radius: 6px;
+  background: #1c2028; color: var(--quadrant-ink); font: inherit; cursor: pointer;
+}
+.quadrant-overview-marker {
+  position: absolute; transform: translate(-50%, -50%);
+  display: grid; place-items: center; width: 28px; height: 28px;
+  padding: 0; border: 0; border-radius: 5px; background: none; color: var(--quadrant-text); cursor: zoom-in;
+}
+.quadrant-overview-marker::before { content: ''; width: 8px; height: 8px; border-radius: 2px; background: currentColor; box-shadow: 0 0 0 1px #0c0e12; }
+.quadrant-overview-marker:hover::before, .quadrant-overview-marker.selected::before, .quadrant-overview-marker:focus-visible::before { outline: 2px solid #e9eff8; outline-offset: 3px; }
+.quadrant-overview-marker.group-anchor::before { background: #1c2028; border: 1px solid currentColor; }
+.quadrant-overview-title,
+.quadrant-drop-instruction {
+  position: absolute; z-index: 7; bottom: 34px; left: 50%; transform: translateX(-50%);
+  color: var(--text-primary); background: #1e2939; border: 1px solid #3f536e;
+  border-radius: 6px; max-width: calc(100% - 24px); padding: 5px 10px; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; font-size: 12px; pointer-events: none;
+}
+.quadrant-list-view { flex: 1; min-height: 0; overflow: auto; display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); align-content: start; gap: 14px; padding: 2px 2px 20px; }
+.quadrant-list-column { min-width: 0; min-height: 190px; overflow: hidden; border: 1px solid color-mix(in srgb, var(--quadrant-ink) 40%, var(--border)); border-radius: 14px; background: var(--panel); }
+.quadrant-list-column > header { display: flex; justify-content: space-between; align-items: center; padding: 12px 14px; border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--quadrant-ink) 12%, transparent); color: var(--quadrant-ink); font-weight: 650; }
+.quadrant-list-column > header strong { color: var(--text-secondary); font-size: 12px; font-variant-numeric: tabular-nums; }
+.quadrant-list-items { display: grid; gap: 7px; padding: 9px; }
+.quadrant-list-event { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 9px; border: 1px solid rgba(255,255,255,.08); border-radius: 10px; background: rgba(255,255,255,.035); }
+.quadrant-list-copy { display: grid; gap: 4px; flex: 1; min-width: 0; }
+.quadrant-list-copy small { color: var(--text-secondary); font-size: 11px; }
+.quadrant-list-title { display: block; max-width: 100%; overflow: hidden; padding: 0; border: 0; color: var(--text-primary); background: none; font: inherit; text-align: left; text-overflow: ellipsis; cursor: pointer; }
+.quadrant-list-drag { flex: 0 0 38px; width: 38px; height: 40px; border: 1px solid rgba(255,255,255,.14); border-radius: 8px; color: #b9c7da; background: rgba(255,255,255,.06); font-size: 20px; touch-action: none; cursor: grab; }
+.quadrant-list-drag:active { cursor: grabbing; }
+.quadrant-list-event label { display: grid; gap: 4px; color: var(--text-secondary); font-size: 10px; }
+.quadrant-list-event select, .quadrant-group-move select { max-width: 150px; min-height: 36px; border: 1px solid var(--border); border-radius: 8px; padding: 0 7px; color: var(--text-primary); background: #171b22; font: inherit; }
+.quadrant-list-group { width: fit-content; padding: 2px 7px; border: 1px solid rgba(180,205,240,.22); border-radius: 99px; color: #c9d8ec; background: rgba(138,180,248,.08); font-size: 11px; }
+.quadrant-list-event.is-list-dragging { opacity: .35; }
+.quadrant-list-drag-preview { position: fixed; z-index: 1000; max-width: 240px; padding: 9px 13px; border: 1px solid rgba(168,201,244,.62); border-radius: 10px; color: #ecf3ff; background: rgba(25,34,47,.96); box-shadow: 0 8px 28px rgba(0,0,0,.4); pointer-events: none; }
+.quadrant-list-drag-preview.is-grouping { border-color: #c4e7b8; box-shadow: 0 0 0 5px rgba(174,220,153,.18); }
+.quadrant-dialog { display: grid; gap: 14px; color: var(--text-primary); min-width: 0; outline: none; }
+.quadrant-dialog > header { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.quadrant-dialog > header h2 { margin: 0; font-size: 18px; }
+.quadrant-dialog-close {
+  display: grid; place-items: center; flex: none; width: 40px; height: 40px; padding: 0;
+  border: 1px solid var(--border); border-radius: 8px; color: var(--text-secondary); background: rgba(255,255,255,.05); cursor: pointer;
+}
+.quadrant-dialog .modal-field { margin: 0; }
+.quadrant-dialog select { min-width: 0; }
+.quadrant-group-members { max-height: min(42dvh, 360px); overflow: auto; }
+.quadrant-group-members article { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-top: 1px solid var(--border); }
+.quadrant-group-member-label { display: grid; flex: 1; min-width: 0; gap: 4px; }
+.quadrant-group-member-label small { color: var(--text-secondary); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.quadrant-group-member-actions, .quadrant-group-add, .quadrant-group-move { display: flex; align-items: center; gap: 6px; color: var(--text-secondary); }
+.quadrant-group-member-actions > button,
+.quadrant-group-member-actions > select,
+.quadrant-group-add select {
+  min-height: 38px; padding: 0 8px; border: 1px solid var(--border); border-radius: 7px;
+  color: var(--text-primary); background: #20262f; font: inherit; cursor: pointer;
+}
+.quadrant-group-add select { flex: 1; }
+.quadrant-group-member-title {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-height: 26px;
+  border: 0; padding: 0; background: none; color: var(--text-primary); font: inherit; text-align: left; cursor: pointer;
+}
+.quadrant-group-member-title:hover { text-decoration: underline; }
+.quadrant-cross-description { margin: 0; color: var(--text-secondary); line-height: 1.65; }
+.quadrant-cross-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.quadrant-create-form { display: grid; gap: 12px; }
+
+@media (max-width: 767px) {
+  .quadrant-header { align-items: flex-start; gap: 8px; }
+  .quadrant-header h1 { display: flex; align-items: center; flex: none; min-height: 52px; white-space: nowrap; }
+  .quadrant-toolbar { min-width: 0; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+  .quadrant-toolbar > button,
+  .quadrant-toolbar .quadrant-view-toggle button { min-height: 44px; padding-inline: 8px; font-size: 12px; }
+  .quadrant-toolbar > button { white-space: nowrap; }
+  .quadrant-list-view { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .quadrant-list-column { min-height: 120px; }
+  .quadrant-list-column > header { gap: 4px; padding: 9px 8px; font-size: 12px; }
+  .quadrant-list-view .quadrant-list-items { padding-inline: 6px; }
+  .quadrant-group-members article { flex-wrap: wrap; }
+  .quadrant-group-member-label { flex-basis: 100%; }
+  .quadrant-dialog-close, .quadrant-dialog .modal-btn, .quadrant-group-member-actions > button,
+  .quadrant-dialog select { min-height: 44px; }
+  .quadrant-dialog .modal-field input, .event-input { font-size: 16px; }
+}
+
 /*
  * 右键菜单的外壳（背景 / 描边 / 圆角 / 内边距 / 投影 / 定位 / 入场动画）
  * 已全部交给液态玻璃层，见 components/glass/glass.css。
@@ -1469,6 +1589,45 @@ body {
 .modal h3 {
   margin: 0 0 16px;
 }
+
+.event-detail-photos { display: grid; gap: 8px; margin: 14px 0; }
+.event-detail-photo-header { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.event-detail-photo-add { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; }
+.event-detail-photo-status { margin: 0; color: var(--danger); }
+.event-detail-photo-list {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.event-detail-photo-list li {
+  position: relative;
+  aspect-ratio: 1;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+}
+.event-detail-photo-list img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.event-detail-photo-placeholder { display: grid; height: 100%; place-items: center; color: var(--text-secondary); }
+.event-detail-photo-delete {
+  position: absolute;
+  top: 0;
+  right: 0;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  color: #fff;
+  background: rgba(0, 0, 0, .65);
+  border: 0;
+  border-radius: 0 7px 0 8px;
+  cursor: pointer;
+}
+.event-detail-photo-delete:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 
 .modal-field {
   display: flex;
@@ -1727,12 +1886,11 @@ body {
   line-height: 1.25;
 }
 
-/* 拖动中的块体留在原位并转半透明，落点由幽灵预览表示（落点即所见）。 */
+/* 拖动中的块体跟随指针，吸附结果由独立的落点轮廓表示。 */
 .day-event.dragging {
-  opacity: 0.45;
-  z-index: 2;
+  opacity: 0.8;
+  z-index: 4;
   cursor: grabbing;
-  transform: scale(0.98);
 }
 
 .day-event.armed {
@@ -2839,7 +2997,9 @@ body {
   transform: translate(-50%, -50%);
   transition: left 0.15s ease;
   pointer-events: none;
-}.review-textarea {
+}
+.review-textarea,
+.review-text-mirror {
   flex: none;
   width: 100%;
   background: var(--card);
@@ -3246,7 +3406,7 @@ body {
  *
  * 复用 .mine-row 的排布，只补三件事：抹掉 button 的默认外观、给整行一个
  * 52px 的触摸目标（min-height 来自 .mine-row）、悬停给一点反馈。
- * 它**不玻璃化** —— 材质只属于弹窗，行本身是实色卡片的一部分。
+ * 整行使用透明底色，材质由所在卡片提供。
  *
  * 圆角是为了让悬停底色收进卡片（--radius-lg）的圆角里：这张卡片里它正好是最后一行，
  * 方角会在卡片两个下角戳出小方块。减 1px 是卡片自身的 1px 描边。
@@ -3342,8 +3502,7 @@ body {
 }
 
 /*
- * 小组件卡片。**刻意不玻璃化**：只用普通面板色 + var(--border)，
- * 不引 `.gs-*`、不加 `backdrop-filter`（理由见 spec 12.4）。
+ * 小组件卡片布局。Dashboard 的玻璃材质由 DashboardGlass 提供。
  */
 .money-widget {
   display: flex;
@@ -4784,49 +4943,9 @@ body {
     font-size: 19px;
   }
 
-  /*
-   * 四象限页头改为悬浮条：它本身不承载交互（只是一个标题 + 一行提示），
-   * 却在 667px 高的屏上独占 49px（页头 31 + 上内边距 18）。改成浮层后这 49px
-   * 全部还给画布（实测 500 → 549px）。整条 pointer-events: none 穿透给画布，
-   * 保证浮层覆盖区域照样能拖动、双击新建。
-   */
   .quadrant-header {
-    position: absolute;
-    /*
-     * 悬浮页头是绝对定位的，不随页面容器的 padding 走，必须自己避让
-     * 顶部安全区，否则只有它一条压到状态栏下面。
-     *
-     * 与页面容器同口径多留 12px：状态栏毛玻璃的羽化带会往下延伸
-     * 8~14px，贴着安全区边界放仍会被虚化一部分。
-     */
-    top: calc(24px + var(--safe-top));
-    left: 12px;
-    right: 12px;
-    z-index: 5;
-    margin-bottom: 0;
-    padding: 4px 10px;
-    border-radius: 12px;
-    background: rgba(12, 14, 18, 0.5);
-    pointer-events: none;
-    backdrop-filter: blur(10px) saturate(140%);
-    -webkit-backdrop-filter: blur(10px) saturate(140%);
-  }
-
-  /* 悬浮条需要一个定位祖先。 */
-  .quadrant-page {
-    position: relative;
-  }
-
-  /* 提示条是首次使用才需要的信息，4 秒后淡出，把标题栏也让给画布。 */
-  .hint-pill.mobile-only {
-    animation: hint-fade 0.5s ease 4s forwards;
-  }
-
-  .hint-pill {
-    margin-left: auto;
-    padding: 7px 9px;
-    font-size: 11px;
-    white-space: nowrap;
+    flex: none;
+    margin-bottom: 10px;
   }
 
   .event-handle {
@@ -5406,6 +5525,9 @@ body {
     animation-iteration-count: 1 !important;
     scroll-behavior: auto !important;
     transition-duration: 0.01ms !important;
+  }
+  .day-event, .event-card {
+    transition-property: none !important;
   }
 }
 

@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { useRef, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import GlassSurface from './GlassSurface'
 
@@ -55,6 +55,10 @@ import GlassSurface from './GlassSurface'
  *     的行为与 portal 前一致。
  */
 
+export function shouldAutoFocusModalInput(): boolean {
+  return !window.matchMedia('(pointer: coarse), (hover: none)').matches
+}
+
 interface Props {
   children: ReactNode
   /** 点遮罩关闭。不传则遮罩不可点关闭 */
@@ -76,6 +80,7 @@ export default function GlassModal({
   contentWidth,
   padding = '24px'
 }: Props): JSX.Element {
+  const pressedMask = useRef(false)
   /*
    * 挂到 body，而不是留在调用者所在的 DOM 位置 —— 定位层的包含块必须是视口。
    * 反例与实测数据见文件头「为什么要 portal 到 body」。
@@ -131,8 +136,13 @@ export default function GlassModal({
              * 目标必然是遮罩自身；面板内的任何元素都不会等于 currentTarget。
              * 这样面板的 DOM 结构怎么改都不会误关弹窗。
              */
+            onPointerDown={(e) => { pressedMask.current = e.target === e.currentTarget }}
+            onPointerCancel={() => { pressedMask.current = false }}
             onClick={(e) => {
-              if (e.target === e.currentTarget) onMaskClick?.()
+              // A tap that opened the dialog can deliver its compatibility click to the new mask.
+              const dismiss = pressedMask.current || e.detail === 0
+              pressedMask.current = false
+              if (dismiss && e.target === e.currentTarget) onMaskClick?.()
             }}
           />
         }

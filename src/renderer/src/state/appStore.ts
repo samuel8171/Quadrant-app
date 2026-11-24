@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import type {
   AppData,
+  EventGroup,
   LedgerDay,
   LedgerEntry,
   MoneyConfig,
@@ -33,7 +34,7 @@ import * as goalRules from '../lib/goalRules'
 import * as quadrantSync from '../lib/quadrantSync'
 import * as weekRules from '../lib/weekRules'
 import { reviewDirty } from '../lib/reviewRules'
-import type { ViewState } from '../lib/quadrantMath'
+import { boundsForEvents, clampEventToQuadrant, DEFAULT_WORLD_BOUNDS, EVENT_HEIGHT_UNITS, MIN_EVENT_WIDTH_UNITS, type ViewState } from '../lib/quadrantMath'
 import { createSnapshotSync } from '../lib/snapshotSync'
 import { getPlatformApi, isDesktopRuntime } from '../lib/platformApi'
 import {
@@ -52,6 +53,49 @@ import {
 import { isCloudChangedElsewhere, readSyncMeta } from '../lib/syncMeta'
 
 export type Page = 'goals' | 'quadrant' | 'weekly' | 'review' | 'mine'
+
+function withQuadrantLayout(current: AppData, events: QuadrantEvent[], eventGroups = current.eventGroups): AppData {
+  const base = current.canvasBounds ?? DEFAULT_WORLD_BOUNDS
+  const widths = new Map<string, number>()
+  for (const event of events) {
+    if (event.groupId) {
+      widths.set(event.groupId, Math.max(widths.get(event.groupId) ?? MIN_EVENT_WIDTH_UNITS, event.width))
+    }
+  }
+  const anchors = (eventGroups ?? []).map((group) => ({
+    x: group.anchorX, y: group.anchorY, width: widths.get(group.id) ?? MIN_EVENT_WIDTH_UNITS
+  }))
+  const required = boundsForEvents([...events, ...anchors], base)
+  const expanded = required.minX < base.minX || required.minY < base.minY ||
+    required.maxX > base.maxX || required.maxY > base.maxY
+  return { ...current, events, eventGroups, ...(expanded ? { canvasBounds: required } : {}) }
+}
+
+function pruneEmptyEventGroups(events: QuadrantEvent[], groups: EventGroup[] | undefined): EventGroup[] | undefined {
+  if (!groups) return groups
+  const used = new Set(events.map((event) => event.groupId).filter((id): id is string => Boolean(id)))
+  const next = groups.filter((group) => used.has(group.id))
+  return next.length === groups.length ? groups : next
+}
+
+function setEventQuadrant(event: QuadrantEvent, quadrant: Quadrant): QuadrantEvent {
+  return clampEventToQuadrant({ ...event, quadrant }, { zoom: 1, panX: 0, panY: 0 })
+}
+
+function positionInQuadrant(x: number, y: number, width: number, from: Quadrant, to: Quadrant): { x: number; y: number } {
+  const left = (quadrant: Quadrant): boolean => quadrant === 2 || quadrant === 3
+  const top = (quadrant: Quadrant): boolean => quadrant === 1 || quadrant === 2
+  return {
+    x: left(from) === left(to) ? x : -x - width,
+    y: top(from) === top(to) ? y : EVENT_HEIGHT_UNITS - y
+  }
+}
+
+function placeGroupAnchor(group: EventGroup, quadrant: Quadrant, point: { x: number; y: number }): EventGroup {
+  const anchor = setEventQuadrant({ id: group.id, text: '', remark: '', quadrant,
+    ...point, width: MIN_EVENT_WIDTH_UNITS, createdAt: '' }, quadrant)
+  return { ...group, anchorQuadrant: quadrant, anchorX: anchor.x, anchorY: anchor.y }
+}
 
 /**
  * 日结面板三问的答案 —— **日级**输入，不属于任何单条条目。
@@ -116,6 +160,12 @@ interface AppState {
   updateEvent: (id: string, patch: Partial<QuadrantEvent>, view: ViewState) => void
   deleteEvent: (id: string) => void
   moveEvent: (id: string, worldX: number, worldY: number, view: ViewState) => void
+  moveEventToQuadrant: (id: string, quadrant: Quadrant) => void
+  createEventGroupWithEvents: (fields: Omit<EventGroup, 'id'>, eventIds: string[], moveEventId?: string, quadrant?: Quadrant) => string
+  renameEventGroup: (id: string, name: string) => void
+  assignEventToGroup: (eventId: string, groupId: string | undefined, quadrant?: Quadrant, targetPoint?: { x: number; y: number }) => void
+  moveEventGroup: (eventId: string, quadrant: Quadrant, deltaX?: number, deltaY?: number, anchorPoint?: { x: number; y: number }) => void
+  moveEventGroupAnchor: (groupId: string, x: number, y: number) => void
   copyEvent: (id: string) => void
   cutEvent: (id: string) => void
   pasteEvent: (view: ViewState, targetX?: number, targetY?: number) => void
@@ -558,40 +608,128 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   addEvent: (text, quadrant, worldX, worldY, view) => {
     const event = eventRules.createEvent(text, quadrant, worldX, worldY, view)
-    const data = { ...get().data, events: [...get().data.events, event] }
+    const current = get().data
+    const data = withQuadrantLayout(current, [...current.events, event])
     saveSoon(data)
     set({ data })
   },
 
   updateEvent: (id, patch, view) => {
-    const data = {
-      ...get().data,
-      events: eventRules.updateEventInList(get().data.events, id, patch, view)
-    }
+    const current = get().data
+    const events = eventRules.updateEventInList(current.events, id, patch, view)
+    const data = withQuadrantLayout(current, events)
     saveSoon(data)
     set({ data })
   },
 
   deleteEvent: (id) => {
+    const current = get().data
+    const events = eventRules.deleteEventFromList(current.events, id)
     const data = {
-      ...get().data,
-      events: eventRules.deleteEventFromList(get().data.events, id),
+      ...current,
+      events,
+      eventGroups: pruneEmptyEventGroups(events, current.eventGroups),
       /*
        * 顺带解除周计划的镜像链接。**这不是可选的清理**：留着悬空的
        * `quadrantEventId` 会让用户下次编辑那条周事件时凭空长出一张新卡片
        * （见 `weekRules.unlinkQuadrantEvent` 的推导）。
        */
-      weekEvents: weekRules.unlinkQuadrantEvent(get().data.weekEvents, id)
+      weekEvents: weekRules.unlinkQuadrantEvent(current.weekEvents, id)
     }
     saveSoon(data)
     set({ data })
   },
 
   moveEvent: (id, worldX, worldY, view) => {
+    const current = get().data
+    const events = eventRules.moveEvent(current.events, id, worldX, worldY, view)
+    const data = withQuadrantLayout(current, events)
+    saveSoon(data)
+    set({ data })
+  },
+
+  moveEventToQuadrant: (id, quadrant) => {
+    const current = get().data
+    const target = current.events.find((event) => event.id === id)
+    if (!target || target.quadrant === quadrant) return
+    const point = positionInQuadrant(target.x, target.y, target.width, target.quadrant, quadrant)
+    const events = current.events.map((event) => event === target ? setEventQuadrant({ ...event, ...point }, quadrant) : event)
+    const data = withQuadrantLayout(current, events)
+    saveSoon(data)
+    set({ data })
+  },
+
+  createEventGroupWithEvents: (fields, eventIds, moveEventId, quadrant) => {
+    const group: EventGroup = { ...fields, id: crypto.randomUUID(), name: fields.name.trim() }
+    const current = get().data
+    const ids = new Set(eventIds)
+    const events = current.events.map((event) => {
+      if (!ids.has(event.id)) return event
+      const member = { ...event, groupId: group.id }
+      if (event.id !== moveEventId || quadrant === undefined) return member
+      return setEventQuadrant({ ...member, x: group.anchorX, y: group.anchorY }, quadrant)
+    })
+    const groups = pruneEmptyEventGroups(events, [...(current.eventGroups ?? []), group])
+    const data = withQuadrantLayout(current, events, groups)
+    saveSoon(data)
+    set({ data })
+    return group.id
+  },
+
+  renameEventGroup: (id, name) => {
+    const groupName = name.trim()
     const data = {
       ...get().data,
-      events: eventRules.moveEvent(get().data.events, id, worldX, worldY, view)
+      eventGroups: (get().data.eventGroups ?? []).map((group) => group.id === id ? { ...group, name: groupName } : group)
     }
+    saveSoon(data)
+    set({ data })
+  },
+
+  assignEventToGroup: (eventId, groupId, quadrant, targetPoint) => {
+    const current = get().data
+    const target = current.events.find((event) => event.id === eventId)
+    const group = current.eventGroups?.find((item) => item.id === groupId)
+    if (!target || (groupId !== undefined && !group)) return
+    const { groupId: _previousGroup, ...independent } = target
+    let updated: QuadrantEvent = group ? { ...independent, groupId: group.id } : independent
+    if (quadrant !== undefined) {
+      const destination = targetPoint ?? (group ? { x: group.anchorX, y: group.anchorY } : target)
+      updated = setEventQuadrant({ ...updated, x: destination.x, y: destination.y }, quadrant)
+    }
+    const events = current.events.map((event) => event === target ? updated : event)
+    const data = withQuadrantLayout(current, events, pruneEmptyEventGroups(events, current.eventGroups))
+    saveSoon(data)
+    set({ data })
+  },
+
+  moveEventGroup: (eventId, quadrant, deltaX, deltaY, anchorPoint) => {
+    const current = get().data
+    const event = current.events.find((item) => item.id === eventId)
+    if (!event) return
+    const groupId = event.groupId
+    const point = (x: number, y: number, width: number, from: Quadrant): { x: number; y: number } =>
+      deltaX !== undefined || deltaY !== undefined
+        ? { x: x + (deltaX ?? 0), y: y + (deltaY ?? 0) }
+        : positionInQuadrant(x, y, width, from, quadrant)
+    const events = current.events.map((item) => item === event || (groupId && item.groupId === groupId)
+      ? setEventQuadrant({ ...item, ...point(item.x, item.y, item.width, item.quadrant) }, quadrant)
+      : item)
+    const groups = current.eventGroups?.map((group) => group.id === groupId
+      ? placeGroupAnchor(group, quadrant, anchorPoint ?? point(group.anchorX, group.anchorY, MIN_EVENT_WIDTH_UNITS, group.anchorQuadrant))
+      : group)
+    const data = withQuadrantLayout(current, events, groups)
+    saveSoon(data)
+    set({ data })
+  },
+
+  moveEventGroupAnchor: (groupId, x, y) => {
+    const current = get().data
+    const target = current.eventGroups?.find((group) => group.id === groupId)
+    if (!target) return
+    const groups = current.eventGroups?.map((group) => group === target
+      ? placeGroupAnchor(group, group.anchorQuadrant, { x, y }) : group)
+    const data = withQuadrantLayout(current, current.events, groups)
     saveSoon(data)
     set({ data })
   },
@@ -601,14 +739,17 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   cutEvent: (id) => {
-    clipboard = get().data.events.find((e) => e.id === id) ?? null
+    const current = get().data
+    clipboard = current.events.find((e) => e.id === id) ?? null
     if (clipboard) {
+      const events = eventRules.deleteEventFromList(current.events, id)
       const data = {
-        ...get().data,
-        events: eventRules.deleteEventFromList(get().data.events, id),
+        ...current,
+        events,
+        eventGroups: pruneEmptyEventGroups(events, current.eventGroups),
         // 剪切同样是一次"删除"：镜像没了，链接必须一起解除（粘贴出来的那张是**新 id**，
         // 永远不会自动接回原来的周事件上）。理由见 weekRules.unlinkQuadrantEvent。
-        weekEvents: weekRules.unlinkQuadrantEvent(get().data.weekEvents, id)
+        weekEvents: weekRules.unlinkQuadrantEvent(current.weekEvents, id)
       }
       saveSoon(data)
       set({ data })
@@ -617,10 +758,11 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   pasteEvent: (view, targetX, targetY) => {
     if (!clipboard) return
-    const data = {
-      ...get().data,
-      events: eventRules.pasteEvent(get().data.events, clipboard, view, targetX, targetY)
-    }
+    const current = get().data
+    const { groupId, ...ungrouped } = clipboard
+    const source = current.eventGroups?.some((group) => group.id === groupId) ? clipboard : ungrouped
+    const events = eventRules.pasteEvent(current.events, source, view, targetX, targetY)
+    const data = withQuadrantLayout(current, events)
     saveSoon(data)
     set({ data })
   },
@@ -700,12 +842,13 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   updateWeekEvent: (id, patch) => {
-    const current = get().data.weekEvents.find((e) => e.id === id)
+    const currentData = get().data
+    const current = currentData.weekEvents.find((e) => e.id === id)
     if (!current) return { ok: true }
-    const nextWeekEvents = weekRules.updateWeekEventInList(get().data.weekEvents, id, patch)
+    const nextWeekEvents = weekRules.updateWeekEventInList(currentData.weekEvents, id, patch)
     const nextEvent = nextWeekEvents.find((e) => e.id === id)
     if (!nextEvent) return { ok: true }
-    let events = get().data.events
+    let events = currentData.events
     const show =
       patch.showInQuadrant !== undefined ? patch.showInQuadrant : current.showInQuadrant
 
@@ -725,12 +868,27 @@ export const useAppStore = create<AppState>((set, get) => ({
     } else if (show && current.quadrantEventId) {
       const existing = events.find((e) => e.id === current.quadrantEventId)
       const width = quadrantSync.widthForTitle(nextEvent.title)
-      if (existing && existing.quadrant === nextEvent.quadrant) {
-        events = events.map((e) =>
-          e.id === existing.id
-            ? { ...e, text: nextEvent.title, remark: nextEvent.remark, width }
-            : e
-        )
+      if (existing) {
+        // The quadrant card is independently movable. A title/remark/time-only
+        // edit must not pull it back to the stale quadrant stored on WeekEvent.
+        // Only an actual WeekEvent quadrant change moves the existing card.
+        const quadrant = patch.quadrant !== undefined && patch.quadrant !== current.quadrant
+          ? nextEvent.quadrant
+          : existing.quadrant
+        const updated = { ...existing }
+        if (nextEvent.title !== current.title) {
+          updated.text = nextEvent.title
+          updated.width = width
+        }
+        if (nextEvent.remark !== current.remark) updated.remark = nextEvent.remark
+        if (quadrant !== existing.quadrant) {
+          const point = quadrantSync.findFreePosition(events, quadrant, updated.width)
+          if (!point) return { ok: false, reason: 'quadrant-full' }
+          Object.assign(updated, point, { quadrant })
+        }
+        const card = updated.width === existing.width && quadrant === existing.quadrant
+          ? updated : setEventQuadrant(updated, quadrant)
+        events = events.map((e) => e.id === existing.id ? card : e)
       } else {
         const withoutOld = events.filter((e) => e.id !== current.quadrantEventId)
         const pos = quadrantSync.findFreePosition(withoutOld, nextEvent.quadrant, width)
@@ -741,8 +899,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
     }
     const data = {
-      ...get().data,
-      events,
+      ...withQuadrantLayout(currentData, events, pruneEmptyEventGroups(events, currentData.eventGroups)),
       weekEvents: nextWeekEvents
     }
     saveSoon(data)
@@ -751,14 +908,16 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   deleteWeekEvent: (id) => {
-    const current = get().data.weekEvents.find((e) => e.id === id)
+    const currentData = get().data
+    const current = currentData.weekEvents.find((e) => e.id === id)
     const events = current?.quadrantEventId
-      ? get().data.events.filter((e) => e.id !== current.quadrantEventId)
-      : get().data.events
+      ? currentData.events.filter((e) => e.id !== current.quadrantEventId)
+      : currentData.events
     const data = {
-      ...get().data,
+      ...currentData,
       events,
-      weekEvents: weekRules.deleteWeekEventFromList(get().data.weekEvents, id)
+      eventGroups: pruneEmptyEventGroups(events, currentData.eventGroups),
+      weekEvents: weekRules.deleteWeekEventFromList(currentData.weekEvents, id)
     }
     saveSoon(data)
     set({ data })
@@ -780,9 +939,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   applyEscalations: () => {
-    const events = eventRules.applyEscalations(get().data.events, new Date())
-    if (events === get().data.events) return
-    const data = { ...get().data, events }
+    const current = get().data
+    const events = eventRules.applyEscalations(current.events, new Date())
+    if (events === current.events) return
+    const data = withQuadrantLayout(current, events)
     saveSoon(data)
     set({ data })
   },
@@ -1043,7 +1203,7 @@ export const useAppStore = create<AppState>((set, get) => ({
      */
     const events = eventRules.deleteEventFromList(data.events, event.id)
     const weekEvents = weekRules.unlinkQuadrantEvent(data.weekEvents, event.id)
-    let next: AppData = { ...data, events, weekEvents }
+    let next: AppData = { ...data, events, eventGroups: pruneEmptyEventGroups(events, data.eventGroups), weekEvents }
 
     /*
      * 记账（可选）。两道闸都只是"不记账"，**不影响上面的删除**：

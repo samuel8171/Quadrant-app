@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { parseData, serializeData } from '../src/main/dataCodec'
 import { defaultData } from '../src/shared/defaults'
+import { decodeAppData, validAppData } from '../src/shared/appDataCodec'
 import { DEFAULT_MONEY_CONFIG } from '../src/shared/money'
 import type { AppData } from '../src/shared/types'
 
@@ -185,6 +186,62 @@ describe('dataCodec', () => {
     expect(parsed.events[0].photos).toEqual(['ph-a', 'ph-b'])
   })
 
+  it('preserves group membership, canvas bounds, week links, and photo ids across desktop persistence', () => {
+    const data = defaultData()
+    data.eventGroups = [{ id: 'g1', name: '答辩准备', anchorQuadrant: 2, anchorX: 250, anchorY: 180 }]
+    data.canvasBounds = { minX: -20, minY: -10, maxX: 260, maxY: 240 }
+    data.events = [{ id: 'q1', text: '整理资料', remark: '备注', quadrant: 1,
+      x: 4, y: 5, width: 6, createdAt: 'x', groupId: 'g1', photos: ['photo-1'] }]
+    data.weekEvents = [{ id: 'w1', date: '2026-11-16', title: '整理资料', color: '#8AB4F8',
+      quadrant: 1, startMin: 600, endMin: 660, remark: '', showInQuadrant: true,
+      quadrantEventId: 'q1', createdAt: 'x' }]
+
+    const parsed = parseData(serializeData(data))
+    expect(parsed.eventGroups).toEqual(data.eventGroups)
+    expect(parsed.canvasBounds).toEqual(data.canvasBounds)
+    expect(parsed.events[0]).toMatchObject({ id: 'q1', quadrant: 1, groupId: 'g1', photos: ['photo-1'] })
+    expect(parsed.weekEvents[0]).toMatchObject({ quadrantEventId: 'q1', showInQuadrant: true })
+    expect(validAppData(parsed)).toBe(true)
+    expect(decodeAppData(parsed)).toMatchObject({ kind: 'ready', data: parsed })
+  })
+
+  it('migrates old shared snapshots to ungrouped events without changing their IDs or photos', () => {
+    const old = { ...defaultData(), eventGroups: undefined, events: [{ id: 'old-card', text: '旧卡', remark: '',
+      quadrant: 1, x: 12, y: 7, width: 6, createdAt: 'x', photos: ['photo-old'] }] }
+    expect(validAppData(old)).toBe(true)
+    const decoded = decodeAppData(old)
+    expect(decoded.kind).toBe('ready')
+    if (decoded.kind === 'ready') {
+      expect(decoded.data.events[0]).toMatchObject({ id: 'old-card', photos: ['photo-old'] })
+      expect(decoded.data.events[0].groupId).toBeUndefined()
+      expect(decoded.data.eventGroups).toBeUndefined()
+    }
+  })
+
+  it('recovers duplicate and orphan group references without losing valid cards', () => {
+    const damaged = { ...defaultData(),
+      eventGroups: [
+        { id: 'g1', name: '组一', anchorQuadrant: 1, anchorX: 0, anchorY: 0 },
+        { id: 'g1', name: '重复组', anchorQuadrant: 2, anchorX: 1, anchorY: 1 }
+      ],
+      events: [
+        { id: 'member', text: '成员卡', remark: '', quadrant: 1, x: 0, y: 0, width: 6, createdAt: 'x', groupId: 'g1' },
+        { id: 'orphan', text: '孤儿卡', remark: '', quadrant: 2, x: 2, y: 2, width: 6, createdAt: 'x', groupId: 'missing' }
+      ] }
+    const decoded = decodeAppData(damaged)
+    expect(decoded.kind).toBe('recovery')
+    if (decoded.kind === 'recovery') {
+      expect(decoded.data.events.map((event) => event.id)).toEqual(['member', 'orphan'])
+      expect(decoded.data.events.find((event) => event.id === 'orphan')?.groupId).toBeUndefined()
+      expect(decoded.data.eventGroups).toHaveLength(1)
+    }
+  })
+
+  it('treats a malformed group collection as a recovery snapshot', () => {
+    const snapshot = { ...defaultData(), eventGroups: { g1: { name: '答辩资料' } } }
+    expect(decodeAppData(snapshot).kind).toBe('recovery')
+  })
+
   it('drops non-string photo ids and enforces the cap', () => {
     const raw = JSON.stringify({
       version: 2,
@@ -221,9 +278,9 @@ describe('dataCodec', () => {
     expect(parsed.events[0].photos).toBeUndefined()
   })
 
-  it('无 money 字段的 v2 数据往返后逐字节不变', () => {
+  it('无 money 字段的 v2 数据往返并补出兼容的空卡组数组', () => {
     const raw = { version: 2, goals: [], events: [], weekPresets: [], weekEvents: [], weekCounterOffset: 0 }
-    expect(parseData(JSON.stringify(raw))).toEqual(raw)
+    expect(parseData(JSON.stringify(raw))).toEqual({ ...raw, eventGroups: [] })
   })
 
   it('money 为非对象时被丢弃为 undefined，不影响其余字段', () => {

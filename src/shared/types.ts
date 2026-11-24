@@ -1,5 +1,21 @@
 export type Quadrant = 1 | 2 | 3 | 4
 
+/** 持久化的跨象限卡组。成员仍是各自独立的 QuadrantEvent。 */
+export interface EventGroup {
+  id: string
+  name: string
+  anchorQuadrant: Quadrant
+  anchorX: number
+  anchorY: number
+}
+
+export interface CanvasBounds {
+  minX: number
+  minY: number
+  maxX: number
+  maxY: number
+}
+
 export type GoalType = 'long' | 'short'
 
 /**
@@ -30,6 +46,8 @@ export interface QuadrantEvent {
    * 读取见 `lib/photoStore.ts`。
    */
   photos?: string[]
+  /** 可选稳定卡组引用；单卡移动象限时保留。 */
+  groupId?: string
 }
 
 export interface Subtask {
@@ -93,6 +111,10 @@ export interface AppData {
   version: 2
   goals: Goal[]
   events: QuadrantEvent[]
+  /** 缺失时按旧版散卡数据读取。 */
+  eventGroups?: EventGroup[]
+  /** 扩展后的工作区边界；历史快照缺失时由视图使用默认边界。 */
+  canvasBounds?: CanvasBounds
   weekPresets: WeekPreset[]
   weekEvents: WeekEvent[]
   weekCounterOffset: number

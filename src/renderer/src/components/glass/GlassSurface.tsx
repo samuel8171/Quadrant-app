@@ -6,7 +6,7 @@ import {
   useState
 } from 'react'
 import LiquidGlass from 'liquid-glass-react'
-import { effectiveBlurPx, useGlassStore } from '../../lib/glassSettings'
+import { effectiveBlurPx, useGlassStore, type RefractionMode } from '../../lib/glassSettings'
 import './glass.css'
 
 /*
@@ -103,6 +103,10 @@ export interface GlassSurfaceProps {
   contentWidth?: string
   /** 玻璃体内边距，默认 `16px` */
   padding?: string
+  /** 嵌入式面板可使用宿主的圆角 */
+  cornerRadius?: number
+  /** 静态面板可固定使用标准材质，避免生成大面积 Shader 贴图 */
+  mode?: RefractionMode
   /** 定位层的类名，用来挂 z-index */
   layerClassName?: string
   /** 玻璃根节点的类名（`.modal h3` 这类后代选择器靠它生效） */
@@ -149,6 +153,8 @@ export default function GlassSurface({
   center,
   contentWidth,
   padding = '16px',
+  cornerRadius: surfaceRadius,
+  mode: surfaceMode,
   layerClassName = '',
   panelClassName = '',
   contentClassName = '',
@@ -158,13 +164,13 @@ export default function GlassSurface({
   layerPrefix
 }: GlassSurfaceProps): JSX.Element {
   const engine = useGlassStore((s) => s.engine)
-  const mode = useGlassStore((s) => s.mode)
+  const mode = useGlassStore((s) => surfaceMode ?? s.mode)
   const displacementScale = useGlassStore((s) => s.displacementScale)
   const blurAmount = useGlassStore((s) => s.blurAmount)
   const saturation = useGlassStore((s) => s.saturation)
   const aberrationIntensity = useGlassStore((s) => s.aberrationIntensity)
   const elasticity = useGlassStore((s) => s.elasticity)
-  const cornerRadius = useGlassStore((s) => s.cornerRadius)
+  const cornerRadius = useGlassStore((s) => surfaceRadius ?? s.cornerRadius)
 
   const layerRef = useRef<HTMLDivElement | null>(null)
   const hostRef = useRef<HTMLDivElement | null>(null)
@@ -338,7 +344,8 @@ export default function GlassSurface({
     '--gs-panel-w': box ? `${box.w}px` : '0px',
     '--gs-panel-h': box ? `${box.h}px` : '0px',
     '--gs-cx': center.left,
-    '--gs-cy': center.top
+    '--gs-cy': center.top,
+    ...(surfaceRadius === undefined ? {} : { '--gs-radius': `${surfaceRadius}px` })
   } as CSSProperties
 
   const plateStyle = {

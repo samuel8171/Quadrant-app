@@ -164,10 +164,6 @@ export default function Sidebar(): JSX.Element {
           {message && <div className="sync-message">{message}</div>}
         </>
       )}
-      <div className="tagline">
-        <span>✨ 专注当下，赢得未来</span>
-        <span>每一个小目标，都是通往大目标的基石。</span>
-      </div>
       {confirm && (
         <ConfirmDialog
           message={confirmLabel(confirm.action)}
